@@ -1,0 +1,7 @@
+.env
+.git
+.claude
+__pycache__
+*.pyc
+generate_session.py
+*.md
