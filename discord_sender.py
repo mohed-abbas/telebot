@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 import httpx
@@ -13,12 +14,19 @@ async def send_message(
     client: httpx.AsyncClient,
     webhook_url: str,
     text: str,
+    file_bytes: bytes | None = None,
+    filename: str | None = None,
 ) -> None:
-    payload = {"content": text[:2000]}
-
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            resp = await client.post(webhook_url, json=payload)
+            if file_bytes and filename:
+                resp = await client.post(
+                    webhook_url,
+                    data={"payload_json": json.dumps({"content": text[:2000]})},
+                    files={"file": (filename, file_bytes)},
+                )
+            else:
+                resp = await client.post(webhook_url, json={"content": text[:2000]})
             resp.raise_for_status()
             logger.info("Discord message sent (attempt %d)", attempt)
             return
