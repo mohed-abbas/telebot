@@ -1,0 +1,14 @@
+{
+  "default_target_tp": 2,
+  "symbols": {
+    "gold": "XAUUSD",
+    "xauusd": "XAUUSD",
+    "xau/usd": "XAUUSD",
+    "xau": "XAUUSD"
+  },
+  "buy_keywords": ["buy", "long"],
+  "sell_keywords": ["sell", "short"],
+  "close_keywords": ["close", "exit", "out"],
+  "partial_close_keywords": ["close half", "close partial", "secure profits", "take partial"],
+  "breakeven_keywords": ["breakeven", "break even", "be", "entry"]
+}

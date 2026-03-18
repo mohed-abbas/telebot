@@ -1,0 +1,36 @@
+{
+  "accounts": [
+    {
+      "name": "FN-6k",
+      "server": "FundedNext-Server",
+      "login": 12345678,
+      "password_env": "MT5_PASS_1",
+      "risk_percent": 1.0,
+      "max_lot_size": 0.5,
+      "max_daily_loss_percent": 3.0,
+      "max_open_trades": 3,
+      "enabled": true
+    },
+    {
+      "name": "FN-10k",
+      "server": "FundedNext-Server",
+      "login": 87654321,
+      "password_env": "MT5_PASS_2",
+      "risk_percent": 0.8,
+      "max_lot_size": 1.0,
+      "max_daily_loss_percent": 3.0,
+      "max_open_trades": 3,
+      "enabled": true
+    }
+  ],
+  "global": {
+    "default_target_tp": 2,
+    "limit_order_expiry_minutes": 30,
+    "max_daily_trades_per_account": 30,
+    "max_daily_server_messages": 500,
+    "stagger_delay_min": 1.0,
+    "stagger_delay_max": 5.0,
+    "lot_jitter_percent": 4.0,
+    "sl_tp_jitter_points": 0.8
+  }
+}

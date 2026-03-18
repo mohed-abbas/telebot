@@ -1,0 +1,79 @@
+<div class="card overflow-x-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Account</th>
+                <th>Symbol</th>
+                <th>Direction</th>
+                <th>Volume</th>
+                <th>Entry</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>P&L</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in positions %}
+            <tr>
+                <td class="font-semibold">{{ p.account }}</td>
+                <td class="font-mono">{{ p.symbol }}</td>
+                <td>
+                    {% if p.direction == 'buy' %}
+                        <span class="badge-buy">BUY</span>
+                    {% else %}
+                        <span class="badge-sell">SELL</span>
+                    {% endif %}
+                </td>
+                <td class="font-mono">{{ "%.2f"|format(p.volume) }}</td>
+                <td class="font-mono">{{ "%.2f"|format(p.open_price) }}</td>
+                <td class="font-mono">{{ "%.2f"|format(p.sl) if p.sl else '-' }}</td>
+                <td class="font-mono">{{ "%.2f"|format(p.tp) if p.tp else '-' }}</td>
+                <td class="font-mono {% if p.profit >= 0 %}profit{% else %}loss{% endif %}">
+                    {{ "%+.2f"|format(p.profit) }}
+                </td>
+                <td>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <!-- Close button -->
+                        <button class="btn btn-red"
+                                hx-post="/api/close/{{ p.account }}/{{ p.ticket }}"
+                                hx-confirm="Close position #{{ p.ticket }} on {{ p.account }}?"
+                                hx-target="#result-{{ p.ticket }}"
+                                hx-swap="innerHTML">
+                            Close
+                        </button>
+
+                        <!-- Partial close -->
+                        <form hx-post="/api/close-partial/{{ p.account }}/{{ p.ticket }}"
+                              hx-target="#result-{{ p.ticket }}" hx-swap="innerHTML"
+                              class="flex items-center gap-1">
+                            <input type="number" name="percent" value="50" min="1" max="99" step="1">
+                            <button type="submit" class="btn btn-blue">% Close</button>
+                        </form>
+
+                        <!-- Modify SL -->
+                        <form hx-post="/api/modify-sl/{{ p.account }}/{{ p.ticket }}"
+                              hx-target="#result-{{ p.ticket }}" hx-swap="innerHTML"
+                              class="flex items-center gap-1">
+                            <input type="number" name="sl" value="{{ '%.2f'|format(p.sl) }}" step="0.01">
+                            <button type="submit" class="btn btn-blue">SL</button>
+                        </form>
+
+                        <!-- Modify TP -->
+                        <form hx-post="/api/modify-tp/{{ p.account }}/{{ p.ticket }}"
+                              hx-target="#result-{{ p.ticket }}" hx-swap="innerHTML"
+                              class="flex items-center gap-1">
+                            <input type="number" name="tp" value="{{ '%.2f'|format(p.tp) }}" step="0.01">
+                            <button type="submit" class="btn btn-blue">TP</button>
+                        </form>
+                    </div>
+                    <div id="result-{{ p.ticket }}" class="text-xs mt-1"></div>
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not positions %}
+            <tr><td colspan="9" class="text-center text-slate-500 py-8">No open positions</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>

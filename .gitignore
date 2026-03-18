@@ -5,3 +5,6 @@ __pycache__/
 *.session
 .claude/
 DISCORD_IMPLEMENTATION_PLAN.md
+accounts.json
+data/
+*.db

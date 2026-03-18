@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6">
+    <h2 class="text-2xl font-bold">Trade History</h2>
+    <p class="text-slate-500 text-sm mt-1">Last 100 executed trades</p>
+</div>
+
+<div class="card overflow-x-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Account</th>
+                <th>Symbol</th>
+                <th>Direction</th>
+                <th>Entry</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>Lots</th>
+                <th>Ticket</th>
+                <th>Status</th>
+                <th>P&L</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in trades %}
+            <tr>
+                <td class="text-slate-400 text-xs">{{ t.timestamp[:19] }}</td>
+                <td>{{ t.account_name }}</td>
+                <td class="font-mono">{{ t.symbol }}</td>
+                <td>
+                    {% if t.direction == 'buy' %}
+                        <span class="badge-buy">BUY</span>
+                    {% else %}
+                        <span class="badge-sell">SELL</span>
+                    {% endif %}
+                </td>
+                <td class="font-mono">{{ "%.2f"|format(t.entry_price) if t.entry_price else '-' }}</td>
+                <td class="font-mono">{{ "%.2f"|format(t.sl) if t.sl else '-' }}</td>
+                <td class="font-mono">{{ "%.2f"|format(t.tp) if t.tp else '-' }}</td>
+                <td class="font-mono">{{ "%.2f"|format(t.lot_size) if t.lot_size else '-' }}</td>
+                <td class="text-slate-400">#{{ t.ticket }}</td>
+                <td>
+                    {% if t.status == 'opened' %}
+                        <span class="text-green-400">{{ t.status }}</span>
+                    {% elif t.status == 'closed' %}
+                        <span class="text-slate-400">{{ t.status }}</span>
+                    {% elif t.status == 'failed' %}
+                        <span class="text-red-400">{{ t.status }}</span>
+                    {% else %}
+                        <span class="text-yellow-400">{{ t.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="font-mono {% if t.pnl and t.pnl >= 0 %}profit{% else %}loss{% endif %}">
+                    {% if t.pnl %}{{ "%+.2f"|format(t.pnl) }}{% else %}-{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not trades %}
+            <tr><td colspan="11" class="text-center text-slate-500 py-8">No trades yet</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

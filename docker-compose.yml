@@ -4,6 +4,11 @@ services:
     container_name: telebot
     restart: unless-stopped
     env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./accounts.json:/app/accounts.json:ro
     logging:
       driver: json-file
       options:

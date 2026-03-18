@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6">
+    <h2 class="text-2xl font-bold">Overview</h2>
+    <p class="text-slate-500 text-sm mt-1">Account summaries — auto-refreshes every 3s</p>
+</div>
+
+<div id="overview-cards" hx-get="/partials/overview" hx-trigger="every 3s" hx-swap="innerHTML">
+    {% include "partials/overview_cards.html" %}
+</div>
+
+<div class="mt-8">
+    <h3 class="text-lg font-semibold mb-4">Open Positions</h3>
+    <div id="positions-table" hx-get="/partials/positions" hx-trigger="every 3s" hx-swap="innerHTML">
+        {% include "partials/positions_table.html" %}
+    </div>
+</div>
+{% endblock %}

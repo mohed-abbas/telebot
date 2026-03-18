@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="mb-6">
+    <h2 class="text-2xl font-bold">Signal Log</h2>
+    <p class="text-slate-500 text-sm mt-1">Last 100 signals received from Telegram</p>
+</div>
+
+<div class="card overflow-x-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Symbol</th>
+                <th>Direction</th>
+                <th>Zone</th>
+                <th>SL</th>
+                <th>TP</th>
+                <th>Action</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in signals %}
+            <tr>
+                <td class="text-slate-400 text-xs">{{ s.timestamp[:19] }}</td>
+                <td>
+                    {% if s.signal_type == 'open' %}
+                        <span class="text-indigo-400">OPEN</span>
+                    {% elif s.signal_type == 'close' %}
+                        <span class="text-red-400">CLOSE</span>
+                    {% elif s.signal_type == 'close_partial' %}
+                        <span class="text-orange-400">PARTIAL</span>
+                    {% elif s.signal_type == 'modify_sl' %}
+                        <span class="text-yellow-400">MOD SL</span>
+                    {% elif s.signal_type == 'modify_tp' %}
+                        <span class="text-yellow-400">MOD TP</span>
+                    {% else %}
+                        <span class="text-slate-400">{{ s.signal_type }}</span>
+                    {% endif %}
+                </td>
+                <td class="font-mono">{{ s.symbol or '-' }}</td>
+                <td>
+                    {% if s.direction == 'buy' %}
+                        <span class="badge-buy">BUY</span>
+                    {% elif s.direction == 'sell' %}
+                        <span class="badge-sell">SELL</span>
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td class="font-mono text-xs">
+                    {% if s.entry_zone_low and s.entry_zone_high %}
+                        {{ "%.2f"|format(s.entry_zone_low) }}-{{ "%.2f"|format(s.entry_zone_high) }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td class="font-mono">{{ "%.2f"|format(s.sl) if s.sl else '-' }}</td>
+                <td class="font-mono">{{ "%.2f"|format(s.tp) if s.tp else '-' }}</td>
+                <td>
+                    {% if s.action_taken == 'executed' %}
+                        <span class="text-green-400">{{ s.action_taken }}</span>
+                    {% elif s.action_taken == 'skipped' %}
+                        <span class="text-yellow-400">{{ s.action_taken }}</span>
+                    {% elif s.action_taken == 'failed' %}
+                        <span class="text-red-400">{{ s.action_taken }}</span>
+                    {% else %}
+                        <span class="text-slate-400">{{ s.action_taken }}</span>
+                    {% endif %}
+                </td>
+                <td class="text-xs text-slate-500 max-w-xs truncate">{{ s.details or s.raw_text[:80] }}</td>
+            </tr>
+            {% endfor %}
+            {% if not signals %}
+            <tr><td colspan="9" class="text-center text-slate-500 py-8">No signals yet</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
