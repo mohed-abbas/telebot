@@ -6,7 +6,8 @@ Uses asyncpg connection pool for async operations.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
+from pathlib import Path
 from typing import Optional, Union
 
 import asyncpg
@@ -339,3 +340,49 @@ async def get_recent_signals(limit: int = 50) -> list[dict]:
         limit,
     )
     return [dict(r) for r in rows]
+
+
+# ── Archival (DB-03) ────────────────────────────────────────────────
+
+
+async def archive_old_trades(archive_dir: str, months: int = 3) -> dict:
+    """Archive closed trades older than N months to CSV files.
+
+    Only archives trades with status='closed' AND close_time older than cutoff.
+    Never archives 'opened' or 'pending' trades regardless of age.
+
+    Returns: {"archived_count": int, "file_path": str}
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=months * 30)
+    archive_path = Path(archive_dir)
+    archive_path.mkdir(parents=True, exist_ok=True)
+
+    filename = f"trades_archive_{cutoff.strftime('%Y%m%d')}.csv"
+    filepath = archive_path / filename
+
+    async with _pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM trades WHERE status='closed' AND close_time < $1",
+            cutoff,
+        )
+
+        if count == 0:
+            return {"archived_count": 0, "file_path": ""}
+
+        # Export to CSV using asyncpg COPY protocol
+        await conn.copy_from_query(
+            "SELECT * FROM trades WHERE status='closed' AND close_time < $1 ORDER BY id",
+            cutoff,
+            output=str(filepath),
+            format="csv",
+            header=True,
+        )
+
+        # Delete archived rows
+        await conn.execute(
+            "DELETE FROM trades WHERE status='closed' AND close_time < $1",
+            cutoff,
+        )
+
+    logger.info("Archived %d trades to %s", count, filepath)
+    return {"archived_count": count, "file_path": str(filepath)}

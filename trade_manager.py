@@ -528,7 +528,7 @@ class TradeManager:
     # ── PENDING ORDER CLEANUP ───────────────────────────────────────────
 
     async def cleanup_expired_orders(self) -> list[dict]:
-        """Cancel pending orders that have expired. Called periodically."""
+        """Cancel expired pending orders. Checks MT5 state first (REL-04)."""
         expired = await db.get_expired_pending_orders()
         results = []
         for order in expired:
@@ -537,17 +537,61 @@ class TradeManager:
             if not connector or not connector.connected:
                 continue
 
+            # REL-04: Check MT5 state before cancelling
+            mt5_orders = await connector.get_pending_orders(order["symbol"])
+            mt5_tickets = {o["ticket"] for o in mt5_orders}
+
+            if order["ticket"] not in mt5_tickets:
+                # Order no longer pending on MT5 — check if it filled
+                positions = await connector.get_positions(order["symbol"])
+                filled = any(
+                    p.comment and str(order["ticket"]) in p.comment
+                    for p in positions
+                )
+                if filled:
+                    await db.mark_pending_filled(order["ticket"], acct_name)
+                    logger.info(
+                        "%s: Expired order #%d was filled on MT5",
+                        acct_name, order["ticket"],
+                    )
+                    results.append({
+                        "account": acct_name, "status": "filled",
+                        "ticket": order["ticket"], "symbol": order["symbol"],
+                    })
+                else:
+                    await db.mark_pending_cancelled(order["id"])
+                    logger.info(
+                        "%s: Expired order #%d already removed from MT5",
+                        acct_name, order["ticket"],
+                    )
+                    results.append({
+                        "account": acct_name, "status": "cancelled",
+                        "ticket": order["ticket"], "symbol": order["symbol"],
+                    })
+                continue
+
+            # Order still pending on MT5 — cancel it
             result = await connector.cancel_pending(order["ticket"])
-            await db.mark_pending_cancelled(order["id"])
             await db.increment_daily_stat(acct_name, "server_messages")
-            results.append({
-                "account": acct_name,
-                "status": "cancelled" if result.success else "cancel_failed",
-                "ticket": order["ticket"],
-                "symbol": order["symbol"],
-            })
-            logger.info(
-                "%s: Cancelled expired limit order #%d (%s)",
-                acct_name, order["ticket"], order["symbol"],
-            )
+            if result.success:
+                await db.mark_pending_cancelled(order["id"])
+                results.append({
+                    "account": acct_name, "status": "cancelled",
+                    "ticket": order["ticket"], "symbol": order["symbol"],
+                })
+                logger.info(
+                    "%s: Cancelled expired limit order #%d (%s)",
+                    acct_name, order["ticket"], order["symbol"],
+                )
+            else:
+                # Cancel failed — will retry next cycle
+                logger.warning(
+                    "%s: Failed to cancel order #%d: %s — will retry",
+                    acct_name, order["ticket"], result.error,
+                )
+                results.append({
+                    "account": acct_name, "status": "cancel_failed",
+                    "ticket": order["ticket"], "symbol": order["symbol"],
+                    "reason": result.error,
+                })
         return results
