@@ -46,15 +46,21 @@ async def db_pool():
 
 
 @pytest.fixture(autouse=True)
-async def clean_tables(db_pool):
-    """Truncate all tables between tests for isolation."""
-    if db_pool is None:
+async def clean_tables():
+    """Truncate all tables between tests for isolation.
+    Skips silently when no DB pool is available (non-DB tests).
+    """
+    if db._pool is None:
+        yield
         return
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "TRUNCATE signals, trades, daily_stats, pending_orders "
-            "RESTART IDENTITY CASCADE"
-        )
+    try:
+        async with db._pool.acquire() as conn:
+            await conn.execute(
+                "TRUNCATE signals, trades, daily_stats, pending_orders "
+                "RESTART IDENTITY CASCADE"
+            )
+    except Exception:
+        pass  # DB not available, skip cleanup
     yield
 
 

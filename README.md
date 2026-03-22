@@ -248,6 +248,43 @@ The bot auto-restarts on crashes and VPS reboots (`restart: unless-stopped`).
 
 No code changes or Docker rebuild needed.
 
+## Development
+
+### Local Dev Environment
+
+```bash
+# Start local PostgreSQL + bot in dry-run mode
+docker compose -f docker-compose.dev.yml up --build
+```
+
+Dashboard at http://localhost:8080 (admin / devpass123).
+
+### Running Tests
+
+```bash
+# Install test dependencies
+pip install -r requirements-dev.txt
+
+# Start test database (if not already running)
+docker compose -f docker-compose.dev.yml up -d db
+
+# Run unit tests (no database needed)
+python -m pytest tests/test_mt5_connector.py tests/test_signal_parser.py tests/test_signal_regression.py tests/test_risk_calculator.py -v
+
+# Run integration tests (requires PostgreSQL on port 5433)
+python -m pytest tests/test_trade_manager.py tests/test_trade_manager_integration.py tests/test_concurrency.py -v
+
+# Run all tests
+python -m pytest tests/ -v
+```
+
+### Database Maintenance
+
+```bash
+# Archive closed trades older than 3 months to CSV
+docker compose exec telebot python maintenance.py --archive --months 3
+```
+
 ## License
 
 MIT
