@@ -60,11 +60,12 @@ class AccountInfo:
 class MT5Connector:
     """Abstract base for MT5 connections. Each account gets its own connector."""
 
-    def __init__(self, account_name: str, server: str, login: int, password: str):
+    def __init__(self, account_name: str, server: str, login: int, password: str, magic_number: int = 202603):
         self.account_name = account_name
         self.server = server
         self.login = login
         self.password = password
+        self.magic_number = magic_number
         self._connected = False
 
     @property
@@ -130,8 +131,8 @@ class DryRunConnector(MT5Connector):
     _ticket_counter: int = 100000
     _fake_positions: dict[int, Position]
 
-    def __init__(self, account_name: str, server: str, login: int, password: str):
-        super().__init__(account_name, server, login, password)
+    def __init__(self, account_name: str, server: str, login: int, password: str, magic_number: int = 202603):
+        super().__init__(account_name, server, login, password, magic_number=magic_number)
         self._fake_positions = {}
 
     async def connect(self) -> bool:
@@ -248,8 +249,9 @@ class MT5LinuxConnector(MT5Connector):
         password: str,
         host: str = "localhost",
         port: int = 18812,
+        magic_number: int = 202603,
     ):
-        super().__init__(account_name, server, login, password)
+        super().__init__(account_name, server, login, password, magic_number=magic_number)
         self.host = host
         self.port = port
         self._mt5 = None
@@ -388,7 +390,7 @@ class MT5LinuxConnector(MT5Connector):
                 "sl": sl,
                 "tp": tp,
                 "deviation": 20,  # max slippage in points
-                "magic": 202603,  # magic number for our bot
+                "magic": self.magic_number,
                 "comment": comment or "telebot",
                 "type_time": mt5_const.ORDER_TIME_GTC,
                 "type_filling": mt5_const.ORDER_FILLING_IOC,
@@ -479,7 +481,7 @@ class MT5LinuxConnector(MT5Connector):
                 "type": close_type,
                 "price": close_price,
                 "deviation": 20,
-                "magic": 202603,
+                "magic": self.magic_number,
                 "comment": "telebot_close",
                 "type_filling": mt5_const.ORDER_FILLING_IOC,
             }
@@ -548,13 +550,15 @@ def create_connector(
     **kwargs,
 ) -> MT5Connector:
     """Factory function to create the appropriate connector."""
+    magic_number = kwargs.get("magic_number", 202603)
     if backend == "dry_run":
-        return DryRunConnector(account_name, server, login, password)
+        return DryRunConnector(account_name, server, login, password, magic_number=magic_number)
     elif backend == "mt5linux":
         return MT5LinuxConnector(
             account_name, server, login, password,
             host=kwargs.get("mt5_host", "localhost"),
             port=kwargs.get("mt5_port", 18812),
+            magic_number=magic_number,
         )
     else:
         raise ValueError(f"Unknown MT5 backend: {backend}")
