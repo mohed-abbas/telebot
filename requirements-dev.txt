@@ -1,0 +1,5 @@
+# Test dependencies for telebot
+pytest==8.3.5
+pytest-asyncio==0.25.3
+pytest-mock==3.15.1
+pytest-cov==6.1.1
