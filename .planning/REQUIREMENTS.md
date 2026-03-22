@@ -44,8 +44,8 @@
 
 - [x] **TEST-01**: requirements-dev.txt created with pytest, pytest-asyncio, pytest-mock, pytest-cov; documented in README
 - [x] **TEST-02**: MT5 connector has mock-based tests covering: connect, disconnect, get_price, open_order, modify_order, close_position, error scenarios
-- [ ] **TEST-03**: Trade manager has integration tests covering: full signal flow, multi-account execution, daily limit enforcement, zone-based execution
-- [ ] **TEST-04**: Async concurrency tests verify: no race conditions with concurrent signals, database lock contention under load, reconnection during signal processing
+- [x] **TEST-03**: Trade manager has integration tests covering: full signal flow, multi-account execution, daily limit enforcement, zone-based execution
+- [x] **TEST-04**: Async concurrency tests verify: no race conditions with concurrent signals, database lock contention under load, reconnection during signal processing
 - [x] **TEST-05**: Signal parser has regression tests using real-world Telegram signal formats including edge cases and format variations
 
 ### Analytics
@@ -109,8 +109,8 @@
 | OBS-04 | Phase 3 | Complete |
 | TEST-01 | Phase 4 | Complete |
 | TEST-02 | Phase 4 | Complete |
-| TEST-03 | Phase 4 | Pending |
-| TEST-04 | Phase 4 | Pending |
+| TEST-03 | Phase 4 | Complete |
+| TEST-04 | Phase 4 | Complete |
 | TEST-05 | Phase 4 | Complete |
 | ANLYT-01 | Phase 3 | Complete |
 | INFRA-01 | Phase 3 | Complete |
