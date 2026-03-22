@@ -12,7 +12,7 @@ A systematic hardening pass on the existing Telegram-to-Discord trading relay bo
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Security hardening and database migration to aiosqlite with UTC timestamps
+- [ ] **Phase 1: Foundation** - Security hardening and database migration to PostgreSQL (asyncpg) with UTC timestamps
 - [ ] **Phase 2: Reliability** - MT5 reconnection, kill switch, execution correctness, and position safety
 - [ ] **Phase 3: Observability & Infrastructure** - Signal logging, dashboard fixes, DB archival, and deployment hardening
 - [ ] **Phase 4: Testing** - Full test suite covering MT5 mocks, integration flows, async concurrency, and signal regression
@@ -26,10 +26,15 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Success Criteria** (what must be TRUE):
   1. Bot refuses to start if any required environment variable is missing or malformed, printing a clear error
   2. Dashboard returns 401 if DASHBOARD_PASS is not explicitly set in environment; no default credentials exist in code
-  3. All database reads and writes use aiosqlite; no sqlite3 check_same_thread=False appears anywhere; no global asyncio.Lock for DB
+  3. All database reads and writes use asyncpg (PostgreSQL); no sqlite3 check_same_thread=False appears anywhere; no global asyncio.Lock for DB
   4. MT5 passwords are not present in memory after initialization and never appear in logs
   5. All timestamps stored in the database are UTC; dynamic SQL field names are validated against an explicit whitelist
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md -- Config hardening: strict validation, DATABASE_URL, no default credentials, requirements update
+- [ ] 01-02-PLAN.md -- Database migration: full db.py rewrite to asyncpg with PostgreSQL DDL, bot.py async wiring
+- [ ] 01-03-PLAN.md -- MT5 password clearing: _clear_password after successful connect
 
 ### Phase 2: Reliability
 **Goal**: The bot recovers from MT5 disconnections without losing state, and trading execution is correct and safe
@@ -74,7 +79,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/TBD | Not started | - |
+| 1. Foundation | 0/3 | Planning complete | - |
 | 2. Reliability | 0/TBD | Not started | - |
 | 3. Observability & Infrastructure | 0/TBD | Not started | - |
 | 4. Testing | 0/TBD | Not started | - |
