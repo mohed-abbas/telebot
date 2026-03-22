@@ -4,8 +4,6 @@ services:
     container_name: telebot
     restart: unless-stopped
     env_file: .env
-    ports:
-      - "8080:8080"
     volumes:
       - ./data:/app/data
       - ./accounts.json:/app/accounts.json:ro
@@ -14,3 +12,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    networks:
+      - proxy-net
+      - data-net
+
+networks:
+  proxy-net:
+    name: proxy-net
+    external: true
+  data-net:
+    name: data-net
+    external: true
