@@ -69,7 +69,7 @@ Plans:
 Plans:
 - [x] 03-01-PLAN.md -- Observability: signal parser logging, compiled symbol regex, server message docs
 - [x] 03-02-PLAN.md -- Analytics: batched position queries, analytics page with per-symbol win rate and profit factor
-- [ ] 03-03-PLAN.md -- Infrastructure: ASGI lifespan, graceful shutdown, Docker networking, nginx config, Telethon eval
+- [x] 03-03-PLAN.md -- Infrastructure: ASGI lifespan, graceful shutdown, Docker networking, nginx config, Telethon eval
 
 ### Phase 4: Testing
 **Goal**: Correctness of all prior hardening changes is verified by an automated test suite that runs in CI

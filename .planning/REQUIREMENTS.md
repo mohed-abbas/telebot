@@ -54,10 +54,10 @@
 
 ### Infrastructure
 
-- [ ] **INFRA-01**: Dashboard runs with proper ASGI lifecycle management; graceful shutdown on SIGTERM; no blocking of Telegram handler
-- [ ] **INFRA-02**: Telethon version evaluated: document compatibility with current setup, identify security patches, create upgrade plan if needed
-- [ ] **INFRA-03**: Docker compose configured to join existing shared services network at /home/murx/shared; bot accessible to nginx reverse proxy
-- [ ] **INFRA-04**: Nginx reverse proxy configuration provided for dashboard with HTTPS via existing certbot/Let's Encrypt setup
+- [x] **INFRA-01**: Dashboard runs with proper ASGI lifecycle management; graceful shutdown on SIGTERM; no blocking of Telegram handler
+- [x] **INFRA-02**: Telethon version evaluated: document compatibility with current setup, identify security patches, create upgrade plan if needed
+- [x] **INFRA-03**: Docker compose configured to join existing shared services network at /home/murx/shared; bot accessible to nginx reverse proxy
+- [x] **INFRA-04**: Nginx reverse proxy configuration provided for dashboard with HTTPS via existing certbot/Let's Encrypt setup
 
 ## v2 Requirements
 
@@ -113,10 +113,10 @@
 | TEST-04 | Phase 4 | Pending |
 | TEST-05 | Phase 4 | Pending |
 | ANLYT-01 | Phase 3 | Complete |
-| INFRA-01 | Phase 3 | Pending |
-| INFRA-02 | Phase 3 | Pending |
-| INFRA-03 | Phase 3 | Pending |
-| INFRA-04 | Phase 3 | Pending |
+| INFRA-01 | Phase 3 | Complete |
+| INFRA-02 | Phase 3 | Complete |
+| INFRA-03 | Phase 3 | Complete |
+| INFRA-04 | Phase 3 | Complete |
 
 **Coverage:**
 - v1 requirements: 30 total

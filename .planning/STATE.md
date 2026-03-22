@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-22T19:10:45.182Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-03-22T19:14:56.754Z"
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -51,6 +51,7 @@ Plan: 3 of 3
 | Phase 01 P02 | 2min | 2 tasks | 2 files |
 | Phase 03 P02 | 2min | 2 tasks | 4 files |
 | Phase 03 P01 | 2min | 3 tasks | 4 files |
+| Phase 03 P03 | 2min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,9 @@ Recent decisions affecting current work:
 - [Phase 03]: Analytics computed on page load from SQL (no caching or background jobs)
 - [Phase 03]: Signal-like heuristic: 2+ keywords OR 1 keyword + price to reduce false positive Discord alerts
 - [Phase 03]: Symbol regex keys sorted by length descending so xau/usd matches before xau
+- [Phase 03]: FastAPI lifespan used instead of deprecated on_event pattern for ASGI lifecycle
+- [Phase 03]: Stay on Telethon 1.42.0 -- 2.x alpha with breaking changes; re-evaluate when stable
+- [Phase 03]: Docker external networks (proxy-net, data-net) with no direct port exposure
 
 ### Pending Todos
 
@@ -83,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T19:10:45.179Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-03-22T19:14:56.750Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file: None
