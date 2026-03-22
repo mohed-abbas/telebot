@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 _executor = None
 _notifier = None
 _settings = None
+_daily_limit_warned: set[str] = set()  # Account names that already received 80% warning today
 
 security = HTTPBasic()
 
@@ -85,6 +86,7 @@ async def overview(request: Request, user: str = Depends(_verify_auth)):
         "accounts": accounts_data,
         "trading_enabled": _settings.trading_enabled if _settings else False,
         "dry_run": _settings.trading_dry_run if _settings else True,
+        "trading_paused": _executor._trading_paused if _executor else False,
         "page": "overview",
     })
 
@@ -151,6 +153,8 @@ async def overview_partial(request: Request, user: str = Depends(_verify_auth)):
     return templates.TemplateResponse("partials/overview_cards.html", {
         "request": request,
         "accounts": accounts_data,
+        "trading_paused": _executor._trading_paused if _executor else False,
+        "max_daily_trades": _executor.cfg.max_daily_trades_per_account if _executor else 30,
     })
 
 
@@ -260,6 +264,71 @@ async def close_partial(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# KILL SWITCH (REL-03)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/emergency-preview", response_class=HTMLResponse)
+async def emergency_preview(request: Request, user: str = Depends(_verify_auth)):
+    """Show what kill switch will do before executing."""
+    if not _executor:
+        raise HTTPException(status_code=503, detail="Trading not initialized")
+
+    positions = await _get_all_positions()
+    pending_orders = []
+    for acct_name, connector in _executor.tm.connectors.items():
+        if connector.connected:
+            try:
+                orders = await connector.get_pending_orders()
+                for o in orders:
+                    o["account"] = acct_name
+                    pending_orders.append(o)
+            except Exception:
+                pass
+
+    return templates.TemplateResponse("partials/kill_switch_preview.html", {
+        "request": request,
+        "positions": positions,
+        "pending_orders": pending_orders,
+        "position_count": len(positions),
+        "order_count": len(pending_orders),
+    })
+
+
+@app.post("/api/emergency-close")
+async def emergency_close_endpoint(user: str = Depends(_verify_auth)):
+    """Execute emergency close: close all positions, cancel all orders, pause executor."""
+    if not _executor:
+        raise HTTPException(status_code=503, detail="Trading not initialized")
+
+    results = await _executor.emergency_close()
+    if _notifier:
+        await _notifier.notify_kill_switch(activated=True)
+    return results
+
+
+@app.post("/api/resume-trading")
+async def resume_trading(user: str = Depends(_verify_auth)):
+    """Re-enable trading after kill switch."""
+    if not _executor:
+        raise HTTPException(status_code=503, detail="Trading not initialized")
+
+    _executor.resume_trading()
+    if _notifier:
+        await _notifier.notify_kill_switch(activated=False)
+    return {"status": "resumed"}
+
+
+@app.get("/api/trading-status")
+async def trading_status(user: str = Depends(_verify_auth)):
+    """Return current trading status for HTMX polling."""
+    return {
+        "trading_paused": _executor._trading_paused if _executor else False,
+        "reconnecting": list(_executor._reconnecting) if _executor else [],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # SSE STREAM (real-time updates)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -328,6 +397,7 @@ async def _get_accounts_overview() -> list[dict]:
     if not _executor:
         return []
     accounts = []
+    max_trades = _executor.cfg.max_daily_trades_per_account if _executor else 30
     for acct_name, connector in _executor.tm.connectors.items():
         acct_config = _executor.tm.accounts.get(acct_name)
         info = None
@@ -347,6 +417,16 @@ async def _get_accounts_overview() -> list[dict]:
         trade_count = await db.get_daily_stat(acct_name, "trades_count")
         msg_count = await db.get_daily_stat(acct_name, "server_messages")
 
+        # EXEC-04: Calculate daily limit percentage
+        daily_limit_pct = (trade_count / max_trades * 100) if max_trades > 0 else 0
+
+        # EXEC-04: Discord warning at 80% threshold (first crossing only)
+        if daily_limit_pct >= 80 and acct_name not in _daily_limit_warned and _notifier:
+            _daily_limit_warned.add(acct_name)
+            asyncio.create_task(
+                _notifier.notify_daily_limit(acct_name, f"trades {trade_count}/{max_trades}")
+            )
+
         accounts.append({
             "name": acct_name,
             "connected": connector.connected,
@@ -359,6 +439,8 @@ async def _get_accounts_overview() -> list[dict]:
             "total_profit": sum(p.profit for p in positions),
             "daily_trades": trade_count,
             "daily_messages": msg_count,
+            "max_daily_trades": max_trades,
+            "daily_limit_pct": daily_limit_pct,
             "risk_percent": acct_config.risk_percent if acct_config else 0,
             "max_lot": acct_config.max_lot_size if acct_config else 0,
         })
