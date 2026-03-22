@@ -35,10 +35,10 @@
 
 ### Observability
 
-- [ ] **OBS-01**: Signal parser logs detailed reason when parse_signal returns None; Discord alert sent when signal-like text detected but not parsed
-- [ ] **OBS-02**: Server message limits documented: what counts as a server message, sync with MT5 broker limits, configurable per account
+- [x] **OBS-01**: Signal parser logs detailed reason when parse_signal returns None; Discord alert sent when signal-like text detected but not parsed
+- [x] **OBS-02**: Server message limits documented: what counts as a server message, sync with MT5 broker limits, configurable per account
 - [x] **OBS-03**: Dashboard position queries batched across accounts; no N+1 query pattern; optional short-TTL cache
-- [ ] **OBS-04**: Symbol map uses compiled combined regex for lookup instead of iterating full SYMBOL_MAP on every call
+- [x] **OBS-04**: Symbol map uses compiled combined regex for lookup instead of iterating full SYMBOL_MAP on every call
 
 ### Testing
 
@@ -103,10 +103,10 @@
 | EXEC-02 | Phase 2 | Pending |
 | EXEC-03 | Phase 2 | Pending |
 | EXEC-04 | Phase 2 | Pending |
-| OBS-01 | Phase 3 | Pending |
-| OBS-02 | Phase 3 | Pending |
+| OBS-01 | Phase 3 | Complete |
+| OBS-02 | Phase 3 | Complete |
 | OBS-03 | Phase 3 | Complete |
-| OBS-04 | Phase 3 | Pending |
+| OBS-04 | Phase 3 | Complete |
 | TEST-01 | Phase 4 | Pending |
 | TEST-02 | Phase 4 | Pending |
 | TEST-03 | Phase 4 | Pending |
