@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: telebot-db-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: telebot
+      POSTGRES_PASSWORD: telebot_dev
+      POSTGRES_DB: telebot
+    ports:
+      - "5433:5432"
+    volumes:
+      - telebot_pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U telebot"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  telebot:
+    build: .
+    container_name: telebot-dev
+    restart: unless-stopped
+    env_file: .env.dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./accounts.json:/app/accounts.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  telebot_pgdata_dev:

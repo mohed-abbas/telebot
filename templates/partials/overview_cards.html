@@ -47,7 +47,7 @@
             </div>
             <div class="w-full bg-dark-700 rounded-full h-1.5">
                 <div class="h-1.5 rounded-full {% if margin_pct > 50 %}bg-red-500{% elif margin_pct > 30 %}bg-yellow-500{% else %}bg-indigo-500{% endif %}"
-                     style="width: {{ margin_pct|min(100) }}%"></div>
+                     style="width: {{ [margin_pct, 100]|min }}%"></div>
             </div>
         </div>
         {% endif %}
