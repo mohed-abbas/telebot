@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -60,12 +61,14 @@ class AccountInfo:
 class MT5Connector:
     """Abstract base for MT5 connections. Each account gets its own connector."""
 
-    def __init__(self, account_name: str, server: str, login: int, password: str, magic_number: int = 202603):
+    def __init__(self, account_name: str, server: str, login: int, password: str,
+                 magic_number: int = 202603, password_env: str = ""):
         self.account_name = account_name
         self.server = server
         self.login = login
         self.password = password
         self.magic_number = magic_number
+        self.password_env = password_env
         self._connected = False
 
     @property
@@ -76,7 +79,11 @@ class MT5Connector:
         """Clear password from memory after successful connection."""
         self.password = ""
 
-    async def connect(self) -> bool:
+    async def ping(self) -> bool:
+        """Check if MT5 connection is alive. Returns True if healthy."""
+        raise NotImplementedError
+
+    async def connect(self, password: str | None = None) -> bool:
         raise NotImplementedError
 
     async def disconnect(self) -> None:
@@ -131,11 +138,16 @@ class DryRunConnector(MT5Connector):
     _ticket_counter: int = 100000
     _fake_positions: dict[int, Position]
 
-    def __init__(self, account_name: str, server: str, login: int, password: str, magic_number: int = 202603):
-        super().__init__(account_name, server, login, password, magic_number=magic_number)
+    def __init__(self, account_name: str, server: str, login: int, password: str,
+                 magic_number: int = 202603, password_env: str = ""):
+        super().__init__(account_name, server, login, password, magic_number=magic_number, password_env=password_env)
         self._fake_positions = {}
 
-    async def connect(self) -> bool:
+    async def ping(self) -> bool:
+        """Dry-run connector is always alive if connected."""
+        return self._connected
+
+    async def connect(self, password: str | None = None) -> bool:
         logger.info("[DRY-RUN] %s: Connected to %s (login: %d)", self.account_name, self.server, self.login)
         self._connected = True
         self._clear_password()
@@ -551,14 +563,16 @@ def create_connector(
 ) -> MT5Connector:
     """Factory function to create the appropriate connector."""
     magic_number = kwargs.get("magic_number", 202603)
+    password_env = kwargs.get("password_env", "")
     if backend == "dry_run":
-        return DryRunConnector(account_name, server, login, password, magic_number=magic_number)
+        return DryRunConnector(account_name, server, login, password, magic_number=magic_number, password_env=password_env)
     elif backend == "mt5linux":
         return MT5LinuxConnector(
             account_name, server, login, password,
             host=kwargs.get("mt5_host", "localhost"),
             port=kwargs.get("mt5_port", 18812),
             magic_number=magic_number,
+            password_env=password_env,
         )
     else:
         raise ValueError(f"Unknown MT5 backend: {backend}")

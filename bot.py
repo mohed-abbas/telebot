@@ -104,6 +104,7 @@ async def _setup_trading(http: httpx.AsyncClient):
             mt5_host=settings.mt5_host,
             mt5_port=settings.mt5_port,
             magic_number=settings.mt5_magic_number,
+            password_env=acct.password_env,
         )
         connectors[acct.name] = conn
 
