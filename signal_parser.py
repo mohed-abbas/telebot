@@ -10,7 +10,7 @@ import logging
 import re
 from pathlib import Path
 
-from models import Direction, SignalAction, SignalType, SYMBOL_MAP
+from models import Direction, SignalAction, SignalType, SYMBOL_MAP, _SYMBOL_PATTERN
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,27 @@ def _select_target_tp(tps: list[float | str], index: int = 2) -> float | None:
     return None
 
 
+_SIGNAL_KEYWORDS = {"buy", "sell", "sl", "tp", "entry", "close", "exit"}
+_RE_PRICE_LIKE = re.compile(r"\b\d{3,5}(?:\.\d{1,2})?\b")
+
+
+def is_signal_like(text: str) -> bool:
+    """Heuristic: does this text look like it might be a trading signal?
+
+    Requires at least 2 trading keywords OR 1 keyword + a price-like number.
+    This reduces false positives from casual messages mentioning 'gold' or 'buy'.
+    """
+    lower = text.lower()
+    keyword_count = sum(1 for kw in _SIGNAL_KEYWORDS if kw in lower)
+    has_price = bool(_RE_PRICE_LIKE.search(text))
+
+    if keyword_count >= 2:
+        return True
+    if keyword_count >= 1 and has_price:
+        return True
+    return False
+
+
 def parse_signal(text: str) -> SignalAction | None:
     """Parse a Telegram message into a SignalAction, or None if not a signal.
 
@@ -190,6 +211,8 @@ def parse_signal(text: str) -> SignalAction | None:
         return _build_open_signal(open_single, stripped, text, zone=False)
 
     # Not a recognized signal
+    if is_signal_like(stripped):
+        logger.warning("Signal-like text not parsed: %.200s", stripped)
     return None
 
 
@@ -245,11 +268,10 @@ def _build_open_signal(
 
 
 def _extract_symbol_from_text(text: str) -> str:
-    """Try to find a known symbol in the text, default to XAUUSD."""
-    lower = text.lower()
-    for raw, canonical in SYMBOL_MAP.items():
-        if raw in lower:
-            return canonical
+    """Try to find a known symbol in the text using compiled regex, default to XAUUSD."""
+    match = _SYMBOL_PATTERN.search(text)
+    if match:
+        return SYMBOL_MAP[match.group().lower()]
     return "XAUUSD"  # default for gold signal groups
 
 

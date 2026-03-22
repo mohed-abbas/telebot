@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -24,6 +25,13 @@ SYMBOL_MAP: dict[str, str] = {
     "xau/usd": "XAUUSD",
     "xau": "XAUUSD",
 }
+
+# Compiled regex for O(1) symbol lookup — keys sorted by length descending
+# so "xau/usd" matches before "xau".
+_SYMBOL_PATTERN = _re.compile(
+    "|".join(_re.escape(k) for k in sorted(SYMBOL_MAP.keys(), key=len, reverse=True)),
+    _re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
