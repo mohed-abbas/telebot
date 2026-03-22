@@ -42,7 +42,7 @@
 
 ### Testing
 
-- [ ] **TEST-01**: requirements-dev.txt created with pytest, pytest-asyncio, pytest-mock, pytest-cov; documented in README
+- [x] **TEST-01**: requirements-dev.txt created with pytest, pytest-asyncio, pytest-mock, pytest-cov; documented in README
 - [ ] **TEST-02**: MT5 connector has mock-based tests covering: connect, disconnect, get_price, open_order, modify_order, close_position, error scenarios
 - [ ] **TEST-03**: Trade manager has integration tests covering: full signal flow, multi-account execution, daily limit enforcement, zone-based execution
 - [ ] **TEST-04**: Async concurrency tests verify: no race conditions with concurrent signals, database lock contention under load, reconnection during signal processing
@@ -107,7 +107,7 @@
 | OBS-02 | Phase 3 | Complete |
 | OBS-03 | Phase 3 | Complete |
 | OBS-04 | Phase 3 | Complete |
-| TEST-01 | Phase 4 | Pending |
+| TEST-01 | Phase 4 | Complete |
 | TEST-02 | Phase 4 | Pending |
 | TEST-03 | Phase 4 | Pending |
 | TEST-04 | Phase 4 | Pending |

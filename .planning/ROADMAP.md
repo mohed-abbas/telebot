@@ -84,7 +84,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md -- Test infrastructure: requirements-dev.txt, pyproject.toml, tests/conftest.py, migrate existing tests
+- [x] 04-01-PLAN.md -- Test infrastructure: requirements-dev.txt, pyproject.toml, tests/conftest.py, migrate existing tests
 - [ ] 04-02-PLAN.md -- Unit tests: MT5 connector mock tests, signal parser regression placeholder with edge cases
 - [ ] 04-03-PLAN.md -- Integration tests: trade manager full flow with DB, async concurrency, executor kill switch
 
