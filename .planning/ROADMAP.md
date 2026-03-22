@@ -68,7 +68,7 @@ Plans:
 
 Plans:
 - [ ] 03-01-PLAN.md -- Observability: signal parser logging, compiled symbol regex, server message docs
-- [ ] 03-02-PLAN.md -- Analytics: batched position queries, analytics page with per-symbol win rate and profit factor
+- [x] 03-02-PLAN.md -- Analytics: batched position queries, analytics page with per-symbol win rate and profit factor
 - [ ] 03-03-PLAN.md -- Infrastructure: ASGI lifespan, graceful shutdown, Docker networking, nginx config, Telethon eval
 
 ### Phase 4: Testing

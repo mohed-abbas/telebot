@@ -37,7 +37,7 @@
 
 - [ ] **OBS-01**: Signal parser logs detailed reason when parse_signal returns None; Discord alert sent when signal-like text detected but not parsed
 - [ ] **OBS-02**: Server message limits documented: what counts as a server message, sync with MT5 broker limits, configurable per account
-- [ ] **OBS-03**: Dashboard position queries batched across accounts; no N+1 query pattern; optional short-TTL cache
+- [x] **OBS-03**: Dashboard position queries batched across accounts; no N+1 query pattern; optional short-TTL cache
 - [ ] **OBS-04**: Symbol map uses compiled combined regex for lookup instead of iterating full SYMBOL_MAP on every call
 
 ### Testing
@@ -50,7 +50,7 @@
 
 ### Analytics
 
-- [ ] **ANLYT-01**: Signal accuracy tracking: win rate and profit factor per signal source and symbol; stored in database; displayed on dashboard
+- [x] **ANLYT-01**: Signal accuracy tracking: win rate and profit factor per signal source and symbol; stored in database; displayed on dashboard
 
 ### Infrastructure
 
@@ -105,14 +105,14 @@
 | EXEC-04 | Phase 2 | Pending |
 | OBS-01 | Phase 3 | Pending |
 | OBS-02 | Phase 3 | Pending |
-| OBS-03 | Phase 3 | Pending |
+| OBS-03 | Phase 3 | Complete |
 | OBS-04 | Phase 3 | Pending |
 | TEST-01 | Phase 4 | Pending |
 | TEST-02 | Phase 4 | Pending |
 | TEST-03 | Phase 4 | Pending |
 | TEST-04 | Phase 4 | Pending |
 | TEST-05 | Phase 4 | Pending |
-| ANLYT-01 | Phase 3 | Pending |
+| ANLYT-01 | Phase 3 | Complete |
 | INFRA-01 | Phase 3 | Pending |
 | INFRA-02 | Phase 3 | Pending |
 | INFRA-03 | Phase 3 | Pending |
