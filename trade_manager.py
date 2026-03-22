@@ -33,6 +33,70 @@ from risk_calculator import (
 logger = logging.getLogger(__name__)
 
 
+# ── Zone logic (EXEC-01) ────────────────────────────────────────────
+
+def is_price_in_buy_zone(current_price: float, zone_low: float, zone_high: float) -> bool:
+    """BUY: execute market if price is at or below zone high (price is cheap enough)."""
+    return current_price <= zone_high
+
+def is_price_in_sell_zone(current_price: float, zone_low: float, zone_high: float) -> bool:
+    """SELL: execute market if price is at or above zone low (price is high enough).
+    Boundary inclusive — at exactly zone_low we still execute market."""
+    return current_price >= zone_low
+
+def determine_order_type(
+    direction: Direction,
+    current_price: float,
+    zone_low: float,
+    zone_high: float,
+) -> tuple[bool, float]:
+    """Determine market vs limit order and the limit price.
+    Returns: (use_market: bool, limit_price: float)
+    BUY zones:  price <= zone_high -> market, else buy_limit at zone_mid
+    SELL zones: price >= zone_low  -> market, else sell_limit at zone_mid
+    """
+    zone_mid = (zone_low + zone_high) / 2
+    if direction == Direction.SELL:
+        if is_price_in_sell_zone(current_price, zone_low, zone_high):
+            return True, 0.0
+        else:
+            return False, zone_mid
+    else:  # BUY
+        if is_price_in_buy_zone(current_price, zone_low, zone_high):
+            return True, 0.0
+        else:
+            return False, zone_mid
+
+
+# ── SL/TP validation (EXEC-03) ──────────────────────────────────────
+
+def validate_sl_for_direction(direction: str, open_price: float, new_sl: float) -> bool:
+    """Validate that SL makes sense for position direction.
+    BUY: SL must be below open_price (we lose if price drops).
+    SELL: SL must be above open_price (we lose if price rises).
+    """
+    if new_sl <= 0:
+        return False
+    if direction == "buy":
+        return new_sl < open_price
+    elif direction == "sell":
+        return new_sl > open_price
+    return False
+
+def validate_tp_for_direction(direction: str, open_price: float, new_tp: float) -> bool:
+    """Validate that TP makes sense for position direction.
+    BUY: TP must be above open_price (we profit if price rises).
+    SELL: TP must be below open_price (we profit if price drops).
+    """
+    if new_tp <= 0:
+        return False
+    if direction == "buy":
+        return new_tp > open_price
+    elif direction == "sell":
+        return new_tp < open_price
+    return False
+
+
 class TradeManager:
     def __init__(
         self,
@@ -173,6 +237,17 @@ class TradeManager:
                 jittered_tp, self.cfg.sl_tp_jitter_points, signal.direction,
             )
 
+        # ── EXEC-02: Stale re-check immediately before order ─────────
+        price_data_recheck = await connector.get_price(signal.symbol)
+        if price_data_recheck is None:
+            return {"account": name, "status": "failed", "reason": "Cannot get price for stale re-check"}
+        bid_recheck, ask_recheck = price_data_recheck
+        current_recheck = bid_recheck if signal.direction == Direction.SELL else ask_recheck
+        stale_recheck = self._check_stale(signal, current_recheck)
+        if stale_recheck:
+            logger.info("%s: Stale on re-check — %s", name, stale_recheck)
+            return {"account": name, "status": "skipped", "reason": f"Stale (re-check): {stale_recheck}"}
+
         # ── Execute ─────────────────────────────────────────────────────
         if use_market:
             order_type = (
@@ -293,27 +368,8 @@ class TradeManager:
         zone_low: float,
         zone_high: float,
     ) -> tuple[bool, float]:
-        """Determine market vs limit order and the limit price.
-
-        Returns: (use_market: bool, limit_price: float)
-        """
-        zone_mid = (zone_low + zone_high) / 2
-
-        if direction == Direction.SELL:
-            # SELL: want to sell high. Execute market if price is in/above zone.
-            if current_price >= zone_low:
-                return True, 0.0  # market order
-            else:
-                # Price below zone — place sell limit at zone midpoint
-                return False, zone_mid
-
-        else:  # BUY
-            # BUY: want to buy low. Execute market if price is in/below zone.
-            if current_price <= zone_high:
-                return True, 0.0  # market order
-            else:
-                # Price above zone — place buy limit at zone midpoint
-                return False, zone_mid
+        """Determine market vs limit order. Delegates to module-level function."""
+        return determine_order_type(direction, current_price, zone_low, zone_high)
 
     # ── CLOSE ───────────────────────────────────────────────────────────
 
@@ -406,6 +462,15 @@ class TradeManager:
                     # Breakeven: set SL to entry price
                     new_sl = pos.open_price
 
+                # EXEC-03: Validate SL direction before sending to MT5
+                if new_sl != pos.open_price and not validate_sl_for_direction(pos.direction, pos.open_price, new_sl):
+                    results.append({
+                        "account": acct_name, "status": "skipped",
+                        "ticket": pos.ticket,
+                        "reason": f"Invalid SL {new_sl:.2f} for {pos.direction} position (open={pos.open_price:.2f})",
+                    })
+                    continue
+
                 result = await connector.modify_position(pos.ticket, sl=new_sl)
                 await db.increment_daily_stat(acct_name, "server_messages")
                 if result.success:
@@ -437,6 +502,15 @@ class TradeManager:
 
             positions = await connector.get_positions(signal.symbol)
             for pos in positions:
+                # EXEC-03: Validate TP direction before sending to MT5
+                if not validate_tp_for_direction(pos.direction, pos.open_price, signal.new_tp):
+                    results.append({
+                        "account": acct_name, "status": "skipped",
+                        "ticket": pos.ticket,
+                        "reason": f"Invalid TP {signal.new_tp:.2f} for {pos.direction} position (open={pos.open_price:.2f})",
+                    })
+                    continue
+
                 result = await connector.modify_position(pos.ticket, tp=signal.new_tp)
                 await db.increment_daily_stat(acct_name, "server_messages")
                 if result.success:
