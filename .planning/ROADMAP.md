@@ -46,7 +46,13 @@ Plans:
   3. Dashboard kill switch closes all positions, cancels all pending orders, and pauses the executor; bot does not accept new signals until manually re-enabled
   4. Pending order cleanup confirms MT5 order state before cancellation; correctly distinguishes filled-vs-failed rather than silently misclassifying
   5. Dashboard shows per-account daily trade count with a warning indicator when approaching the configured limit
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+- [ ] 02-01-PLAN.md -- MT5 connector hardening: ping(), EOFError wrapping, reconnect password support
+- [ ] 02-02-PLAN.md -- Execution correctness: zone logic extraction, stale re-check, SL/TP validation, cleanup race fix, DB archival
+- [ ] 02-03-PLAN.md -- Heartbeat, reconnect, kill switch core: executor + bot.py signal gating
+- [ ] 02-04-PLAN.md -- Dashboard: kill switch UI with confirmation, daily limit display with color coding
 
 ### Phase 3: Observability & Infrastructure
 **Goal**: Operational problems are visible before they become outages, and the deployment is production-hardened
@@ -75,11 +81,11 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Planning complete | - |
-| 2. Reliability | 0/TBD | Not started | - |
+| 1. Foundation | 3/3 | Complete | 2026-03-22 |
+| 2. Reliability | 0/4 | Planning complete | - |
 | 3. Observability & Infrastructure | 0/TBD | Not started | - |
 | 4. Testing | 0/TBD | Not started | - |
