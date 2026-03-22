@@ -10,7 +10,7 @@ from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 from config import settings, load_accounts_config
 from discord_sender import send_message
-from signal_parser import parse_signal, format_parsed_signal
+from signal_parser import parse_signal, format_parsed_signal, is_signal_like
 
 MAX_FILE_SIZE = 8 * 1024 * 1024  # 8 MB
 
@@ -265,6 +265,12 @@ async def main() -> None:
                                 await notifier.notify_alert(
                                     f"EXECUTION ERROR: {exc}\nSignal: {signal.raw_text[:200]}"
                                 )
+            elif is_signal_like(text):
+                logger.info("Signal-like text detected but not parsed: %.100s", text)
+                if notifier:
+                    await notifier.notify_alert(
+                        f"PARSE FAILED: Signal-like text not recognized:\n{text[:200]}"
+                    )
 
     logger.info("Bot started. Listening to %d chat(s)", len(settings.tg_chat_ids))
 
