@@ -71,6 +71,10 @@ class MT5Connector:
     def connected(self) -> bool:
         return self._connected
 
+    def _clear_password(self) -> None:
+        """Clear password from memory after successful connection."""
+        self.password = ""
+
     async def connect(self) -> bool:
         raise NotImplementedError
 
@@ -133,6 +137,7 @@ class DryRunConnector(MT5Connector):
     async def connect(self) -> bool:
         logger.info("[DRY-RUN] %s: Connected to %s (login: %d)", self.account_name, self.server, self.login)
         self._connected = True
+        self._clear_password()
         return True
 
     async def disconnect(self) -> None:
@@ -266,6 +271,7 @@ class MT5LinuxConnector(MT5Connector):
                 self.account_name, info.balance, info.equity,
             )
             self._connected = True
+            self._clear_password()
             return True
         except Exception as exc:
             logger.error("%s: MT5 connection failed: %s", self.account_name, exc)
