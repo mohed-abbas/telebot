@@ -64,7 +64,12 @@ Plans:
   3. Signal accuracy (win rate, profit factor) per source and symbol is stored in the database and visible on the dashboard
   4. Dashboard runs with proper ASGI lifecycle; graceful shutdown on SIGTERM; Nginx reverse proxy config and Docker network config are documented and applied
   5. Telethon compatibility is documented with a version-locked decision; DB archival command exists and moves records older than 3 months to archive files
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 03-01-PLAN.md -- Observability: signal parser logging, compiled symbol regex, server message docs
+- [ ] 03-02-PLAN.md -- Analytics: batched position queries, analytics page with per-symbol win rate and profit factor
+- [ ] 03-03-PLAN.md -- Infrastructure: ASGI lifespan, graceful shutdown, Docker networking, nginx config, Telethon eval
 
 ### Phase 4: Testing
 **Goal**: Correctness of all prior hardening changes is verified by an automated test suite that runs in CI
@@ -87,5 +92,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 |-------|----------------|--------|-----------|
 | 1. Foundation | 3/3 | Complete | 2026-03-22 |
 | 2. Reliability | 0/4 | Planning complete | - |
-| 3. Observability & Infrastructure | 0/TBD | Not started | - |
+| 3. Observability & Infrastructure | 0/3 | Planning complete | - |
 | 4. Testing | 0/TBD | Not started | - |
