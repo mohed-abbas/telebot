@@ -262,18 +262,43 @@ class MT5LinuxConnector(MT5Connector):
         host: str = "localhost",
         port: int = 18812,
         magic_number: int = 202603,
+        password_env: str = "",
     ):
-        super().__init__(account_name, server, login, password, magic_number=magic_number)
+        super().__init__(account_name, server, login, password, magic_number=magic_number, password_env=password_env)
         self.host = host
         self.port = port
         self._mt5 = None
 
-    async def connect(self) -> bool:
+    async def ping(self) -> bool:
+        """Check if MT5 connection is alive via terminal_info().connected."""
+        if not self._mt5:
+            return False
+        try:
+            info = self._mt5.terminal_info()
+            if info is None:
+                return False
+            return bool(info.connected)
+        except (EOFError, ConnectionError, OSError) as exc:
+            logger.warning("%s: Ping failed: %s", self.account_name, exc)
+            self._connected = False
+            return False
+        except Exception as exc:
+            logger.error("%s: Unexpected ping error: %s", self.account_name, exc)
+            self._connected = False
+            return False
+
+    async def connect(self, password: str | None = None) -> bool:
         try:
             from mt5linux import MetaTrader5
             self._mt5 = MetaTrader5(host=self.host, port=self.port)
             self._mt5.initialize()
-            result = self._mt5.login(login=self.login, password=self.password, server=self.server)
+            # Use provided password, or re-read from env, or use stored (initial connect)
+            pwd = password or (os.environ.get(self.password_env, "") if self.password_env else "") or self.password
+            if not pwd:
+                logger.error("%s: No password available for connect", self.account_name)
+                self._connected = False
+                return False
+            result = self._mt5.login(login=self.login, password=pwd, server=self.server)
             if not result:
                 error = self._mt5.last_error()
                 logger.error("%s: MT5 login failed: %s", self.account_name, error)
@@ -302,19 +327,22 @@ class MT5LinuxConnector(MT5Connector):
         logger.info("%s: Disconnected", self.account_name)
 
     async def get_price(self, symbol: str) -> tuple[float, float] | None:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return None
         try:
             tick = self._mt5.symbol_info_tick(symbol)
             if tick is None:
                 return None
             return (tick.bid, tick.ask)
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return None
         except Exception as exc:
             logger.error("%s: get_price failed: %s", self.account_name, exc)
             return None
 
     async def get_account_info(self) -> AccountInfo | None:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return None
         try:
             info = self._mt5.account_info()
@@ -327,12 +355,15 @@ class MT5LinuxConnector(MT5Connector):
                 free_margin=info.margin_free,
                 currency=info.currency,
             )
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return None
         except Exception as exc:
             logger.error("%s: get_account_info failed: %s", self.account_name, exc)
             return None
 
     async def get_positions(self, symbol: str | None = None) -> list[Position]:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return []
         try:
             if symbol:
@@ -355,6 +386,9 @@ class MT5LinuxConnector(MT5Connector):
                     comment=p.comment,
                 ))
             return positions
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return []
         except Exception as exc:
             logger.error("%s: get_positions failed: %s", self.account_name, exc)
             return []
@@ -369,7 +403,7 @@ class MT5LinuxConnector(MT5Connector):
         tp: float = 0.0,
         comment: str = "",
     ) -> OrderResult:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return OrderResult(success=False, error="Not connected")
         try:
             import MetaTrader5 as mt5_const
@@ -429,6 +463,9 @@ class MT5LinuxConnector(MT5Connector):
                 price=result.price,
                 volume=result.volume,
             )
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return OrderResult(success=False, error="Connection lost")
         except Exception as exc:
             logger.error("%s: open_order failed: %s", self.account_name, exc)
             return OrderResult(success=False, error=str(exc))
@@ -436,7 +473,7 @@ class MT5LinuxConnector(MT5Connector):
     async def modify_position(
         self, ticket: int, sl: float | None = None, tp: float | None = None
     ) -> OrderResult:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return OrderResult(success=False, error="Not connected")
         try:
             import MetaTrader5 as mt5_const
@@ -462,12 +499,15 @@ class MT5LinuxConnector(MT5Connector):
 
             logger.info("%s: Position %d modified — sl=%.2f tp=%.2f", self.account_name, ticket, request["sl"], request["tp"])
             return OrderResult(success=True, ticket=ticket)
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return OrderResult(success=False, ticket=ticket, error="Connection lost")
         except Exception as exc:
             logger.error("%s: modify_position failed: %s", self.account_name, exc)
             return OrderResult(success=False, ticket=ticket, error=str(exc))
 
     async def close_position(self, ticket: int, volume: float | None = None) -> OrderResult:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return OrderResult(success=False, error="Not connected")
         try:
             import MetaTrader5 as mt5_const
@@ -505,12 +545,15 @@ class MT5LinuxConnector(MT5Connector):
 
             logger.info("%s: Position %d closed — vol=%.2f price=%.2f", self.account_name, ticket, close_volume, close_price)
             return OrderResult(success=True, ticket=ticket, price=close_price, volume=close_volume)
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return OrderResult(success=False, ticket=ticket, error="Connection lost")
         except Exception as exc:
             logger.error("%s: close_position failed: %s", self.account_name, exc)
             return OrderResult(success=False, ticket=ticket, error=str(exc))
 
     async def cancel_pending(self, ticket: int) -> OrderResult:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return OrderResult(success=False, error="Not connected")
         try:
             import MetaTrader5 as mt5_const
@@ -523,11 +566,14 @@ class MT5LinuxConnector(MT5Connector):
                 error = str(self._mt5.last_error()) if result is None else result.comment
                 return OrderResult(success=False, ticket=ticket, error=error)
             return OrderResult(success=True, ticket=ticket)
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return OrderResult(success=False, ticket=ticket, error="Connection lost")
         except Exception as exc:
             return OrderResult(success=False, ticket=ticket, error=str(exc))
 
     async def get_pending_orders(self, symbol: str | None = None) -> list[dict]:
-        if not self._mt5:
+        if not self._mt5 or not self._connected:
             return []
         try:
             if symbol:
@@ -548,6 +594,9 @@ class MT5LinuxConnector(MT5Connector):
                 }
                 for o in orders
             ]
+        except (EOFError, ConnectionError, OSError):
+            self._connected = False
+            return []
         except Exception as exc:
             logger.error("%s: get_pending_orders failed: %s", self.account_name, exc)
             return []
