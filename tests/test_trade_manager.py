@@ -1,54 +1,10 @@
-"""Tests for trade_manager.py — zone logic, stale checks, execution flow."""
+"""Tests for trade_manager.py -- zone logic, stale checks, execution flow."""
 
-import asyncio
 import pytest
 
-import db
-from models import AccountConfig, Direction, GlobalConfig, SignalAction, SignalType
-from mt5_connector import DryRunConnector
+from models import Direction, SignalAction, SignalType
+from mt5_connector import OrderType
 from trade_manager import TradeManager
-
-
-@pytest.fixture(autouse=True)
-def setup_db(tmp_path):
-    """Initialize a temp database for each test."""
-    db.init_db(tmp_path / "test.db")
-
-
-@pytest.fixture
-def global_config():
-    return GlobalConfig(
-        default_target_tp=2,
-        limit_order_expiry_minutes=30,
-        max_daily_trades_per_account=30,
-        max_daily_server_messages=500,
-        stagger_delay_min=0,
-        stagger_delay_max=0,
-        lot_jitter_percent=0,
-        sl_tp_jitter_points=0,
-    )
-
-
-@pytest.fixture
-def account():
-    return AccountConfig(
-        name="test-acct",
-        server="TestServer",
-        login=12345,
-        password_env="TEST_PASS",
-        risk_percent=1.0,
-        max_lot_size=1.0,
-        max_daily_loss_percent=3.0,
-        max_open_trades=3,
-        enabled=True,
-    )
-
-
-@pytest.fixture
-def connector(account):
-    c = DryRunConnector(account.name, account.server, account.login, "pass")
-    asyncio.get_event_loop().run_until_complete(c.connect())
-    return c
 
 
 @pytest.fixture
@@ -153,11 +109,11 @@ class TestDetermineOrderType:
         assert limit_price == 2142.5  # zone midpoint
 
 
+@pytest.mark.asyncio(loop_scope="session")
 class TestCloseSignal:
-    @pytest.mark.asyncio
     async def test_close_all_positions(self, tm, connector):
         # Open a position first
-        await connector.open_order("XAUUSD", __import__("mt5_connector").OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
+        await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
         positions = await connector.get_positions("XAUUSD")
         assert len(positions) == 1
 
@@ -171,10 +127,10 @@ class TestCloseSignal:
         assert len(positions) == 0
 
 
+@pytest.mark.asyncio(loop_scope="session")
 class TestModifySL:
-    @pytest.mark.asyncio
     async def test_move_sl_to_breakeven(self, tm, connector):
-        await connector.open_order("XAUUSD", __import__("mt5_connector").OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
+        await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
 
         signal = SignalAction(
             type=SignalType.MODIFY_SL, symbol="XAUUSD", raw_text="Move SL to BE",
