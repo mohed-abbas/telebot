@@ -113,12 +113,12 @@ async def _setup_trading(http: httpx.AsyncClient):
         raw.pop("_password", None)
 
     tm = TradeManager(connectors, accounts, global_config)
-    executor = Executor(tm, global_config)
     notifier = Notifier(
         http=http,
         executions_webhook=settings.discord_webhook_executions or None,
         alerts_webhook=settings.discord_webhook_alerts or None,
     )
+    executor = Executor(tm, global_config, notifier=notifier)
 
     mode = "DRY-RUN" if settings.trading_dry_run else backend.upper()
     logger.info(
@@ -243,16 +243,28 @@ async def main() -> None:
                 logger.info("Signal detected: %s", parsed_log.replace("\n", " | "))
 
                 if executor and settings.trading_enabled:
-                    try:
-                        results = await executor.execute_signal(signal)
-                        if notifier:
-                            await notifier.notify_execution(signal, results)
-                    except Exception as exc:
-                        logger.error("Trade execution error: %s", exc)
-                        if notifier:
-                            await notifier.notify_alert(
-                                f"EXECUTION ERROR: {exc}\nSignal: {signal.raw_text[:200]}"
-                            )
+                    if not executor.is_accepting_signals():
+                        # Trading paused or all accounts reconnecting
+                        if executor._trading_paused:
+                            logger.info("Signal ignored — kill switch active")
+                        else:
+                            logger.info("Signal skipped — MT5 reconnecting")
+                            if notifier:
+                                await notifier.notify_alert(
+                                    f"SIGNAL SKIPPED (reconnecting): {signal.symbol} "
+                                    f"{signal.direction.value if signal.direction else ''}"
+                                )
+                    else:
+                        try:
+                            results = await executor.execute_signal(signal)
+                            if notifier:
+                                await notifier.notify_execution(signal, results)
+                        except Exception as exc:
+                            logger.error("Trade execution error: %s", exc)
+                            if notifier:
+                                await notifier.notify_alert(
+                                    f"EXECUTION ERROR: {exc}\nSignal: {signal.raw_text[:200]}"
+                                )
 
     logger.info("Bot started. Listening to %d chat(s)", len(settings.tg_chat_ids))
 
