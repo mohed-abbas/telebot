@@ -10,7 +10,7 @@
 - [ ] **SEC-01**: SQL field names in dynamic queries are validated against an explicit whitelist before use
 - [ ] **SEC-02**: Dashboard requires explicitly configured credentials; no hardcoded defaults; startup fails if DASHBOARD_PASS not set
 - [ ] **SEC-03**: All required environment variables are validated at startup with format checks (TG_API_ID is numeric, sessions are valid format); bot fails fast with clear error messages
-- [ ] **SEC-04**: MT5 passwords are cleared from memory after MT5 initialization completes; never logged or printed
+- [x] **SEC-04**: MT5 passwords are cleared from memory after MT5 initialization completes; never logged or printed
 
 ### Database
 
@@ -90,7 +90,7 @@
 | SEC-01 | Phase 1 | Pending |
 | SEC-02 | Phase 1 | Pending |
 | SEC-03 | Phase 1 | Pending |
-| SEC-04 | Phase 1 | Pending |
+| SEC-04 | Phase 1 | Complete |
 | DB-01 | Phase 1 | Pending |
 | DB-02 | Phase 1 | Pending |
 | DB-03 | Phase 2 | Pending |
