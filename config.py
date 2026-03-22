@@ -36,8 +36,9 @@ class Settings:
     mt5_backend: str  # "dry_run", "mt5linux"
     mt5_host: str
     mt5_port: int
+    mt5_magic_number: int
     accounts_config_path: str
-    db_path: str
+    database_url: str
 
     # ── Dashboard ──
     dashboard_enabled: bool
@@ -47,17 +48,25 @@ class Settings:
 
 
 def _load_settings() -> Settings:
-    def _req(key: str) -> str:
+    def _req(key: str, validator=None) -> str:
         val = environ.get(key)
         if not val:
-            raise SystemExit(f"Missing required env var: {key}")
+            raise SystemExit(f"FATAL: Missing required env var: {key}")
+        if validator and not validator(val):
+            raise SystemExit(f"FATAL: Invalid format for {key}")
         return val
 
     def _opt(key: str, default: str = "") -> str:
         return environ.get(key, default)
 
+    def _is_numeric(v: str) -> bool:
+        return v.isdigit()
+
+    def _is_pg_url(v: str) -> bool:
+        return v.startswith(("postgres://", "postgresql://"))
+
     return Settings(
-        tg_api_id=int(_req("TG_API_ID")),
+        tg_api_id=int(_req("TG_API_ID", validator=_is_numeric)),
         tg_api_hash=_req("TG_API_HASH"),
         tg_session=_req("TG_SESSION"),
         tg_chat_ids=[int(x.strip()) for x in _req("TG_CHAT_IDS").split(",")],
@@ -70,12 +79,13 @@ def _load_settings() -> Settings:
         mt5_backend=_opt("MT5_BACKEND", "dry_run"),
         mt5_host=_opt("MT5_HOST", "localhost"),
         mt5_port=int(_opt("MT5_PORT", "18812")),
+        mt5_magic_number=int(_opt("MT5_MAGIC_NUMBER", "202603")),
         accounts_config_path=_opt("ACCOUNTS_CONFIG", "accounts.json"),
-        db_path=_opt("DB_PATH", "data/telebot.db"),
+        database_url=_req("DATABASE_URL", validator=_is_pg_url),
         dashboard_enabled=_opt("DASHBOARD_ENABLED", "true").lower() in ("true", "1", "yes"),
         dashboard_port=int(_opt("DASHBOARD_PORT", "8080")),
         dashboard_user=_opt("DASHBOARD_USER", "admin"),
-        dashboard_pass=_opt("DASHBOARD_PASS", "changeme"),
+        dashboard_pass=_req("DASHBOARD_PASS"),
     )
 
 

@@ -49,7 +49,7 @@ def _verify_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
         raise HTTPException(status_code=500, detail="Dashboard not initialized")
 
     expected_user = getattr(_settings, "dashboard_user", "") or "admin"
-    expected_pass = getattr(_settings, "dashboard_pass", "") or "changeme"
+    expected_pass = getattr(_settings, "dashboard_pass", "")
 
     user_ok = secrets.compare_digest(credentials.username.encode(), expected_user.encode())
     pass_ok = secrets.compare_digest(credentials.password.encode(), expected_pass.encode())
