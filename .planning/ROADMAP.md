@@ -49,7 +49,7 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 02-01-PLAN.md -- MT5 connector hardening: ping(), EOFError wrapping, reconnect password support
+- [x] 02-01-PLAN.md -- MT5 connector hardening: ping(), EOFError wrapping, reconnect password support
 - [ ] 02-02-PLAN.md -- Execution correctness: zone logic extraction, stale re-check, SL/TP validation, cleanup race fix, DB archival
 - [ ] 02-03-PLAN.md -- Heartbeat, reconnect, kill switch core: executor + bot.py signal gating
 - [ ] 02-04-PLAN.md -- Dashboard: kill switch UI with confirmation, daily limit display with color coding
