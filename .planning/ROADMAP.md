@@ -32,7 +32,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md -- Config hardening: strict validation, DATABASE_URL, no default credentials, requirements update
+- [x] 01-01-PLAN.md -- Config hardening: strict validation, DATABASE_URL, no default credentials, requirements update
 - [ ] 01-02-PLAN.md -- Database migration: full db.py rewrite to asyncpg with PostgreSQL DDL, bot.py async wiring
 - [x] 01-03-PLAN.md -- MT5 password clearing: _clear_password after successful connect
 
