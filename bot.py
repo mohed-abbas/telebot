@@ -1,6 +1,8 @@
 import asyncio
+import functools
 import io
 import logging
+import signal
 from datetime import datetime
 
 import httpx
@@ -275,6 +277,7 @@ async def main() -> None:
     logger.info("Bot started. Listening to %d chat(s)", len(settings.tg_chat_ids))
 
     # ── Launch dashboard ────────────────────────────────────────────
+    server = None
     if settings.dashboard_enabled:
         import uvicorn
         from dashboard import app as dashboard_app, init_dashboard
@@ -288,11 +291,49 @@ async def main() -> None:
             log_level="warning",
         )
         server = uvicorn.Server(config)
-        # Run dashboard in background — don't block Telegram listener
         asyncio.create_task(server.serve())
         logger.info("Dashboard running on http://0.0.0.0:%d", settings.dashboard_port)
 
-    await client.run_until_disconnected()
+    # ── Graceful shutdown handler ──────────────────────────────────
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    def _handle_signal(sig):
+        logger.info("Received %s — initiating graceful shutdown", sig.name)
+        shutdown_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, functools.partial(_handle_signal, sig))
+
+    try:
+        # Wait for either Telethon disconnect or shutdown signal
+        disconnect_task = asyncio.create_task(client.run_until_disconnected())
+        shutdown_task = asyncio.create_task(shutdown_event.wait())
+        done, pending = await asyncio.wait(
+            [disconnect_task, shutdown_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+    finally:
+        logger.info("Cleaning up...")
+        # Disconnect Telethon client
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
+        # Shutdown uvicorn if running
+        if server:
+            server.should_exit = True
+        # Close HTTP client
+        await http.aclose()
+        # Close DB pool (belt-and-suspenders — lifespan also calls this)
+        try:
+            import db as _db_module
+            await _db_module.close_db()
+        except Exception:
+            pass
+        logger.info("Shutdown complete")
 
 
 if __name__ == "__main__":

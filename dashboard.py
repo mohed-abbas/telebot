@@ -64,7 +64,25 @@ def _verify_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     return credentials.username
 
 
-app = FastAPI(title="Telebot Dashboard", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """ASGI lifespan: manages startup/shutdown lifecycle."""
+    logger.info("Dashboard ASGI lifespan: startup")
+    yield
+    # Shutdown: clean up resources
+    logger.info("Dashboard ASGI lifespan: shutdown")
+    if _executor:
+        try:
+            await _executor.stop()
+        except Exception as exc:
+            logger.error("Error stopping executor during shutdown: %s", exc)
+    try:
+        await db.close_db()
+    except Exception as exc:
+        logger.error("Error closing database during shutdown: %s", exc)
+
+
+app = FastAPI(title="Telebot Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
