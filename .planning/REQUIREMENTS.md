@@ -14,7 +14,7 @@
 
 ### Database
 
-- [ ] **DB-01**: All database operations use aiosqlite instead of sync sqlite3; no check_same_thread=False; global asyncio.Lock removed
+- [ ] **DB-01**: All database operations use asyncpg (PostgreSQL) instead of sync sqlite3; connects to shared VPS PostgreSQL via DATABASE_URL; global asyncio.Lock removed
 - [ ] **DB-02**: All database timestamps use UTC; daily_stats dates use UTC date; timezone conversion happens only at display time
 - [ ] **DB-03**: Database has archival mechanism: trades older than 3 months moved to CSV/JSON archive files; maintenance command available
 - [ ] **DB-04**: MT5 magic number is loaded from configuration (env var or config file) instead of hardcoded
