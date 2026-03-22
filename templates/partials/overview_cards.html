@@ -26,7 +26,12 @@
             <div class="text-right">{{ a.open_trades }}</div>
 
             <div class="text-slate-400">Daily Trades</div>
-            <div class="text-right text-xs">{{ a.daily_trades }} / 30</div>
+            <div class="text-right font-mono text-sm
+                {% if a.daily_limit_pct >= 100 %}text-red-400 font-bold
+                {% elif a.daily_limit_pct >= 80 %}text-yellow-400
+                {% else %}text-green-400{% endif %}">
+                {{ a.daily_trades }} / {{ a.max_daily_trades }}
+            </div>
 
             <div class="text-slate-400">Risk</div>
             <div class="text-right">{{ a.risk_percent }}%</div>

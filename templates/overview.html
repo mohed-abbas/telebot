@@ -5,6 +5,37 @@
     <p class="text-slate-500 text-sm mt-1">Account summaries — auto-refreshes every 3s</p>
 </div>
 
+<!-- TRADING PAUSED banner (REL-03) -->
+{% if trading_paused %}
+<div class="bg-red-900/50 border border-red-500 rounded-lg p-4 mb-6 flex items-center justify-between"
+     hx-get="/api/trading-status" hx-trigger="every 5s" hx-swap="none">
+    <div>
+        <span class="text-red-400 font-bold text-lg">TRADING PAUSED</span>
+        <span class="text-slate-400 ml-2 text-sm">Kill switch active — no signals will be processed</span>
+    </div>
+    <button
+        hx-post="/api/resume-trading"
+        hx-swap="none"
+        hx-on::after-request="location.reload()"
+        class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded text-sm transition-colors">
+        Resume Trading
+    </button>
+</div>
+{% endif %}
+
+<!-- Kill Switch Button -->
+<div id="kill-switch-area" class="mb-6">
+    {% if not trading_paused %}
+    <button
+        hx-get="/api/emergency-preview"
+        hx-target="#kill-switch-area"
+        hx-swap="innerHTML"
+        class="bg-red-900/30 hover:bg-red-900/50 border border-red-500/30 text-red-400 py-2 px-4 rounded text-sm transition-colors">
+        Emergency Kill Switch
+    </button>
+    {% endif %}
+</div>
+
 <div id="overview-cards" hx-get="/partials/overview" hx-trigger="every 3s" hx-swap="innerHTML">
     {% include "partials/overview_cards.html" %}
 </div>

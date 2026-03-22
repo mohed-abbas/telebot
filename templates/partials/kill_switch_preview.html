@@ -1,0 +1,37 @@
+<div class="bg-dark-800 border border-red-500/50 rounded-lg p-6 max-w-md mx-auto">
+    <h3 class="text-red-400 text-lg font-bold mb-4">Emergency Kill Switch</h3>
+
+    <div class="space-y-3 mb-6">
+        <div class="flex justify-between text-sm">
+            <span class="text-slate-400">Open Positions</span>
+            <span class="font-mono text-white">{{ position_count }}</span>
+        </div>
+        <div class="flex justify-between text-sm">
+            <span class="text-slate-400">Pending Orders</span>
+            <span class="font-mono text-white">{{ order_count }}</span>
+        </div>
+    </div>
+
+    <p class="text-sm text-slate-400 mb-4">
+        This will close ALL positions, cancel ALL pending orders, and pause trading.
+        You must manually re-enable trading after activation.
+    </p>
+
+    {% if position_count > 0 or order_count > 0 %}
+    <button
+        hx-post="/api/emergency-close"
+        hx-target="#kill-switch-area"
+        hx-swap="innerHTML"
+        class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors">
+        CONFIRM CLOSE ALL
+    </button>
+    {% else %}
+    <p class="text-center text-slate-500 text-sm">No open positions or pending orders.</p>
+    {% endif %}
+
+    <button
+        onclick="document.getElementById('kill-switch-area').innerHTML=''"
+        class="w-full mt-2 bg-dark-700 hover:bg-dark-600 text-slate-300 py-2 px-4 rounded transition-colors text-sm">
+        Cancel
+    </button>
+</div>
