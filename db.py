@@ -342,6 +342,72 @@ async def get_recent_signals(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ── Analytics (OBS-03 / ANLYT-01) ──────────────────────────────────
+
+
+async def get_analytics_by_symbol() -> list[dict]:
+    """Get win rate, profit factor, and trade stats grouped by symbol."""
+    rows = await _pool.fetch("""
+        SELECT
+            symbol,
+            COUNT(*) AS total_trades,
+            COUNT(*) FILTER (WHERE pnl > 0) AS wins,
+            COUNT(*) FILTER (WHERE pnl <= 0) AS losses,
+            ROUND(
+                COUNT(*) FILTER (WHERE pnl > 0)::numeric
+                / NULLIF(COUNT(*), 0) * 100, 1
+            ) AS win_rate,
+            COALESCE(SUM(pnl) FILTER (WHERE pnl > 0), 0) AS gross_profit,
+            COALESCE(ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 0) AS gross_loss,
+            CASE
+                WHEN COALESCE(ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 0) = 0
+                THEN NULL
+                ELSE ROUND(
+                    COALESCE(SUM(pnl) FILTER (WHERE pnl > 0), 0)::numeric
+                    / ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 2
+                )
+            END AS profit_factor,
+            COALESCE(SUM(pnl), 0) AS net_pnl
+        FROM trades
+        WHERE status = 'closed'
+        GROUP BY symbol
+        ORDER BY total_trades DESC
+    """)
+    return [dict(r) for r in rows]
+
+
+async def get_analytics_summary() -> dict:
+    """Get overall analytics summary across all symbols."""
+    row = await _pool.fetchrow("""
+        SELECT
+            COUNT(*) AS total_trades,
+            COUNT(*) FILTER (WHERE pnl > 0) AS wins,
+            COUNT(*) FILTER (WHERE pnl <= 0) AS losses,
+            ROUND(
+                COUNT(*) FILTER (WHERE pnl > 0)::numeric
+                / NULLIF(COUNT(*), 0) * 100, 1
+            ) AS win_rate,
+            COALESCE(SUM(pnl) FILTER (WHERE pnl > 0), 0) AS gross_profit,
+            COALESCE(ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 0) AS gross_loss,
+            CASE
+                WHEN COALESCE(ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 0) = 0
+                THEN NULL
+                ELSE ROUND(
+                    COALESCE(SUM(pnl) FILTER (WHERE pnl > 0), 0)::numeric
+                    / ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 2
+                )
+            END AS profit_factor,
+            COALESCE(SUM(pnl), 0) AS net_pnl
+        FROM trades
+        WHERE status = 'closed'
+    """)
+    return dict(row) if row else {
+        "total_trades": 0, "wins": 0, "losses": 0,
+        "win_rate": None, "gross_profit": 0, "gross_loss": 0,
+        "profit_factor": None, "net_pnl": 0,
+    }
+
+
 # ── Archival (DB-03) ────────────────────────────────────────────────
 
 

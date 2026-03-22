@@ -133,6 +133,18 @@ async def settings_page(request: Request, user: str = Depends(_verify_auth)):
     })
 
 
+@app.get("/analytics", response_class=HTMLResponse)
+async def analytics_page(request: Request, user: str = Depends(_verify_auth)):
+    summary = await db.get_analytics_summary()
+    by_symbol = await db.get_analytics_by_symbol()
+    return templates.TemplateResponse("analytics.html", {
+        "request": request,
+        "summary": summary,
+        "by_symbol": by_symbol,
+        "page": "analytics",
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # HTMX PARTIALS (for live updates)
 # ═══════════════════════════════════════════════════════════════════════
@@ -366,29 +378,40 @@ async def sse_stream(request: Request, user: str = Depends(_verify_auth)):
 
 
 async def _get_all_positions() -> list[dict]:
-    """Get all open positions across all accounts."""
+    """Get all open positions across all accounts (batched with asyncio.gather)."""
     if not _executor:
         return []
+
+    connected = {
+        name: conn for name, conn in _executor.tm.connectors.items()
+        if conn.connected
+    }
+    if not connected:
+        return []
+
+    # Fetch all accounts in parallel instead of sequential N+1
+    results = await asyncio.gather(
+        *(conn.get_positions() for conn in connected.values()),
+        return_exceptions=True,
+    )
+
     positions = []
-    for acct_name, connector in _executor.tm.connectors.items():
-        if not connector.connected:
+    for acct_name, result in zip(connected.keys(), results):
+        if isinstance(result, Exception):
+            logger.error("Failed to get positions for %s: %s", acct_name, result)
             continue
-        try:
-            acct_positions = await connector.get_positions()
-            for pos in acct_positions:
-                positions.append({
-                    "account": acct_name,
-                    "ticket": pos.ticket,
-                    "symbol": pos.symbol,
-                    "direction": pos.direction,
-                    "volume": pos.volume,
-                    "open_price": pos.open_price,
-                    "sl": pos.sl,
-                    "tp": pos.tp,
-                    "profit": pos.profit,
-                })
-        except Exception as exc:
-            logger.error("Failed to get positions for %s: %s", acct_name, exc)
+        for pos in result:
+            positions.append({
+                "account": acct_name,
+                "ticket": pos.ticket,
+                "symbol": pos.symbol,
+                "direction": pos.direction,
+                "volume": pos.volume,
+                "open_price": pos.open_price,
+                "sl": pos.sl,
+                "tp": pos.tp,
+                "profit": pos.profit,
+            })
     return positions
 
 
