@@ -72,7 +72,7 @@ Plans:
 - [x] 03-03-PLAN.md -- Infrastructure: ASGI lifespan, graceful shutdown, Docker networking, nginx config, Telethon eval
 
 ### Phase 4: Testing
-**Goal**: Correctness of all prior hardening changes is verified by an automated test suite that runs in CI
+**Goal**: Correctness of all prior hardening changes is verified by an automated test suite that runs locally
 **Depends on**: Phase 3
 **Requirements**: TEST-01, TEST-02, TEST-03, TEST-04, TEST-05
 **Success Criteria** (what must be TRUE):
@@ -81,7 +81,12 @@ Plans:
   3. Trade manager integration tests verify full signal flow, multi-account execution, daily limit enforcement, and zone-based entry
   4. Async concurrency tests confirm no race conditions with concurrent signals and no database lock contention under load
   5. Signal parser regression tests cover all known real-world Telegram signal formats including edge cases
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md -- Test infrastructure: requirements-dev.txt, pyproject.toml, tests/conftest.py, migrate existing tests
+- [ ] 04-02-PLAN.md -- Unit tests: MT5 connector mock tests, signal parser regression placeholder with edge cases
+- [ ] 04-03-PLAN.md -- Integration tests: trade manager full flow with DB, async concurrency, executor kill switch
 
 ## Progress
 
@@ -93,4 +98,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4
 | 1. Foundation | 3/3 | Complete | 2026-03-22 |
 | 2. Reliability | 0/4 | Planning complete | - |
 | 3. Observability & Infrastructure | 0/3 | Planning complete | - |
-| 4. Testing | 0/TBD | Not started | - |
+| 4. Testing | 0/3 | Planning complete | - |
