@@ -130,8 +130,8 @@ class Executor:
                     if self._trading_paused:
                         continue  # Kill switch active, don't bother checking
                     alive = await connector.ping()
-                    if not alive and connector.connected is False:
-                        # Connection lost — start reconnect in a separate task
+                    if not alive:
+                        # Connection lost or broker disconnected — start reconnect
                         logger.warning("%s: Heartbeat failed — starting reconnect", acct_name)
                         asyncio.create_task(self._reconnect_account(acct_name, connector))
             except asyncio.CancelledError:
