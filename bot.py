@@ -40,7 +40,7 @@ async def resolve_group_names(client: TelegramClient) -> dict[int, str]:
     return names
 
 
-def _setup_trading(http: httpx.AsyncClient):
+async def _setup_trading(http: httpx.AsyncClient):
     """Initialize the trading pipeline if enabled. Returns (executor, notifier) or (None, None)."""
     if not settings.trading_enabled:
         logger.info("Trading is DISABLED (TRADING_ENABLED=false)")
@@ -54,7 +54,7 @@ def _setup_trading(http: httpx.AsyncClient):
     from notifier import Notifier
 
     # Initialize database
-    db.init_db(settings.db_path)
+    await db.init_db(settings.database_url)
 
     # Load accounts config
     accts_data = load_accounts_config()
@@ -106,6 +106,10 @@ def _setup_trading(http: httpx.AsyncClient):
         )
         connectors[acct.name] = conn
 
+    # Clear MT5 passwords from raw config dicts (SEC-04 partial)
+    for raw in accts_raw:
+        raw.pop("_password", None)
+
     tm = TradeManager(connectors, accounts, global_config)
     executor = Executor(tm, global_config)
     notifier = Notifier(
@@ -138,7 +142,7 @@ async def main() -> None:
     await client.start()
 
     # ── Initialize trading pipeline ─────────────────────────────────
-    executor, notifier = _setup_trading(http)
+    executor, notifier = await _setup_trading(http)
 
     if executor:
         # Connect all MT5 accounts
