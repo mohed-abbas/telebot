@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-03-22T10:41:35.098Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-03-22T10:45:33.815Z"
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 3
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -48,6 +48,7 @@ Plan: 3 of 3
 *Updated after each plan completion*
 | Phase 01 P03 | 1min | 1 tasks | 1 files |
 | Phase 01 P01 | 2min | 2 tasks | 4 files |
+| Phase 01 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -61,6 +62,8 @@ Recent decisions affecting current work:
 - [Init]: Stay on Telethon 1.42.0 — 2.x is alpha with breaking changes; evaluate only
 - [Phase 01]: Password cleared to empty string (not None) for type consistency; retained on failed connection for retry
 - [Phase 01]: Removed dashboard.py hardcoded changeme fallback to fully eliminate default credentials (SEC-02)
+- [Phase 01]: Pool sizing min=2, max=5 for asyncpg -- conservative for single-process trading bot
+- [Phase 01]: log_pending_order accepts both str and datetime for expires_at -- backward compat with callers passing ISO strings
 
 ### Pending Todos
 
@@ -74,6 +77,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T10:41:35.094Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-03-22T10:45:33.812Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None

@@ -7,15 +7,15 @@
 
 ### Security
 
-- [ ] **SEC-01**: SQL field names in dynamic queries are validated against an explicit whitelist before use
+- [x] **SEC-01**: SQL field names in dynamic queries are validated against an explicit whitelist before use
 - [x] **SEC-02**: Dashboard requires explicitly configured credentials; no hardcoded defaults; startup fails if DASHBOARD_PASS not set
 - [x] **SEC-03**: All required environment variables are validated at startup with format checks (TG_API_ID is numeric, sessions are valid format); bot fails fast with clear error messages
 - [x] **SEC-04**: MT5 passwords are cleared from memory after MT5 initialization completes; never logged or printed
 
 ### Database
 
-- [ ] **DB-01**: All database operations use asyncpg (PostgreSQL) instead of sync sqlite3; connects to shared VPS PostgreSQL via DATABASE_URL; global asyncio.Lock removed
-- [ ] **DB-02**: All database timestamps use UTC; daily_stats dates use UTC date; timezone conversion happens only at display time
+- [x] **DB-01**: All database operations use asyncpg (PostgreSQL) instead of sync sqlite3; connects to shared VPS PostgreSQL via DATABASE_URL; global asyncio.Lock removed
+- [x] **DB-02**: All database timestamps use UTC; daily_stats dates use UTC date; timezone conversion happens only at display time
 - [ ] **DB-03**: Database has archival mechanism: trades older than 3 months moved to CSV/JSON archive files; maintenance command available
 - [x] **DB-04**: MT5 magic number is loaded from configuration (env var or config file) instead of hardcoded
 
@@ -87,12 +87,12 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SEC-01 | Phase 1 | Pending |
+| SEC-01 | Phase 1 | Complete |
 | SEC-02 | Phase 1 | Complete |
 | SEC-03 | Phase 1 | Complete |
 | SEC-04 | Phase 1 | Complete |
-| DB-01 | Phase 1 | Pending |
-| DB-02 | Phase 1 | Pending |
+| DB-01 | Phase 1 | Complete |
+| DB-02 | Phase 1 | Complete |
 | DB-03 | Phase 2 | Pending |
 | DB-04 | Phase 1 | Complete |
 | REL-01 | Phase 2 | Pending |
