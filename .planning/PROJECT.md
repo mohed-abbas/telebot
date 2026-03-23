@@ -1,88 +1,54 @@
-# Telebot Hardening
+# Telebot
 
-## What This Is
+## Current State (v1.0 — Shipped)
 
-A systematic hardening pass on an existing Telegram-to-Discord trading relay bot. The bot listens to Telegram signal groups, parses trading signals, executes trades across multiple MT5 accounts, and provides a web dashboard for monitoring. This project addresses all identified concerns: security vulnerabilities, race conditions, missing reconnection logic, test coverage gaps, performance bottlenecks, and missing critical features.
+A Telegram-to-Discord trading relay bot with automated signal execution across multiple MT5 accounts. Hardened in v1.0 with PostgreSQL migration, MT5 resilience, emergency controls, and comprehensive test suite.
+
+### What's Deployed
+- **PostgreSQL** via asyncpg (migrated from SQLite) connected to shared VPS database
+- **MT5 resilience** — 30s heartbeat, auto-reconnect with exponential backoff, position sync after reconnect
+- **Emergency kill switch** — two-step confirmation, closes all positions + cancels orders, pauses trading
+- **Execution correctness** — zone logic extraction, stale signal re-check, SL/TP direction validation
+- **Dashboard** — daily limit colors, analytics page (win rate/profit factor), TRADING PAUSED banner
+- **Infrastructure** — Docker networking (proxy-net + data-net), nginx reverse proxy, graceful shutdown
+- **Test suite** — 113 tests (80 unit + 33 integration) covering connectors, trade flows, concurrency
+
+### Tech Stack
+- Python 3.12, asyncpg, FastAPI, Telethon 1.42.0, HTMX
+- PostgreSQL 16 (shared VPS instance via data-net)
+- Docker + nginx reverse proxy (proxy-net)
+- pytest + pytest-asyncio for testing
 
 ## Core Value
 
-Every change must preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading functionality.
-
-## Requirements
-
-### Validated
-
-- ✓ Telegram message relay to Discord with photo/video support — existing
-- ✓ Trading signal parsing from Telegram messages (regex-based) — existing
-- ✓ Multi-account MT5 trade execution with staggered delays — existing
-- ✓ Zone-based entry logic (market vs limit orders) — existing
-- ✓ Risk-based lot sizing with per-account configuration — existing
-- ✓ SL/TP modification and partial close signal handling — existing
-- ✓ SQLite audit trail for all signals and trades — existing
-- ✓ FastAPI web dashboard with HTTP Basic auth — existing
-- ✓ Discord notifications to separate channels (signals, executions, alerts) — existing
-- ✓ Pending order tracking and expiry cleanup — existing
-- ✓ Docker containerized deployment — existing
-- ✓ Dry-run mode for testing without live MT5 — existing
-
-### Active
-
-- [ ] Fix database thread safety (migrate to aiosqlite)
-- [ ] Add SQL field name whitelisting to prevent injection
-- [ ] Standardize all timestamps to UTC
-- [ ] Fix pending order cleanup race condition
-- [ ] Fix zone-based entry logic for SELL order boundary conditions
-- [ ] Add MT5 position state reconciliation after reconnection
-- [ ] Move magic number to configuration
-- [ ] Add environment variable validation with fail-fast on startup
-- [ ] Clear MT5 passwords from memory after initialization
-- [ ] Remove default dashboard credentials, require explicit config
-- [ ] Improve database concurrency (connection pooling or aiosqlite)
-- [ ] Optimize symbol map lookup (compiled regex)
-- [ ] Fix dashboard N+1 position query problem
-- [ ] Add comprehensive signal parser logging on parse failures
-- [ ] Extract zone logic into testable functions
-- [ ] Add double stale-check before order execution
-- [ ] Implement emergency kill switch in dashboard
-- [ ] Add daily trade limit warnings and dashboard status
-- [ ] Document and validate server message limits
-- [ ] Implement SQLite database archival and cleanup
-- [ ] Update Telethon to latest compatible version
-- [ ] Create requirements-dev.txt with test dependencies
-- [ ] Run dashboard in separate process with proper ASGI server
-- [ ] Implement MT5 connection monitoring and auto-reconnect
-- [ ] Add position direction validation before SL/TP modification
-- [ ] Add historical signal accuracy tracking
-- [ ] Add MT5 connector tests with mocking
-- [ ] Add trade manager integration tests
-- [ ] Add signal parser regression tests with real-world data
-- [ ] Add async concurrency tests (race conditions, lock contention)
-
-### Out of Scope
-
-- New features beyond what's needed to fix concerns — this is a hardening pass
-- UI redesign of dashboard — only functional changes (kill switch, limit status)
-- Migration away from SQLite — optimize what exists
-- Rewriting signal parser with ML/NLP — improve logging and tests instead
-
-## Context
-
-The bot is deployed on a VPS (Hostinger) via Docker. It handles real money through MT5, so changes must be conservative — small, isolated, and tested. The codebase already has `aiosqlite` in requirements.txt but doesn't use it. Test files exist but pytest is not in requirements. The concerns were identified through systematic codebase analysis and range from critical (security, race conditions) to lower priority (regex caching, DB growth).
+Every change must preserve existing trading reliability while making the bot safer and more resilient.
 
 ## Constraints
 
 - **Safety**: Real money at stake — every change must be tested before deployment
 - **Backwards compatibility**: No breaking changes to .env or accounts.json config format
-- **Deployment**: Must continue to work in existing Docker setup
-- **Dependencies**: Minimize new dependencies — prefer stdlib and already-installed packages
+- **Deployment**: Docker with shared VPS services (proxy-net, data-net)
+- **Dependencies**: Minimize new dependencies
 
 ## Key Decisions
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Conservative approach (small isolated changes) | Bot handles real money, regressions are costly | — Pending |
-| Address all concerns, not just critical | Comprehensive hardening prevents accumulating more debt | — Pending |
-| Migrate to aiosqlite (already in requirements) | Solves both thread safety and performance concerns | — Pending |
+| PostgreSQL via asyncpg (not aiosqlite) | User has shared PostgreSQL on VPS | v1.0 shipped |
+| Conservative approach | Bot handles real money | v1.0 shipped |
+| Stay on Telethon 1.42.0 | 2.x is alpha with breaking changes | v1.0 shipped |
+| Kill switch with confirmation | Prevent accidental activation | v1.0 shipped |
+| Drop signals during reconnect | Safest approach for stale data prevention | v1.0 shipped |
+
+## Next Milestone Goals
+
+*Not yet defined — run `/gsd:new-milestone` to start the next cycle.*
+
+Potential areas:
+- v2 monitoring: structured logging, connection uptime metrics, execution latency
+- CI/CD pipeline (GitHub Actions)
+- Signal accuracy auto-disable for low-performing sources
+- Schema migration tooling (alembic)
 
 ---
-*Last updated: 2026-03-19 after initialization*
+*Last updated: 2026-03-23 after v1.0 milestone completion*

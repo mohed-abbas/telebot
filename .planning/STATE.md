@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Milestone complete
-stopped_at: Completed 04-03-PLAN.md
+status: Milestone archived
+stopped_at: v1.0 milestone archived
 last_updated: "2026-03-22T21:05:33.169Z"
 progress:
   total_phases: 4
