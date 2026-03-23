@@ -364,7 +364,7 @@ async def get_analytics_by_symbol() -> list[dict]:
                 THEN NULL
                 ELSE ROUND(
                     COALESCE(SUM(pnl) FILTER (WHERE pnl > 0), 0)::numeric
-                    / ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 2
+                    / ABS(SUM(pnl) FILTER (WHERE pnl <= 0))::numeric, 2
                 )
             END AS profit_factor,
             COALESCE(SUM(pnl), 0) AS net_pnl
@@ -394,7 +394,7 @@ async def get_analytics_summary() -> dict:
                 THEN NULL
                 ELSE ROUND(
                     COALESCE(SUM(pnl) FILTER (WHERE pnl > 0), 0)::numeric
-                    / ABS(SUM(pnl) FILTER (WHERE pnl <= 0)), 2
+                    / ABS(SUM(pnl) FILTER (WHERE pnl <= 0))::numeric, 2
                 )
             END AS profit_factor,
             COALESCE(SUM(pnl), 0) AS net_pnl

@@ -111,7 +111,7 @@ class TestDetermineOrderType:
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestCloseSignal:
-    async def test_close_all_positions(self, tm, connector):
+    async def test_close_all_positions(self, db_pool, tm, connector):
         # Open a position first
         await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
         positions = await connector.get_positions("XAUUSD")
@@ -129,7 +129,7 @@ class TestCloseSignal:
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestModifySL:
-    async def test_move_sl_to_breakeven(self, tm, connector):
+    async def test_move_sl_to_breakeven(self, db_pool, tm, connector):
         await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
 
         signal = SignalAction(
