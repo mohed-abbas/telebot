@@ -4,9 +4,9 @@ services:
     container_name: telebot-db-dev
     restart: unless-stopped
     environment:
-      POSTGRES_USER: telebot
-      POSTGRES_PASSWORD: telebot_dev
-      POSTGRES_DB: telebot
+      POSTGRES_USER: ${POSTGRES_USER:-telebot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-telebot}
     ports:
       - "5433:5432"
     volumes:
