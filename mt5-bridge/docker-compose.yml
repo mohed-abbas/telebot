@@ -1,0 +1,49 @@
+services:
+  mt5-vantage:
+    build: .
+    container_name: mt5-vantage
+    restart: unless-stopped
+    environment:
+      RPYC_PORT: "18812"
+      ENABLE_VNC: "${ENABLE_VNC_VANTAGE:-false}"
+    volumes:
+      - mt5_vantage_wine:/root/.wine
+    ports:
+      # noVNC — only expose during initial setup, remove in production
+      - "6080:6080"
+    networks:
+      - data-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  mt5-fundednext:
+    build: .
+    container_name: mt5-fundednext
+    restart: unless-stopped
+    environment:
+      RPYC_PORT: "18812"
+      ENABLE_VNC: "${ENABLE_VNC_FUNDEDNEXT:-false}"
+    volumes:
+      - mt5_fundednext_wine:/root/.wine
+    ports:
+      # noVNC — only expose during initial setup, remove in production
+      - "6081:6080"
+    networks:
+      - data-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mt5_vantage_wine:
+  mt5_fundednext_wine:
+
+networks:
+  data-net:
+    name: data-net
+    external: true

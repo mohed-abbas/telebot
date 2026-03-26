@@ -67,6 +67,8 @@ class AccountConfig:
     max_daily_loss_percent: float = 3.0
     max_open_trades: int = 3
     enabled: bool = True
+    mt5_host: str = ""  # per-account MT5 bridge hostname (overrides global)
+    mt5_port: int = 0   # per-account MT5 bridge port (overrides global)
 
 
 @dataclass

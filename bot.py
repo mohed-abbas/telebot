@@ -93,6 +93,8 @@ async def _setup_trading(http: httpx.AsyncClient):
             max_daily_loss_percent=raw.get("max_daily_loss_percent", 3.0),
             max_open_trades=raw.get("max_open_trades", 3),
             enabled=raw.get("enabled", True),
+            mt5_host=raw.get("mt5_host", ""),
+            mt5_port=raw.get("mt5_port", 0),
         )
         accounts.append(acct)
 
@@ -103,8 +105,8 @@ async def _setup_trading(http: httpx.AsyncClient):
             server=acct.server,
             login=acct.login,
             password=password,
-            mt5_host=settings.mt5_host,
-            mt5_port=settings.mt5_port,
+            mt5_host=acct.mt5_host or settings.mt5_host,
+            mt5_port=acct.mt5_port or settings.mt5_port,
             magic_number=settings.mt5_magic_number,
             password_env=acct.password_env,
         )

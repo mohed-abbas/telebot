@@ -1,6 +1,7 @@
 .env
 .env.dev
 .env.prod
+mt5-bridge/.env
 .venv/
 __pycache__/
 *.pyc

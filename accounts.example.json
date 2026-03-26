@@ -9,7 +9,9 @@
       "max_lot_size": 0.5,
       "max_daily_loss_percent": 3.0,
       "max_open_trades": 3,
-      "enabled": true
+      "enabled": true,
+      "mt5_host": "mt5-vantage",
+      "mt5_port": 18812
     },
     {
       "name": "FN-10k",
@@ -20,7 +22,9 @@
       "max_lot_size": 1.0,
       "max_daily_loss_percent": 3.0,
       "max_open_trades": 3,
-      "enabled": true
+      "enabled": true,
+      "mt5_host": "mt5-fundednext",
+      "mt5_port": 18812
     }
   ],
   "global": {
