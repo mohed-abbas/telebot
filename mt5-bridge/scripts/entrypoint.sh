@@ -29,28 +29,31 @@ if [ ! -f "/root/.wine/.initialized" ]; then
     wineserver --wait 2>/dev/null || true
     echo "  Wine prefix ready."
 
-    echo "[3/4] Installing Windows Python 3.9..."
-    WINEDEBUG=-all wine /opt/python-installer.exe \
-        /quiet TargetDir=C:\\Python39 PrependPath=1 2>&1 || {
-        echo "ERROR: Python installation failed!"
-        echo "Connect via noVNC and install manually:"
-        echo "  wine /opt/python-installer.exe"
-    }
-    wineserver --wait 2>/dev/null || true
-    echo "  Python installed."
+    echo "[3/4] Installing Python 3.9 (embeddable)..."
+    PYDIR="/root/.wine/drive_c/Python39"
+    mkdir -p "$PYDIR"
+    unzip -o /opt/python-embed.zip -d "$PYDIR" > /dev/null
+    # Enable site-packages (needed for pip)
+    sed -i 's/^#import site/import site/' "$PYDIR/python39._pth"
+    echo "  Python extracted."
 
-    # Verify Python is accessible
-    if wine C:\\Python39\\python.exe --version 2>/dev/null; then
-        echo "[4/4] Installing MT5 Python packages..."
-        WINEDEBUG=-all wine C:\\Python39\\python.exe -m pip install --upgrade pip 2>&1
-        WINEDEBUG=-all wine C:\\Python39\\python.exe -m pip install MetaTrader5 mt5linux 2>&1
-        wineserver --wait 2>/dev/null || true
-        echo "  MT5 packages installed."
+    echo "[4/4] Installing pip and MT5 packages..."
+    # Copy get-pip.py into the Python directory so Wine can find it
+    cp /opt/get-pip.py "$PYDIR/get-pip.py"
+    WINEDEBUG=-all wine "$PYDIR/python.exe" "$PYDIR/get-pip.py" --no-warn-script-location 2>&1
+    wineserver --wait 2>/dev/null || true
+
+    WINEDEBUG=-all wine "$PYDIR/python.exe" -m pip install MetaTrader5 mt5linux --no-warn-script-location 2>&1
+    wineserver --wait 2>/dev/null || true
+
+    # Verify
+    if wine "$PYDIR/python.exe" -c "import MetaTrader5; print('MT5 package OK')" 2>/dev/null; then
+        echo "  MT5 packages installed successfully."
     else
-        echo "WARNING: Python not found at C:\\Python39\\python.exe"
-        echo "Connect via noVNC to install manually."
+        echo "WARNING: MT5 package import failed. Check logs."
     fi
 
+    rm -f "$PYDIR/get-pip.py"
     touch /root/.wine/.initialized
     echo ""
     echo "============================================"
@@ -69,14 +72,15 @@ if [ ! -f "$MT5_PATH" ]; then
     echo ""
     echo "  1. Open browser: http://<VPS_IP>:6080/vnc.html"
     echo "     (or port 6081 for the second account)"
-    echo "  2. Double-click desktop or open file manager"
-    echo "  3. Run: wine /opt/mt5setup.exe"
-    echo "  4. Complete the MT5 installation wizard"
-    echo "  5. Log into your broker account"
-    echo "  6. Tools > Options > Expert Advisors:"
+    echo "  2. Run on VPS:"
+    echo "     docker exec -d mt5-vantage bash -c \\"
+    echo "       'DISPLAY=:99 wine /opt/mt5setup.exe'"
+    echo "  3. Complete the MT5 installation wizard"
+    echo "  4. Log into your broker account"
+    echo "  5. Tools > Options > Expert Advisors:"
     echo "     - Enable 'Allow algorithmic trading'"
     echo "     - Enable 'Allow DLL imports'"
-    echo "  7. Close MT5 — supervisord will restart it"
+    echo "  6. Close MT5 — supervisord will restart it"
     echo "============================================"
     echo ""
     # Force VNC on for setup

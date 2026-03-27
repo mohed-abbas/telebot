@@ -26,8 +26,12 @@ RUN dpkg --add-architecture i386 \
 # ── Download installers (actual install happens at first container start) ─
 RUN wget -O /opt/mt5setup.exe \
        "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" \
-    && wget -O /opt/python-installer.exe \
-       "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
+    && wget -O /opt/python-embed.zip \
+       "https://www.python.org/ftp/python/3.9.13/python-3.9.13-embed-amd64.zip" \
+    && wget -O /opt/get-pip.py \
+       "https://bootstrap.pypa.io/get-pip.py" \
+    && apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Scripts and config ────────────────────────────────────────────────
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
