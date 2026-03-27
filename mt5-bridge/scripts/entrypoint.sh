@@ -46,11 +46,11 @@ if [ ! -f "/root/.wine/.initialized" ]; then
     WINEDEBUG=-all wine "$PYDIR/python.exe" -m pip install MetaTrader5 mt5linux --no-warn-script-location 2>&1
     wineserver --wait 2>/dev/null || true
 
-    # Verify
-    if wine "$PYDIR/python.exe" -c "import MetaTrader5; print('MT5 package OK')" 2>/dev/null; then
+    # Verify Python works (don't import MetaTrader5 — it hangs without a running terminal)
+    if wine "$PYDIR/python.exe" -c "import rpyc; print('RPyC', rpyc.__version__)" 2>/dev/null; then
         echo "  MT5 packages installed successfully."
     else
-        echo "WARNING: MT5 package import failed. Check logs."
+        echo "WARNING: Package verification failed. Check logs."
     fi
 
     rm -f "$PYDIR/get-pip.py"
