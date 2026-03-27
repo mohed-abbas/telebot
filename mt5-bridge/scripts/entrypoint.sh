@@ -29,9 +29,9 @@ if [ ! -f "/root/.wine/.initialized" ]; then
     wineserver --wait 2>/dev/null || true
     echo "  Wine prefix ready."
 
-    echo "[3/4] Installing Windows Python 3.12..."
+    echo "[3/4] Installing Windows Python 3.9..."
     WINEDEBUG=-all wine /opt/python-installer.exe \
-        /quiet TargetDir=C:\\Python312 PrependPath=1 2>&1 || {
+        /quiet TargetDir=C:\\Python39 PrependPath=1 2>&1 || {
         echo "ERROR: Python installation failed!"
         echo "Connect via noVNC and install manually:"
         echo "  wine /opt/python-installer.exe"
@@ -40,14 +40,14 @@ if [ ! -f "/root/.wine/.initialized" ]; then
     echo "  Python installed."
 
     # Verify Python is accessible
-    if wine C:\\Python312\\python.exe --version 2>/dev/null; then
+    if wine C:\\Python39\\python.exe --version 2>/dev/null; then
         echo "[4/4] Installing MT5 Python packages..."
-        WINEDEBUG=-all wine C:\\Python312\\python.exe -m pip install --upgrade pip 2>&1
-        WINEDEBUG=-all wine C:\\Python312\\python.exe -m pip install MetaTrader5 mt5linux 2>&1
+        WINEDEBUG=-all wine C:\\Python39\\python.exe -m pip install --upgrade pip 2>&1
+        WINEDEBUG=-all wine C:\\Python39\\python.exe -m pip install MetaTrader5 mt5linux 2>&1
         wineserver --wait 2>/dev/null || true
         echo "  MT5 packages installed."
     else
-        echo "WARNING: Python not found at C:\\Python312\\python.exe"
+        echo "WARNING: Python not found at C:\\Python39\\python.exe"
         echo "Connect via noVNC to install manually."
     fi
 

@@ -27,7 +27,7 @@ RUN dpkg --add-architecture i386 \
 RUN wget -O /opt/mt5setup.exe \
        "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" \
     && wget -O /opt/python-installer.exe \
-       "https://www.python.org/ftp/python/3.12.0/python-3.12.0-amd64.exe"
+       "https://www.python.org/ftp/python/3.9.13/python-3.9.13-amd64.exe"
 
 # ── Scripts and config ────────────────────────────────────────────────
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
