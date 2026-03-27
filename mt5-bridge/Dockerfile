@@ -15,15 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11vnc novnc python3-websockify \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Wine (stable from WineHQ) ────────────────────────────────────────
+# ── Wine 6.0 (Ubuntu native — no "debugger detected" issue) ─────────
+# Wine 11.x from WineHQ triggers MT5's anti-debugger check.
+# Ubuntu's built-in Wine 6.0.3 predates this issue.
 RUN dpkg --add-architecture i386 \
-    && mkdir -pm755 /etc/apt/keyrings \
-    && wget -O /etc/apt/keyrings/winehq-archive.key \
-       https://dl.winehq.org/wine-builds/winehq.key \
-    && wget -NP /etc/apt/sources.list.d/ \
-       https://dl.winehq.org/wine-builds/ubuntu/dists/jammy/winehq-jammy.sources \
     && apt-get update \
-    && apt-get install -y --install-recommends winehq-stable \
+    && apt-get install -y wine wine64 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Download installers (actual install happens at first container start) ─
