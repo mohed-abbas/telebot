@@ -1,61 +1,88 @@
-# Telebot — Telegram to Discord Message Relay
+# Telebot — Telegram Signal Relay + Automated MT5 Trading
 
-A lightweight Python bot that listens to Telegram group chats and forwards text messages to a Discord channel via webhook. Designed to run 24/7 as a Docker container.
+A Python bot that listens to Telegram group chats, relays messages to Discord, and optionally executes parsed trading signals on MetaTrader 5 accounts. Designed to run 24/7 as Docker containers.
 
 ## How It Works
 
 ```
-Telegram Group(s)                    Discord Channel
-  (new message)                      (webhook POST)
-       |                                  ^
-       |  MTProto (real-time push)        |  HTTPS POST
-       v                                  |
-  +-----------------------------------------+
-  |            telebot (Python)             |
-  |                                         |
-  |  Telethon -----> Format -----> httpx    |
-  |  (listener)      message       (sender) |
-  +-----------------------------------------+
+  Telegram Group(s)            Discord Channels          MT5 Accounts
+    (new message)          ┌─── #signals (relay)     ┌── Vantage Demo
+         │                 │    #executions (fills)   │   FundedNext
+         │ MTProto         │    #alerts (errors)      │   ...
+         ▼                 │                          │
+  ┌─────────────────────────────────────────────────────────────┐
+  │                    telebot (Python)                         │
+  │                                                             │
+  │  Telethon ──► Signal Parser ──► Trade Manager ──► Executor  │
+  │  (listener)   (regex+rules)     (risk calc)      (MT5 API) │
+  │      │                                               │      │
+  │      ▼                                               │      │
+  │  Discord ◄── Notifier ◄────────────────────────────┘      │
+  │  (httpx)     (fills, alerts)                               │
+  └──────────────────┼─────────────────────────┼───────────────┘
+                     │                         │
+               proxy-net                  data-net
+                     │                    │         │
+                  nginx ◄─┘          postgres    mt5-bridge
+                  (HTTPS)            (shared)    (Wine+RPyC)
 ```
 
-Messages are formatted as:
-
-```
-[Group Name] [Sender Name . 14:32]: message text here
-```
+### Features
 
 - Listens to one or more Telegram groups (even with view-only access)
-- Forwards text content and media captions (not media files)
-- Auto-resolves Telegram group names
-- Sends to a single Discord channel via webhook
-- Auto-reconnects on network drops
-- Retries failed sends with exponential backoff
+- Relays messages + media to Discord via webhook
+- Parses trading signals (entry zones, SL, TP levels)
+- Executes trades on MT5 accounts with risk management
+- Per-account lot sizing, jitter, and stagger delays
+- Kill switch, heartbeat monitoring, auto-reconnect
+- Web dashboard with analytics (HTTPS via nginx)
 
 ## Tech Stack
 
-| Component       | Technology                                               | Purpose                                             |
-| --------------- | -------------------------------------------------------- | --------------------------------------------------- |
-| Telegram client | [Telethon](https://docs.telethon.dev/) v1.42             | MTProto userbot — listens to groups in real-time    |
-| Discord output  | Discord Webhooks                                         | Simple HTTP POST, no bot or API registration needed |
-| HTTP client     | [httpx](https://www.python-httpx.org/) v0.28             | Async HTTP for Discord webhook calls                |
-| Config          | [python-dotenv](https://pypi.org/project/python-dotenv/) | Loads `.env` file                                   |
-| Runtime         | Python 3.12                                              |                                                     |
-| Deployment      | Docker + docker compose                                  | Auto-restart, log rotation                          |
+| Component       | Technology                                               | Purpose                                         |
+| --------------- | -------------------------------------------------------- | ----------------------------------------------- |
+| Telegram client | [Telethon](https://docs.telethon.dev/) v1.42             | MTProto userbot — real-time message listener     |
+| Discord output  | Discord Webhooks                                         | Relay signals, trade fills, and alerts           |
+| HTTP client     | [httpx](https://www.python-httpx.org/) v0.28             | Async HTTP for Discord + external calls          |
+| Trading         | [mt5linux](https://pypi.org/project/mt5linux/) + RPyC    | MT5 Python API bridge for Linux                  |
+| Database        | [asyncpg](https://github.com/MagicStack/asyncpg) + PostgreSQL | Trade log, signal audit, analytics          |
+| Dashboard       | [FastAPI](https://fastapi.tiangolo.com/) + Jinja2        | Web UI with kill switch and analytics            |
+| Config          | [python-dotenv](https://pypi.org/project/python-dotenv/) | Loads `.env` file                                |
+| Runtime         | Python 3.12                                              |                                                  |
+| Deployment      | Docker + docker compose                                  | Auto-restart, log rotation, shared networking    |
 
 ## Project Structure
 
 ```
 telebot/
-├── bot.py                # Main entrypoint — Telethon event handler, message formatting
-├── config.py             # Loads .env, validates settings, exposes Settings dataclass
-├── discord_sender.py     # Discord webhook client with retry logic
-├── generate_session.py   # One-time script to create Telethon StringSession
-├── list_groups.py        # Utility to list all Telegram groups with their IDs
-├── requirements.txt      # Pinned Python dependencies
-├── Dockerfile            # Python 3.12 slim image
-├── docker-compose.yml    # Single service with auto-restart and log rotation
-├── .env.example          # Template for all required environment variables
-└── .dockerignore         # Excludes secrets and dev files from Docker image
+├── bot.py                  # Entrypoint — Telethon handler, signal dispatch
+├── config.py               # Env validation, Settings dataclass
+├── signal_parser.py        # Regex-based signal extraction
+├── models.py               # SignalAction, AccountConfig, GlobalConfig
+├── trade_manager.py        # Risk calc, order placement, zone logic
+├── executor.py             # Heartbeat, reconnect, kill switch
+├── mt5_connector.py        # MT5 abstraction (DryRun + MT5Linux backends)
+├── notifier.py             # Discord notifications (fills, alerts)
+├── db.py                   # asyncpg database layer
+├── dashboard.py            # FastAPI web dashboard
+├── discord_sender.py       # Discord webhook client with retry
+├── maintenance.py          # Trade archival CLI
+├── risk_calculator.py      # Position sizing logic
+├── accounts.json           # Per-account MT5 config (gitignored)
+├── docker-compose.yml      # Production compose (proxy-net + data-net)
+├── docker-compose.dev.yml  # Dev compose with local PostgreSQL
+├── Dockerfile              # Python 3.12 slim image
+├── mt5-bridge/             # Wine + MT5 + RPyC bridge (see guide)
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── supervisord.conf
+│   ├── scripts/entrypoint.sh
+│   └── MT5_BRIDGE_GUIDE.md # Full setup documentation
+├── nginx/                  # Reverse proxy config
+│   └── telebot.conf
+├── templates/              # Dashboard HTML templates
+├── tests/                  # pytest test suite (113+ tests)
+└── .env.example            # All environment variables
 ```
 
 ## Prerequisites
@@ -247,6 +274,51 @@ The bot auto-restarts on crashes and VPS reboots (`restart: unless-stopped`).
 3. `docker compose restart`
 
 No code changes or Docker rebuild needed.
+
+## MT5 Bridge (Live Trading)
+
+The MT5 bridge runs MetaTrader 5 inside Wine on Linux, exposing the MT5 Python API
+over RPyC so the telebot can execute real trades.
+
+```
+  ┌──────────────────┐         ┌──────────────────┐
+  │  mt5-vantage     │         │  telebot          │
+  │                  │  RPyC   │                   │
+  │  Wine + MT5      │◄────────│  MT5LinuxConnector│
+  │  + RPyC :18812   │         │  (mt5linux client)│
+  │                  │         │                   │
+  └────────┬─────────┘         └────────┬──────────┘
+           │         data-net           │
+           └────────────────────────────┘
+```
+
+**One container per broker account.** Each has its own Wine prefix, MT5 terminal,
+and RPyC server. The telebot connects to each by Docker hostname.
+
+### Quick Start
+
+```bash
+# 1. Build the bridge image
+cd /home/murx/apps/mt5-bridge
+docker compose build
+
+# 2. Start with VNC enabled for MT5 setup
+echo "ENABLE_VNC_VANTAGE=true" > .env
+docker compose up -d mt5-vantage
+
+# 3. Install MT5 via noVNC (SSH tunnel + browser)
+ssh -L 6080:localhost:6080 murx@vps
+# Open http://localhost:6080/vnc.html
+docker exec -d mt5-vantage bash -c "DISPLAY=:99 WINEDEBUG=-all wine /opt/mt5setup.exe"
+
+# 4. Log into broker, save password, enable algo trading
+# 5. Disable VNC for production
+sed -i 's/ENABLE_VNC_VANTAGE=true/ENABLE_VNC_VANTAGE=false/' .env
+docker compose up -d mt5-vantage
+```
+
+For the full guide with troubleshooting, compatibility notes, and adding new accounts,
+see **[mt5-bridge/MT5_BRIDGE_GUIDE.md](mt5-bridge/MT5_BRIDGE_GUIDE.md)**.
 
 ## Development
 
