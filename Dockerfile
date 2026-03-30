@@ -11,8 +11,6 @@ COPY mt5_connector.py risk_calculator.py trade_manager.py executor.py ./
 COPY notifier.py db.py dashboard.py maintenance.py ./
 COPY templates/ ./templates/
 COPY static/ ./static/
-COPY docs/ ./docs/
-COPY nginx/ ./nginx/
 
 RUN mkdir -p /app/data
 

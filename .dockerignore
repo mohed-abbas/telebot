@@ -5,3 +5,9 @@ __pycache__
 *.pyc
 generate_session.py
 *.md
+tests/
+mt5-bridge/
+*.example
+docker-compose*.yml
+requirements-dev.txt
+.planning/
