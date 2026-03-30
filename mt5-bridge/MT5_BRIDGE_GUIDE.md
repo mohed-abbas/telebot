@@ -9,36 +9,40 @@ enabling the telebot to execute live trades through the MT5 Python API.
                          VPS (Ubuntu 22.04)
   ┌──────────────────────────────────────────────────────────────────┐
   │                                                                  │
-  │  ┌─────────────────────┐     ┌──────────────────────────────┐   │
-  │  │  mt5-vantage         │     │  telebot                     │   │
-  │  │  (Docker container)  │     │  (Docker container)          │   │
-  │  │                      │     │                              │   │
-  │  │  ┌────────────────┐  │     │  bot.py                      │   │
-  │  │  │ Xvfb (:99)     │  │     │    │                         │   │
-  │  │  │ virtual display │  │     │    ▼                         │   │
-  │  │  └───────┬────────┘  │     │  MT5LinuxConnector           │   │
-  │  │          │            │     │    │ from mt5linux            │   │
-  │  │  ┌───────▼────────┐  │     │    │ import MetaTrader5       │   │
-  │  │  │ Wine 6.0       │  │     │    │                         │   │
-  │  │  │ ┌────────────┐ │  │     │    │ RPyC client             │   │
-  │  │  │ │ MT5        │ │  │     │    │ (pure Python)           │   │
-  │  │  │ │ terminal64 │ │  │     └────┼─────────────────────────┘   │
-  │  │  │ │ .exe       │ │  │          │                             │
-  │  │  │ └──────┬─────┘ │  │          │                             │
-  │  │  │        │        │  │          │                             │
-  │  │  │ ┌──────▼─────┐ │  │          │                             │
-  │  │  │ │ Python 3.9 │ │  │          │ TCP :18812                  │
-  │  │  │ │ RPyC server│◄├──┼──────────┘                             │
-  │  │  │ │ :18812     │ │  │    data-net (Docker network)           │
-  │  │  │ └────────────┘ │  │                                        │
-  │  │  └────────────────┘  │                                        │
-  │  └─────────────────────┘                                         │
+  │  ┌────────────────────────────────────────┐                      │
+  │  │  mt5-bridge (single Docker container)  │                      │
+  │  │                                        │                      │
+  │  │  ┌──────────────────┐                  │                      │
+  │  │  │ Xvfb (:99)       │  (shared)        │                      │
+  │  │  │ virtual display   │                  │                      │
+  │  │  └────────┬─────────┘                  │                      │
+  │  │           │                             │                      │
+  │  │  ┌────────▼─────────┐                  │                      │
+  │  │  │ x11vnc + noVNC   │  (shared, VNC    │                      │
+  │  │  │ :6080            │   toggle)         │                      │
+  │  │  └──────────────────┘                  │                      │
+  │  │                                        │                      │
+  │  │  ┌─── .wine-vantage ──────────────┐    │   ┌──────────────┐  │
+  │  │  │  Wine prefix (isolated)        │    │   │  telebot      │  │
+  │  │  │  ┌────────────┐ ┌────────────┐ │    │   │              │  │
+  │  │  │  │ MT5        │ │ Python 3.9 │ │    │   │  RPyC client │  │
+  │  │  │  │ terminal64 │ │ RPyC :18812│◄├────┼───┤  :18812      │  │
+  │  │  │  └────────────┘ └────────────┘ │    │   │              │  │
+  │  │  └────────────────────────────────┘    │   │              │  │
+  │  │                                        │   │              │  │
+  │  │  ┌─── .wine-fundednext ───────────┐    │   │              │  │
+  │  │  │  Wine prefix (isolated)        │    │   │  RPyC client │  │
+  │  │  │  ┌────────────┐ ┌────────────┐ │    │   │  :18813      │  │
+  │  │  │  │ MT5        │ │ Python 3.9 │ │    │   │              │  │
+  │  │  │  │ terminal64 │ │ RPyC :18813│◄├────┼───┤              │  │
+  │  │  │  └────────────┘ └────────────┘ │    │   └──────────────┘  │
+  │  │  └────────────────────────────────┘    │                      │
+  │  │                                        │   data-net           │
+  │  └────────────────────────────────────────┘   (Docker network)   │
   │                                                                  │
-  │  ┌─────────────────────┐     ┌──────────────────────────────┐   │
-  │  │  mt5-fundednext      │     │  postgres (shared)           │   │
-  │  │  (same setup,        │     │  nginx    (shared)           │   │
-  │  │   different account) │     │  redis    (shared)           │   │
-  │  └─────────────────────┘     └──────────────────────────────┘   │
+  │  ┌──────────────────────────────────────────┐                    │
+  │  │  postgres (shared)  |  nginx  |  redis   │                    │
+  │  └──────────────────────────────────────────┘                    │
   └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,15 +69,17 @@ enabling the telebot to execute live trades through the MT5 Python API.
   MT5 terminal via named pipes, and the result is sent back.
 ```
 
-### Why Separate Containers?
+### Why Single Container, Multiple Accounts?
 
 Each MT5 terminal can only be logged into ONE broker account at a time.
-You cannot run two accounts on a single terminal. Therefore:
+You cannot run two accounts on a single terminal. The solution is
+isolated Wine prefixes inside a single container:
 
-- **One container per account** — complete isolation
-- **Independent restarts** — updating one account doesn't affect others
-- **Separate Wine prefixes** — different MT5 configs per broker
-- **Same Docker image** — only volumes differ
+- **Single container** — reduces overhead (one Xvfb, one noVNC instance)
+- **Isolated Wine prefixes** — each account gets its own `.wine-{name}` directory (no cross-contamination)
+- **Add/remove accounts via env var** — no new compose service needed, just update `MT5_ACCOUNTS`
+- **Shared display** — one noVNC URL (port 6080) for all accounts
+- **Dynamic supervisord config** — generated at runtime from `MT5_ACCOUNTS` env var
 
 ### Why Separate from Telebot?
 
@@ -136,7 +142,7 @@ command=wine C:\Python39\python.exe
 # Result: wine C:Python39python.exe
 
 # CORRECT — use Linux paths (Wine resolves them)
-command=wine /root/.wine/drive_c/Python39/python.exe
+command=wine /root/.wine-vantage/drive_c/Python39/python.exe
 ```
 
 ### MetaTrader5 Python Package Import
@@ -152,95 +158,90 @@ Verify with `import rpyc` instead.
 ```
 /home/murx/apps/mt5-bridge/          <── On VPS
 ├── Dockerfile                        # Ubuntu + Wine + Xvfb + noVNC
-├── docker-compose.yml                # One service per MT5 account
-├── supervisord.conf                  # Process management
+├── docker-compose.yml                # Single service, multi-account via env var
 ├── scripts/
-│   └── entrypoint.sh                # First-run init + supervisord
-├── .env                              # VNC toggle per account
+│   └── entrypoint.sh                # Per-account Wine init + dynamic supervisord.conf
+├── .env                              # VNC toggle
 └── .env.example
 
-/home/murx/apps/telebot/             <── Telebot (connects to bridges)
-├── accounts.json                     # mt5_host per account
+Note: supervisord.conf is generated dynamically by entrypoint.sh
+      at container startup based on the MT5_ACCOUNTS env var.
+
+/home/murx/apps/telebot/             <── Telebot (connects to bridge)
+├── accounts.json                     # mt5_host: "mt5-bridge", mt5_port per account
 ├── .env                              # MT5_BACKEND=mt5linux
 └── ...
 ```
 
 Persistent data is in Docker volumes:
 ```
-mt5-bridge_mt5_vantage_wine          # Wine prefix + MT5 install
-mt5-bridge_mt5_fundednext_wine       # Wine prefix + MT5 install
+mt5-bridge_mt5_vantage_wine          # Wine prefix + MT5 at /root/.wine-vantage
 ```
+
+Note: If migrating from the old multi-container setup, existing volumes
+contain the same data — just mounted at a different path (`/root/.wine-{name}`
+instead of `/root/.wine`). You may need to recreate volumes or copy data.
 
 ## Setup Guide — Adding a New Account
 
-### Step 1: Add Service to docker-compose.yml
+### Step 1: Update MT5_ACCOUNTS in docker-compose.yml
 
 Edit `/home/murx/apps/mt5-bridge/docker-compose.yml`:
 
 ```yaml
 services:
-  # ... existing services ...
-
-  mt5-newaccount:
-    build: .
-    container_name: mt5-newaccount
-    restart: unless-stopped
+  mt5-bridge:
     environment:
-      RPYC_PORT: "18812"
-      ENABLE_VNC: "${ENABLE_VNC_NEWACCOUNT:-false}"
+      # Add the new account with a unique RPyC port
+      MT5_ACCOUNTS: "vantage:18812,newaccount:18813"
+```
+
+### Step 2: Add Volume Mount for New Account
+
+```yaml
+services:
+  mt5-bridge:
     volumes:
-      - mt5_newaccount_wine:/root/.wine
-    ports:
-      - "6082:6080"    # noVNC — unique port per account
-    networks:
-      - data-net
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      - mt5_vantage_wine:/root/.wine-vantage
+      - mt5_newaccount_wine:/root/.wine-newaccount    # New account
 
 volumes:
-  # ... existing volumes ...
-  mt5_newaccount_wine:
+  mt5_vantage_wine:
+  mt5_newaccount_wine:    # New account volume
 ```
 
-Port assignment for noVNC (only needed during setup):
-- Account 1: `6080:6080`
-- Account 2: `6081:6080`
-- Account 3: `6082:6080`
-- etc.
-
-### Step 2: Enable VNC and Start Container
+### Step 3: Start (or Recreate) the Container
 
 ```bash
-# Add VNC toggle to .env
-echo "ENABLE_VNC_NEWACCOUNT=true" >> /home/murx/apps/mt5-bridge/.env
-
-# Start only the new container (others keep running)
 cd /home/murx/apps/mt5-bridge
-docker compose up -d mt5-newaccount
+
+# Enable VNC for setup
+echo "ENABLE_VNC=true" > .env
+
+# Recreate with new config
+docker compose up -d
 ```
 
-Wait ~2 minutes for Wine initialization + Python install:
+Wait ~2 minutes for Wine initialization of the new account:
 
 ```bash
-docker logs mt5-newaccount 2>&1 | tail -10
-# Look for: "Wine initialization complete!"
+docker logs mt5-bridge 2>&1 | tail -20
+# Look for: "[newaccount] Wine initialization complete!"
 ```
 
-### Step 3: Install MT5 via noVNC
+### Step 4: Install MT5 via noVNC
 
 Set up SSH tunnel from your local machine:
 ```bash
-ssh -L 6082:localhost:6082 murx@your-vps-ip
+ssh -L 6080:localhost:6080 murx@your-vps-ip
 ```
 
-Open `http://localhost:6082/vnc.html` in your browser, click Connect.
+Open `http://localhost:6080/vnc.html` in your browser, click Connect.
 
-Launch the MT5 installer:
+Launch the MT5 installer for the new account:
 ```bash
-docker exec -d mt5-newaccount bash -c "DISPLAY=:99 WINEDEBUG=-all wine /opt/mt5setup.exe"
+docker exec -d mt5-bridge bash -c \
+  'DISPLAY=:99 WINEPREFIX=/root/.wine-newaccount WINEDEBUG=-all wine /opt/mt5setup.exe'
 ```
 
 In the noVNC window:
@@ -256,40 +257,37 @@ In the noVNC window:
    - Enable "Allow DLL imports"
 5. Close MT5 (File > Exit)
 
-### Step 4: Verify Auto-Restart
+### Step 5: Verify Auto-Restart
 
 After closing MT5, supervisord should restart it within 10-15 seconds.
 Check noVNC — the terminal should reappear and auto-login.
 
 Also verify via logs:
 ```bash
-docker logs mt5-newaccount 2>&1 | grep -E "RUNNING" | tail -5
+docker logs mt5-bridge 2>&1 | grep -E "RUNNING" | tail -5
 # Look for:
-#   success: mt5 entered RUNNING state
-#   success: rpyc entered RUNNING state
+#   success: mt5-newaccount entered RUNNING state
+#   success: rpyc-newaccount entered RUNNING state
 ```
 
 Verify RPyC connectivity:
 ```bash
 docker run --rm --network data-net alpine \
-  sh -c "timeout 3 nc -z mt5-newaccount 18812 && echo 'RPyC OK' || echo 'FAILED'"
+  sh -c "timeout 3 nc -z mt5-bridge 18813 && echo 'RPyC OK' || echo 'FAILED'"
 ```
 
-### Step 5: Disable VNC (Production)
+### Step 6: Disable VNC (Production)
 
 ```bash
 # Update .env
-sed -i 's/ENABLE_VNC_NEWACCOUNT=true/ENABLE_VNC_NEWACCOUNT=false/' \
-  /home/murx/apps/mt5-bridge/.env
+echo "ENABLE_VNC=false" > /home/murx/apps/mt5-bridge/.env
 
 # Recreate container (picks up new env)
 cd /home/murx/apps/mt5-bridge
-docker compose up -d mt5-newaccount
-
-# Optionally remove the noVNC port mapping from docker-compose.yml
+docker compose up -d
 ```
 
-### Step 6: Configure Telebot
+### Step 7: Configure Telebot
 
 Add the account to `/home/murx/apps/telebot/accounts.json`:
 
@@ -304,8 +302,8 @@ Add the account to `/home/murx/apps/telebot/accounts.json`:
   "max_daily_loss_percent": 3.0,
   "max_open_trades": 3,
   "enabled": true,
-  "mt5_host": "mt5-newaccount",
-  "mt5_port": 18812
+  "mt5_host": "mt5-bridge",
+  "mt5_port": 18813
 }
 ```
 
@@ -345,7 +343,7 @@ docker compose up -d --force-recreate
 
 - [ ] MT5 bridge container running with `rpyc` in RUNNING state
 - [ ] MT5 terminal logged in with saved password
-- [ ] `accounts.json` has correct `mt5_host` and `mt5_port`
+- [ ] `accounts.json` has correct `mt5_host: "mt5-bridge"` and `mt5_port`
 - [ ] `MT5_PASS_N` env vars set in telebot's `.env`
 - [ ] Test with `TRADING_DRY_RUN=true` + `MT5_BACKEND=mt5linux` first
       (connects to MT5 but logs orders instead of executing)
@@ -399,7 +397,7 @@ The bot's `accounts.json` global settings provide:
 
 Check Wine version inside container:
 ```bash
-docker exec mt5-vantage wine --version
+docker exec mt5-bridge wine --version
 # Should show: wine-6.0.3 (Ubuntu 6.0.3~repack-1)
 ```
 
@@ -408,18 +406,18 @@ docker exec mt5-vantage wine --version
 **Cause**: supervisord path issue or MT5 not installed.
 **Fix**: Check supervisord status:
 ```bash
-docker logs mt5-vantage 2>&1 | grep -E "(mt5|RUNNING|FATAL|exited)" | tail -10
+docker logs mt5-bridge 2>&1 | grep -E "(mt5|RUNNING|FATAL|exited)" | tail -10
 ```
 
 Verify MT5 is installed:
 ```bash
-docker exec mt5-vantage ls -la "/root/.wine/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+docker exec mt5-bridge ls -la "/root/.wine-vantage/drive_c/Program Files/MetaTrader 5/terminal64.exe"
 ```
 
 Start MT5 manually to test:
 ```bash
-docker exec -d mt5-vantage bash -c \
-  'DISPLAY=:99 WINEPREFIX=/root/.wine wine "C:/Program Files/MetaTrader 5/terminal64.exe" /portable'
+docker exec -d mt5-bridge bash -c \
+  'DISPLAY=:99 WINEPREFIX=/root/.wine-vantage wine "/root/.wine-vantage/drive_c/Program Files/MetaTrader 5/terminal64.exe" /portable'
 ```
 
 ### RPyC Server Not Starting
@@ -427,8 +425,8 @@ docker exec -d mt5-vantage bash -c \
 **Cause**: Python not installed or wrong path.
 **Fix**: Verify Python:
 ```bash
-docker exec mt5-vantage ls -la /root/.wine/drive_c/Python39/python.exe
-docker exec mt5-vantage bash -c 'DISPLAY=:99 wine /root/.wine/drive_c/Python39/python.exe -c "import rpyc; print(rpyc.__version__)"'
+docker exec mt5-bridge ls -la /root/.wine-vantage/drive_c/Python39/python.exe
+docker exec mt5-bridge bash -c 'DISPLAY=:99 WINEPREFIX=/root/.wine-vantage wine /root/.wine-vantage/drive_c/Python39/python.exe -c "import rpyc; print(rpyc.__version__)"'
 ```
 
 ### RPyC Port Not Reachable from Telebot
@@ -446,10 +444,9 @@ docker network inspect data-net | grep -E "(mt5|telebot)"
 
 ```bash
 # Enable VNC temporarily
-sed -i 's/ENABLE_VNC_VANTAGE=false/ENABLE_VNC_VANTAGE=true/' \
-  /home/murx/apps/mt5-bridge/.env
+echo "ENABLE_VNC=true" > /home/murx/apps/mt5-bridge/.env
 cd /home/murx/apps/mt5-bridge
-docker compose up -d mt5-vantage
+docker compose up -d
 # Connect via SSH tunnel + noVNC, fix login, then disable VNC
 ```
 
@@ -469,7 +466,7 @@ Minimize resource usage:
 cd /home/murx/apps/mt5-bridge
 docker compose down
 docker volume rm mt5-bridge_mt5_ACCOUNTNAME_wine
-docker compose up -d mt5-ACCOUNTNAME
+docker compose up -d
 # Then re-install MT5 via noVNC
 ```
 
@@ -481,10 +478,10 @@ docker compose up -d mt5-ACCOUNTNAME
 # Delete init flag
 docker run --rm -v mt5-bridge_mt5_ACCOUNTNAME_wine:/wine alpine rm -f /wine/.initialized
 
-# Restart container (will re-run Python setup)
+# Restart container (will re-run setup for that account)
 cd /home/murx/apps/mt5-bridge
-docker compose up -d mt5-ACCOUNTNAME
-docker logs mt5-ACCOUNTNAME 2>&1 | tail -30
+docker compose up -d
+docker logs mt5-bridge 2>&1 | tail -30
 ```
 
 ## Resource Usage
@@ -498,40 +495,44 @@ docker logs mt5-ACCOUNTNAME 2>&1 | tail -30
 | Disk     | ~500MB (Wine prefix + MT5)     |
 | Network  | ~1-5MB/day (market data)       |
 
-### Total for 2 Accounts
+### Total for 2 Accounts (Single Container)
 
-| Resource | Usage                          |
-|----------|--------------------------------|
-| RAM      | ~1-1.5GB total                 |
-| CPU      | <10% on 2 cores                |
-| Disk     | ~1.5GB (image) + 1GB (volumes) |
+| Resource | Usage                           |
+|----------|---------------------------------|
+| RAM      | ~0.8-1.2GB total (shared Xvfb)  |
+| CPU      | <10% on 2 cores                 |
+| Disk     | ~1.5GB (image) + 1GB (volumes)  |
+
+Single container saves ~100-200MB RAM vs two containers
+(shared Xvfb, supervisord, and base OS overhead).
 
 ## Container Management Commands
 
 ```bash
-# Start all MT5 bridges
+# Start the MT5 bridge
 cd /home/murx/apps/mt5-bridge && docker compose up -d
 
-# Start specific account only
-docker compose up -d mt5-vantage
-
 # View logs
-docker logs -f mt5-vantage
-docker logs -f mt5-fundednext
+docker logs -f mt5-bridge
 
-# Restart specific account
-docker compose restart mt5-vantage
+# Restart the bridge
+docker compose restart mt5-bridge
 
-# Check if RPyC is reachable
+# Check RPyC per account
 docker run --rm --network data-net alpine \
-  sh -c "nc -z mt5-vantage 18812 && echo OK || echo FAIL"
+  sh -c "nc -z mt5-bridge 18812 && echo 'vantage OK' || echo 'vantage FAIL'"
+docker run --rm --network data-net alpine \
+  sh -c "nc -z mt5-bridge 18813 && echo 'fundednext OK' || echo 'fundednext FAIL'"
 
 # Check processes inside container
-docker exec mt5-vantage ps aux | grep -E "(terminal|python)"
+docker exec mt5-bridge ps aux | grep -E "(terminal|python)"
 
 # Enable VNC for maintenance
-sed -i 's/ENABLE_VNC_VANTAGE=false/ENABLE_VNC_VANTAGE=true/' .env
-docker compose up -d mt5-vantage
+echo "ENABLE_VNC=true" > .env
+docker compose up -d
 # SSH tunnel: ssh -L 6080:localhost:6080 murx@vps
 # Browser: http://localhost:6080/vnc.html
+
+# Run command in specific account Wine prefix
+docker exec mt5-bridge bash -c 'WINEPREFIX=/root/.wine-vantage wine --version'
 ```
