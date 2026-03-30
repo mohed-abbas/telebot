@@ -73,10 +73,9 @@ telebot/
 ├── docker-compose.dev.yml  # Dev compose with local PostgreSQL
 ├── Dockerfile              # Python 3.12 slim image
 ├── mt5-bridge/             # Wine + MT5 + RPyC bridge (see guide)
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   ├── supervisord.conf
-│   ├── scripts/entrypoint.sh
+│   ├── Dockerfile          # Ubuntu 22.04 + Wine 6.0 + Xvfb + noVNC
+│   ├── docker-compose.yml  # Single container, multi-account via MT5_ACCOUNTS
+│   ├── scripts/entrypoint.sh  # Multi-account init + dynamic supervisord.conf
 │   └── MT5_BRIDGE_GUIDE.md # Full setup documentation
 ├── nginx/                  # Reverse proxy config
 │   └── telebot.conf
@@ -240,7 +239,7 @@ The bot auto-restarts on crashes and VPS reboots (`restart: unless-stopped`).
 | ------------------------------- | ----------------------------------- |
 | `docker compose up -d --build`  | Start or rebuild the bot            |
 | `docker compose down`           | Stop the bot                        |
-| `docker compose restart`        | Restart (e.g. after `.env` changes) |
+| `docker compose up -d`          | Recreate (picks up `.env` changes)  |
 | `docker logs -f telebot`        | Follow live logs                    |
 | `docker logs --tail 50 telebot` | View last 50 log lines              |
 
@@ -277,23 +276,28 @@ No code changes or Docker rebuild needed.
 
 ## MT5 Bridge (Live Trading)
 
-The MT5 bridge runs MetaTrader 5 inside Wine on Linux, exposing the MT5 Python API
-over RPyC so the telebot can execute real trades.
+A single container runs MetaTrader 5 inside Wine on Linux, serving **multiple broker
+accounts** from isolated Wine prefixes. Each account gets its own MT5 terminal and
+RPyC server on a unique port.
 
 ```
-  ┌──────────────────┐         ┌──────────────────┐
-  │  mt5-vantage     │         │  telebot          │
-  │                  │  RPyC   │                   │
-  │  Wine + MT5      │◄────────│  MT5LinuxConnector│
-  │  + RPyC :18812   │         │  (mt5linux client)│
-  │                  │         │                   │
-  └────────┬─────────┘         └────────┬──────────┘
-           │         data-net           │
-           └────────────────────────────┘
+  ┌─────────────────────────────────┐         ┌──────────────────┐
+  │  mt5-bridge (single container)  │         │  telebot          │
+  │                                 │         │                   │
+  │  Xvfb + noVNC      (shared)    │         │                   │
+  │                                 │  RPyC   │                   │
+  │  Wine + MT5 vantage     :18812 │◄────────│  MT5LinuxConnector│
+  │  Wine + MT5 fundednext  :18813 │◄────────│  (per-account)    │
+  │  Wine + MT5 ...         :18814 │         │                   │
+  │                                 │         │                   │
+  └────────────┬────────────────────┘         └────────┬──────────┘
+               │              data-net                 │
+               └───────────────────────────────────────┘
 ```
 
-**One container per broker account.** Each has its own Wine prefix, MT5 terminal,
-and RPyC server. The telebot connects to each by Docker hostname.
+Accounts are configured via the `MT5_ACCOUNTS` env var (e.g., `"vantage:18812,fundednext:18813"`).
+The entrypoint initializes each Wine prefix on first run and generates the supervisord
+config dynamically. Adding an account = add to env var + add volume mount.
 
 ### Quick Start
 
@@ -303,18 +307,18 @@ cd /home/murx/apps/mt5-bridge
 docker compose build
 
 # 2. Start with VNC enabled for MT5 setup
-echo "ENABLE_VNC_VANTAGE=true" > .env
-docker compose up -d mt5-vantage
+ENABLE_VNC=true docker compose up -d
 
 # 3. Install MT5 via noVNC (SSH tunnel + browser)
 ssh -L 6080:localhost:6080 murx@vps
 # Open http://localhost:6080/vnc.html
-docker exec -d mt5-vantage bash -c "DISPLAY=:99 WINEDEBUG=-all wine /opt/mt5setup.exe"
+docker exec -d mt5-bridge bash -c \
+  'DISPLAY=:99 WINEPREFIX=/root/.wine-vantage WINEDEBUG=-all wine /opt/mt5setup.exe'
 
 # 4. Log into broker, save password, enable algo trading
 # 5. Disable VNC for production
-sed -i 's/ENABLE_VNC_VANTAGE=true/ENABLE_VNC_VANTAGE=false/' .env
-docker compose up -d mt5-vantage
+docker compose down
+docker compose up -d
 ```
 
 For the full guide with troubleshooting, compatibility notes, and adding new accounts,
