@@ -96,8 +96,13 @@ None yet.
 - [Phase 2]: Reconnect cascade risk — signals queuing during reconnect may execute with stale data; need "paused" state during sync
 - [Phase 2]: Kill switch must cancel pending orders, not just close positions — orphaned limits will fill later otherwise
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260330-shy | Optimize mt5-bridge and telebot Docker images | 2026-03-30 | 892de47 | [260330-shy-optimize-mt5-bridge-and-telebot-docker-i](./quick/260330-shy-optimize-mt5-bridge-and-telebot-docker-i/) |
+
 ## Session Continuity
 
-Last session: 2026-03-30T18:39:00Z
-Stopped at: Completed quick task 260330-shy (mt5-bridge multi-account + Docker optimization)
+Last activity: 2026-03-30 - Completed quick task 260330-shy: Optimize mt5-bridge and telebot Docker images
 Resume file: None
