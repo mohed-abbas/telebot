@@ -4,7 +4,7 @@ milestone: v1.0
 milestone_name: milestone
 status: Milestone archived
 stopped_at: v1.0 milestone archived
-last_updated: "2026-03-22T21:05:33.169Z"
+last_updated: "2026-03-30T18:39:00Z"
 progress:
   total_phases: 4
   completed_phases: 4
@@ -55,6 +55,7 @@ Plan: Not started
 | Phase 04 P01 | 4min | 2 tasks | 6 files |
 | Phase 04 P02 | 4min | 2 tasks | 2 files |
 | Phase 04 P03 | 6min | 2 tasks | 2 files |
+| Quick 260330-shy | 4min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Recent decisions affecting current work:
 - [Phase 04]: Reset DryRunConnector._ticket_counter in autouse fixture to prevent cross-test interference
 - [Phase 04]: FailingConnector uses fail_on set for configurable failure simulation in MT5 connector tests
 - [Phase 04]: PricedDryRunConnector defined locally per test file to avoid cross-file import fragility
+- [Quick]: Single container with isolated Wine prefixes per account instead of one container per account
+- [Quick]: supervisord.conf generated dynamically at runtime from MT5_ACCOUNTS env var, static file deleted
 
 ### Pending Todos
 
@@ -95,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-22T20:59:56.395Z
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-03-30T18:39:00Z
+Stopped at: Completed quick task 260330-shy (mt5-bridge multi-account + Docker optimization)
 Resume file: None
