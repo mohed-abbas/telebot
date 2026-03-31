@@ -119,6 +119,12 @@ nodaemon=true
 logfile=/var/log/supervisord.log
 pidfile=/var/run/supervisord.pid
 
+[unix_http_server]
+file=/var/run/supervisor.sock
+
+[supervisorctl]
+serverurl=unix:///var/run/supervisor.sock
+
 # ── Virtual framebuffer (always on) ──────────────────────────────────
 [program:xvfb]
 command=/usr/bin/Xvfb :99 -screen 0 1024x768x16
