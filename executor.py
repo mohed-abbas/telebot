@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import time
 
@@ -141,6 +142,14 @@ class Executor:
 
     async def _reconnect_account(self, acct_name: str, connector) -> None:
         """Reconnect a single account with exponential backoff (1s -> 60s max)."""
+        # Skip accounts without a password (no point reconnecting)
+        if not connector.password and not (
+            connector.password_env and os.environ.get(connector.password_env)
+        ):
+            logger.debug("%s: Skipping reconnect — no password configured", acct_name)
+            self._reconnecting.discard(acct_name)
+            return
+
         self._reconnecting.add(acct_name)
         if self.notifier:
             await self.notifier.notify_connection_lost(acct_name, "Heartbeat failed — reconnecting")
@@ -154,7 +163,7 @@ class Executor:
             attempt += 1
             try:
                 await connector.disconnect()
-                success = await connector.connect()
+                success = await asyncio.wait_for(connector.connect(), timeout=15)
                 if success:
                     # Full position sync before accepting signals (REL-02)
                     await self._sync_positions(acct_name, connector)
@@ -164,6 +173,8 @@ class Executor:
                         await self.notifier.notify_connection_restored(acct_name)
                     logger.info("%s: Reconnected and synced (attempt %d)", acct_name, attempt)
                     return
+            except asyncio.TimeoutError:
+                logger.error("%s: Reconnect attempt %d timed out (15s)", acct_name, attempt)
             except Exception as exc:
                 logger.error("%s: Reconnect attempt %d failed: %s", acct_name, attempt, exc)
 
