@@ -125,6 +125,9 @@ file=/var/run/supervisor.sock
 [supervisorctl]
 serverurl=unix:///var/run/supervisor.sock
 
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
 # ── Virtual framebuffer (always on) ──────────────────────────────────
 [program:xvfb]
 command=/usr/bin/Xvfb :99 -screen 0 1024x768x16
