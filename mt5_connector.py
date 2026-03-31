@@ -290,21 +290,31 @@ class MT5LinuxConnector(MT5Connector):
     async def connect(self, password: str | None = None) -> bool:
         try:
             from mt5linux import MetaTrader5
-            self._mt5 = MetaTrader5(host=self.host, port=self.port)
-            self._mt5.initialize()
+
+            loop = asyncio.get_event_loop()
+
+            self._mt5 = await loop.run_in_executor(
+                None, lambda: MetaTrader5(host=self.host, port=self.port)
+            )
+            await loop.run_in_executor(None, self._mt5.initialize)
+
             # Use provided password, or re-read from env, or use stored (initial connect)
             pwd = password or (os.environ.get(self.password_env, "") if self.password_env else "") or self.password
             if not pwd:
                 logger.error("%s: No password available for connect", self.account_name)
                 self._connected = False
                 return False
-            result = self._mt5.login(login=self.login, password=pwd, server=self.server)
+
+            result = await loop.run_in_executor(
+                None, lambda: self._mt5.login(login=self.login, password=pwd, server=self.server)
+            )
             if not result:
                 error = self._mt5.last_error()
                 logger.error("%s: MT5 login failed: %s", self.account_name, error)
                 self._connected = False
                 return False
-            info = self._mt5.account_info()
+
+            info = await loop.run_in_executor(None, self._mt5.account_info)
             logger.info(
                 "%s: Connected — balance=%.2f equity=%.2f",
                 self.account_name, info.balance, info.equity,

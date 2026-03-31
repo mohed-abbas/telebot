@@ -2,6 +2,7 @@ import asyncio
 import functools
 import io
 import logging
+import os
 import signal
 from datetime import datetime
 
@@ -153,7 +154,20 @@ async def main() -> None:
     if executor:
         # Connect all MT5 accounts
         for acct_name, connector in executor.tm.connectors.items():
-            connected = await connector.connect()
+            # Skip accounts without a password configured
+            if not connector.password and not (
+                connector.password_env and os.environ.get(connector.password_env)
+            ):
+                msg = f"{acct_name}: No password configured (env var: {connector.password_env}) — skipping"
+                logger.warning(msg)
+                if notifier:
+                    await notifier.notify_alert(f"ACCOUNT SKIPPED: {msg}")
+                continue
+            try:
+                connected = await asyncio.wait_for(connector.connect(), timeout=15)
+            except asyncio.TimeoutError:
+                logger.error("%s: Connection timed out (15s)", acct_name)
+                connected = False
             if not connected and notifier:
                 await notifier.notify_connection_lost(acct_name, "Initial connection failed")
 
