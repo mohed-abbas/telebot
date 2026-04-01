@@ -244,6 +244,19 @@ async def increment_daily_stat(account_name: str, field: str, amount: int = 1) -
     )
 
 
+async def get_daily_stats_batch(account_name: str) -> dict[str, int]:
+    """Get all daily stats for an account in a single query."""
+    today = _utc_today()
+    row = await _pool.fetchrow(
+        "SELECT trades_count, server_messages FROM daily_stats WHERE date=$1 AND account_name=$2",
+        today,
+        account_name,
+    )
+    if row:
+        return {"trades_count": row["trades_count"], "server_messages": row["server_messages"]}
+    return {"trades_count": 0, "server_messages": 0}
+
+
 async def get_daily_stat(account_name: str, field: str) -> int:
     """Get current daily stat value."""
     safe_field = _validate_field(field)

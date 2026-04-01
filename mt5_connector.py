@@ -135,12 +135,12 @@ class MT5Connector:
 class DryRunConnector(MT5Connector):
     """Simulates MT5 connection for testing. No real trades placed."""
 
-    _ticket_counter: int = 100000
     _fake_positions: dict[int, Position]
 
     def __init__(self, account_name: str, server: str, login: int, password: str,
                  magic_number: int = 202603, password_env: str = ""):
         super().__init__(account_name, server, login, password, magic_number=magic_number, password_env=password_env)
+        self._ticket_counter = 100000
         self._fake_positions = {}
 
     async def ping(self) -> bool:
@@ -181,8 +181,8 @@ class DryRunConnector(MT5Connector):
         tp: float = 0.0,
         comment: str = "",
     ) -> OrderResult:
-        DryRunConnector._ticket_counter += 1
-        ticket = DryRunConnector._ticket_counter
+        self._ticket_counter += 1
+        ticket = self._ticket_counter
         logger.info(
             "[DRY-RUN] %s: OPEN %s %s vol=%.2f price=%.2f sl=%.2f tp=%.2f → ticket=%d",
             self.account_name, order_type.value, symbol, volume, price, sl, tp, ticket,

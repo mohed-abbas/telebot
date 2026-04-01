@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import db
 from models import (
@@ -297,9 +297,7 @@ class TradeManager:
 
             # Track limit order expiry
             if not use_market:
-                expires_at = (
-                    datetime.utcnow() + timedelta(minutes=self.cfg.limit_order_expiry_minutes)
-                ).isoformat()
+                expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.cfg.limit_order_expiry_minutes)
                 await db.log_pending_order(
                     signal_id=signal_id,
                     account_name=name,
@@ -375,7 +373,7 @@ class TradeManager:
 
     async def _handle_close(self, signal: SignalAction) -> list[dict]:
         results = []
-        signal_id = await db.log_signal(
+        await db.log_signal(
             raw_text=signal.raw_text, signal_type="close",
             action_taken="processing", symbol=signal.symbol,
         )
@@ -408,7 +406,7 @@ class TradeManager:
         results = []
         close_fraction = (signal.close_percent or 50.0) / 100.0
 
-        signal_id = await db.log_signal(
+        await db.log_signal(
             raw_text=signal.raw_text, signal_type="close_partial",
             action_taken="processing", symbol=signal.symbol,
             details=f"close {signal.close_percent}%",
@@ -444,7 +442,7 @@ class TradeManager:
 
     async def _handle_modify_sl(self, signal: SignalAction) -> list[dict]:
         results = []
-        signal_id = await db.log_signal(
+        await db.log_signal(
             raw_text=signal.raw_text, signal_type="modify_sl",
             action_taken="processing", symbol=signal.symbol,
             details=f"new_sl={signal.new_sl}",
@@ -489,7 +487,7 @@ class TradeManager:
 
     async def _handle_modify_tp(self, signal: SignalAction) -> list[dict]:
         results = []
-        signal_id = await db.log_signal(
+        await db.log_signal(
             raw_text=signal.raw_text, signal_type="modify_tp",
             action_taken="processing", symbol=signal.symbol,
             details=f"new_tp={signal.new_tp}",

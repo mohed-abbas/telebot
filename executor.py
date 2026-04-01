@@ -108,15 +108,16 @@ class Executor:
     ) -> list[dict]:
         """Execute signal on a single target account.
 
-        Temporarily filters connectors to only the target account.
+        Creates a temporary TradeManager scoped to just this account so that
+        concurrent signals never see each other's filtered connector dicts
+        (fixes the shared-state race condition in the previous swap approach).
         """
-        original = self.tm.connectors
-        self.tm.connectors = {target_account: original[target_account]}
-        try:
-            results = await self.tm.handle_signal(signal)
-        finally:
-            self.tm.connectors = original
-        return results
+        temp_tm = TradeManager(
+            connectors={target_account: self.tm.connectors[target_account]},
+            accounts=[self.tm.accounts[target_account]],
+            global_config=self.tm.cfg,
+        )
+        return await temp_tm.handle_signal(signal)
 
     # ── Heartbeat & Reconnect ────────────────────────────────────────
 

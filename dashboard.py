@@ -64,26 +64,32 @@ def _verify_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
     return credentials.username
 
 
+async def _verify_csrf(request: Request):
+    """CSRF protection: reject state-changing requests without a custom header.
+
+    HTMX sends HX-Request automatically. Cross-origin forms cannot set custom headers.
+    """
+    if request.method in ("POST", "PUT", "DELETE", "PATCH"):
+        if not request.headers.get("hx-request"):
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """ASGI lifespan: manages startup/shutdown lifecycle."""
     logger.info("Dashboard ASGI lifespan: startup")
     yield
-    # Shutdown: clean up resources
     logger.info("Dashboard ASGI lifespan: shutdown")
-    if _executor:
-        try:
-            await _executor.stop()
-        except Exception as exc:
-            logger.error("Error stopping executor during shutdown: %s", exc)
-    try:
-        await db.close_db()
-    except Exception as exc:
-        logger.error("Error closing database during shutdown: %s", exc)
 
 
 app = FastAPI(title="Telebot Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+@app.get("/health")
+async def health():
+    """Health check for container orchestration — no auth required."""
+    return {"status": "ok"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -194,7 +200,7 @@ async def overview_partial(request: Request, user: str = Depends(_verify_auth)):
 
 
 @app.post("/api/close/{account_name}/{ticket}", response_class=HTMLResponse)
-async def close_position(account_name: str, ticket: int, user: str = Depends(_verify_auth)):
+async def close_position(account_name: str, ticket: int, user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf)):
     """Close a position fully."""
     if not _executor:
         raise HTTPException(status_code=503, detail="Trading not initialized")
@@ -218,7 +224,7 @@ async def close_position(account_name: str, ticket: int, user: str = Depends(_ve
 @app.post("/api/modify-sl/{account_name}/{ticket}", response_class=HTMLResponse)
 async def modify_sl(
     account_name: str, ticket: int, request: Request,
-    user: str = Depends(_verify_auth),
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
 ):
     """Modify SL on a position."""
     if not _executor:
@@ -242,7 +248,7 @@ async def modify_sl(
 @app.post("/api/modify-tp/{account_name}/{ticket}", response_class=HTMLResponse)
 async def modify_tp(
     account_name: str, ticket: int, request: Request,
-    user: str = Depends(_verify_auth),
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
 ):
     """Modify TP on a position."""
     if not _executor:
@@ -266,7 +272,7 @@ async def modify_tp(
 @app.post("/api/close-partial/{account_name}/{ticket}", response_class=HTMLResponse)
 async def close_partial(
     account_name: str, ticket: int, request: Request,
-    user: str = Depends(_verify_auth),
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
 ):
     """Partial close a position."""
     if not _executor:
@@ -326,7 +332,7 @@ async def emergency_preview(request: Request, user: str = Depends(_verify_auth))
 
 
 @app.post("/api/emergency-close")
-async def emergency_close_endpoint(user: str = Depends(_verify_auth)):
+async def emergency_close_endpoint(user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf)):
     """Execute emergency close: close all positions, cancel all orders, pause executor."""
     if not _executor:
         raise HTTPException(status_code=503, detail="Trading not initialized")
@@ -338,7 +344,7 @@ async def emergency_close_endpoint(user: str = Depends(_verify_auth)):
 
 
 @app.post("/api/resume-trading")
-async def resume_trading(user: str = Depends(_verify_auth)):
+async def resume_trading(user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf)):
     """Re-enable trading after kill switch."""
     if not _executor:
         raise HTTPException(status_code=503, detail="Trading not initialized")
@@ -455,8 +461,9 @@ async def _get_accounts_overview() -> list[dict]:
             except Exception:
                 pass
 
-        trade_count = await db.get_daily_stat(acct_name, "trades_count")
-        msg_count = await db.get_daily_stat(acct_name, "server_messages")
+        stats = await db.get_daily_stats_batch(acct_name)
+        trade_count = stats["trades_count"]
+        msg_count = stats["server_messages"]
 
         # EXEC-04: Calculate daily limit percentage
         daily_limit_pct = (trade_count / max_trades * 100) if max_trades > 0 else 0
