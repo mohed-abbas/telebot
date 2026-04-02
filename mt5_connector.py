@@ -1,8 +1,8 @@
 """MT5 connection abstraction layer.
 
 Supports two backends:
-  - mt5linux (Wine + RPyC) — free, self-hosted, primary
-  - MetaAPI (cloud) — paid fallback
+  - dry_run — logs everything, executes nothing (testing)
+  - rest_api — REST bridge to MT5 (production)
 
 The rest of the codebase only imports this module, never the backend directly.
 """
@@ -14,6 +14,8 @@ import logging
 import os
 from dataclasses import dataclass
 from enum import Enum
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -243,14 +245,16 @@ class DryRunConnector(MT5Connector):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# MT5LINUX BACKEND — Wine + RPyC (primary production backend)
+# REST API BACKEND — connects to MT5 via HTTP REST server
 # ═══════════════════════════════════════════════════════════════════════
 
 
-class MT5LinuxConnector(MT5Connector):
-    """Connects to MT5 via mt5linux (Wine + RPyC bridge).
+class RestApiConnector(MT5Connector):
+    """Connects to MT5 via a REST API server (production backend).
 
-    Requires an MT5 terminal running in Wine with RPyC server on port 18812.
+    The REST server runs on a Windows VPS with native MT5 access.
+    For local development, the mt5-simulator Docker container provides
+    the same API.
     """
 
     def __init__(
@@ -260,148 +264,134 @@ class MT5LinuxConnector(MT5Connector):
         login: int,
         password: str,
         host: str = "localhost",
-        port: int = 18812,
+        port: int = 8001,
+        api_key: str = "",
+        use_tls: bool = True,
         magic_number: int = 202603,
         password_env: str = "",
     ):
         super().__init__(account_name, server, login, password, magic_number=magic_number, password_env=password_env)
         self.host = host
         self.port = port
-        self._mt5 = None
+        self.api_key = api_key
+        scheme = "https" if use_tls else "http"
+        self._base_url = f"{scheme}://{host}:{port}"
+        self._http: httpx.AsyncClient | None = None
+
+    def _ensure_client(self) -> httpx.AsyncClient:
+        """Create or return the HTTP client."""
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(
+                base_url=self._base_url,
+                timeout=15.0,
+                headers={"X-API-Key": self.api_key},
+            )
+        return self._http
+
+    async def _request(self, method: str, path: str, **kwargs) -> dict | None:
+        """Make an HTTP request with retry logic. Returns parsed data or None on error."""
+        client = self._ensure_client()
+        last_exc = None
+        for attempt in range(3):  # up to 3 attempts
+            try:
+                resp = await client.request(method, path, **kwargs)
+                if resp.status_code == 401:
+                    logger.error("%s: REST API auth failed (401)", self.account_name)
+                    return None
+                if resp.status_code == 503:
+                    self._connected = False
+                    logger.warning("%s: REST API reports not connected (503)", self.account_name)
+                    return None
+                body = resp.json()
+                if not body.get("ok"):
+                    error = body.get("error", {})
+                    logger.warning("%s: REST API error: %s — %s", self.account_name, error.get("code"), error.get("message"))
+                    return None
+                return body.get("data")
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+                last_exc = exc
+                if attempt < 2:
+                    logger.warning("%s: REST request failed (attempt %d): %s", self.account_name, attempt + 1, exc)
+                    await asyncio.sleep(1)
+                continue
+            except Exception as exc:
+                logger.error("%s: Unexpected REST error: %s", self.account_name, exc)
+                return None
+        logger.error("%s: REST request failed after 3 attempts: %s", self.account_name, last_exc)
+        self._connected = False
+        return None
 
     async def ping(self) -> bool:
-        """Check if MT5 connection is alive via terminal_info().connected."""
-        if not self._mt5:
+        data = await self._request("GET", "/api/v1/ping")
+        if data is None:
             return False
-        try:
-            info = self._mt5.terminal_info()
-            if info is None:
-                return False
-            return bool(info.connected)
-        except (EOFError, ConnectionError, OSError) as exc:
-            logger.warning("%s: Ping failed: %s", self.account_name, exc)
-            self._connected = False
-            return False
-        except Exception as exc:
-            logger.error("%s: Unexpected ping error: %s", self.account_name, exc)
-            self._connected = False
-            return False
+        return bool(data.get("alive"))
 
     async def connect(self, password: str | None = None) -> bool:
-        try:
-            from mt5linux import MetaTrader5
-
-            loop = asyncio.get_event_loop()
-
-            self._mt5 = await loop.run_in_executor(
-                None, lambda: MetaTrader5(host=self.host, port=self.port)
-            )
-            await loop.run_in_executor(None, self._mt5.initialize)
-
-            # Use provided password, or re-read from env, or use stored (initial connect)
-            pwd = password or (os.environ.get(self.password_env, "") if self.password_env else "") or self.password
-            if not pwd:
-                logger.error("%s: No password available for connect", self.account_name)
-                self._connected = False
-                return False
-
-            result = await loop.run_in_executor(
-                None, lambda: self._mt5.login(login=self.login, password=pwd, server=self.server)
-            )
-            if not result:
-                error = self._mt5.last_error()
-                logger.error("%s: MT5 login failed: %s", self.account_name, error)
-                self._connected = False
-                return False
-
-            info = await loop.run_in_executor(None, self._mt5.account_info)
-            logger.info(
-                "%s: Connected — balance=%.2f equity=%.2f",
-                self.account_name, info.balance, info.equity,
-            )
+        pwd = password or (os.environ.get(self.password_env, "") if self.password_env else "") or self.password
+        if not pwd:
+            logger.error("%s: No password available for connect", self.account_name)
+            return False
+        data = await self._request("POST", "/api/v1/connect", json={
+            "login": self.login,
+            "password": pwd,
+            "server": self.server,
+        })
+        if data and data.get("connected"):
             self._connected = True
             self._clear_password()
+            logger.info("%s: Connected via REST API", self.account_name)
             return True
-        except Exception as exc:
-            logger.error("%s: MT5 connection failed: %s", self.account_name, exc)
-            self._connected = False
-            return False
+        self._connected = False
+        return False
 
     async def disconnect(self) -> None:
-        if self._mt5:
-            try:
-                self._mt5.shutdown()
-            except Exception:
-                pass
+        await self._request("POST", "/api/v1/disconnect")
         self._connected = False
+        if self._http:
+            await self._http.aclose()
+            self._http = None
         logger.info("%s: Disconnected", self.account_name)
 
     async def get_price(self, symbol: str) -> tuple[float, float] | None:
-        if not self._mt5 or not self._connected:
+        data = await self._request("GET", f"/api/v1/price/{symbol}")
+        if data is None:
             return None
-        try:
-            tick = self._mt5.symbol_info_tick(symbol)
-            if tick is None:
-                return None
-            return (tick.bid, tick.ask)
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return None
-        except Exception as exc:
-            logger.error("%s: get_price failed: %s", self.account_name, exc)
-            return None
+        return (data["bid"], data["ask"])
 
     async def get_account_info(self) -> AccountInfo | None:
-        if not self._mt5 or not self._connected:
+        data = await self._request("GET", "/api/v1/account")
+        if data is None:
             return None
-        try:
-            info = self._mt5.account_info()
-            if info is None:
-                return None
-            return AccountInfo(
-                balance=info.balance,
-                equity=info.equity,
-                margin=info.margin,
-                free_margin=info.margin_free,
-                currency=info.currency,
-            )
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return None
-        except Exception as exc:
-            logger.error("%s: get_account_info failed: %s", self.account_name, exc)
-            return None
+        return AccountInfo(
+            balance=data["balance"],
+            equity=data["equity"],
+            margin=data["margin"],
+            free_margin=data["free_margin"],
+            currency=data.get("currency", "USD"),
+        )
 
     async def get_positions(self, symbol: str | None = None) -> list[Position]:
-        if not self._mt5 or not self._connected:
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+        data = await self._request("GET", "/api/v1/positions", params=params)
+        if data is None:
             return []
-        try:
-            if symbol:
-                raw = self._mt5.positions_get(symbol=symbol)
-            else:
-                raw = self._mt5.positions_get()
-            if raw is None:
-                return []
-            positions = []
-            for p in raw:
-                positions.append(Position(
-                    ticket=p.ticket,
-                    symbol=p.symbol,
-                    direction="buy" if p.type == 0 else "sell",
-                    volume=p.volume,
-                    open_price=p.price_open,
-                    sl=p.sl,
-                    tp=p.tp,
-                    profit=p.profit,
-                    comment=p.comment,
-                ))
-            return positions
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return []
-        except Exception as exc:
-            logger.error("%s: get_positions failed: %s", self.account_name, exc)
-            return []
+        return [
+            Position(
+                ticket=p["ticket"],
+                symbol=p["symbol"],
+                direction=p["direction"],
+                volume=p["volume"],
+                open_price=p["open_price"],
+                sl=p["sl"],
+                tp=p["tp"],
+                profit=p.get("profit", 0.0),
+                comment=p.get("comment", ""),
+            )
+            for p in data.get("positions", [])
+        ]
 
     async def open_order(
         self,
@@ -413,203 +403,76 @@ class MT5LinuxConnector(MT5Connector):
         tp: float = 0.0,
         comment: str = "",
     ) -> OrderResult:
-        if not self._mt5 or not self._connected:
-            return OrderResult(success=False, error="Not connected")
-        try:
-            import MetaTrader5 as mt5_const
-
-            type_map = {
-                OrderType.MARKET_BUY: mt5_const.ORDER_TYPE_BUY,
-                OrderType.MARKET_SELL: mt5_const.ORDER_TYPE_SELL,
-                OrderType.BUY_LIMIT: mt5_const.ORDER_TYPE_BUY_LIMIT,
-                OrderType.SELL_LIMIT: mt5_const.ORDER_TYPE_SELL_LIMIT,
-                OrderType.BUY_STOP: mt5_const.ORDER_TYPE_BUY_STOP,
-                OrderType.SELL_STOP: mt5_const.ORDER_TYPE_SELL_STOP,
-            }
-
-            # Get fill price for market orders
-            if order_type in (OrderType.MARKET_BUY, OrderType.MARKET_SELL):
-                tick = self._mt5.symbol_info_tick(symbol)
-                if tick is None:
-                    return OrderResult(success=False, error="Cannot get price")
-                price = tick.ask if order_type == OrderType.MARKET_BUY else tick.bid
-                action = mt5_const.TRADE_ACTION_DEAL
-            else:
-                action = mt5_const.TRADE_ACTION_PENDING
-
-            request = {
-                "action": action,
-                "symbol": symbol,
-                "volume": volume,
-                "type": type_map[order_type],
-                "price": price,
-                "sl": sl,
-                "tp": tp,
-                "deviation": 20,  # max slippage in points
-                "magic": self.magic_number,
-                "comment": comment or "telebot",
-                "type_time": mt5_const.ORDER_TIME_GTC,
-                "type_filling": mt5_const.ORDER_FILLING_IOC,
-            }
-
-            result = self._mt5.order_send(request)
-            if result is None:
-                error = self._mt5.last_error()
-                return OrderResult(success=False, error=str(error))
-
-            if result.retcode != mt5_const.TRADE_RETCODE_DONE:
-                return OrderResult(
-                    success=False,
-                    error=f"retcode={result.retcode} comment={result.comment}",
-                )
-
+        data = await self._request("POST", "/api/v1/order", json={
+            "symbol": symbol,
+            "order_type": order_type.value,
+            "volume": volume,
+            "price": price,
+            "sl": sl,
+            "tp": tp,
+            "comment": comment,
+            "magic": self.magic_number,
+        })
+        if data is None:
+            return OrderResult(success=False, error="REST API request failed")
+        if data.get("success"):
             logger.info(
                 "%s: Order opened — ticket=%d price=%.2f vol=%.2f",
-                self.account_name, result.order, result.price, result.volume,
+                self.account_name, data["ticket"], data["price"], data["volume"],
             )
             return OrderResult(
                 success=True,
-                ticket=result.order,
-                price=result.price,
-                volume=result.volume,
+                ticket=data["ticket"],
+                price=data["price"],
+                volume=data["volume"],
             )
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return OrderResult(success=False, error="Connection lost")
-        except Exception as exc:
-            logger.error("%s: open_order failed: %s", self.account_name, exc)
-            return OrderResult(success=False, error=str(exc))
+        return OrderResult(success=False, error=data.get("error", "Unknown error"))
 
     async def modify_position(
         self, ticket: int, sl: float | None = None, tp: float | None = None
     ) -> OrderResult:
-        if not self._mt5 or not self._connected:
-            return OrderResult(success=False, error="Not connected")
-        try:
-            import MetaTrader5 as mt5_const
-
-            # Get current position to fill in unchanged values
-            positions = self._mt5.positions_get(ticket=ticket)
-            if not positions:
-                return OrderResult(success=False, ticket=ticket, error="Position not found")
-            pos = positions[0]
-
-            request = {
-                "action": mt5_const.TRADE_ACTION_SLTP,
-                "position": ticket,
-                "symbol": pos.symbol,
-                "sl": sl if sl is not None else pos.sl,
-                "tp": tp if tp is not None else pos.tp,
-            }
-
-            result = self._mt5.order_send(request)
-            if result is None or result.retcode != mt5_const.TRADE_RETCODE_DONE:
-                error = str(self._mt5.last_error()) if result is None else result.comment
-                return OrderResult(success=False, ticket=ticket, error=error)
-
-            logger.info("%s: Position %d modified — sl=%.2f tp=%.2f", self.account_name, ticket, request["sl"], request["tp"])
+        data = await self._request("PUT", f"/api/v1/position/{ticket}", json={
+            "sl": sl,
+            "tp": tp,
+        })
+        if data is None:
+            return OrderResult(success=False, ticket=ticket, error="REST API request failed")
+        if data.get("success"):
             return OrderResult(success=True, ticket=ticket)
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return OrderResult(success=False, ticket=ticket, error="Connection lost")
-        except Exception as exc:
-            logger.error("%s: modify_position failed: %s", self.account_name, exc)
-            return OrderResult(success=False, ticket=ticket, error=str(exc))
+        return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 
     async def close_position(self, ticket: int, volume: float | None = None) -> OrderResult:
-        if not self._mt5 or not self._connected:
-            return OrderResult(success=False, error="Not connected")
-        try:
-            import MetaTrader5 as mt5_const
-
-            positions = self._mt5.positions_get(ticket=ticket)
-            if not positions:
-                return OrderResult(success=False, ticket=ticket, error="Position not found")
-            pos = positions[0]
-
-            close_volume = volume if volume and volume < pos.volume else pos.volume
-            close_type = mt5_const.ORDER_TYPE_SELL if pos.type == 0 else mt5_const.ORDER_TYPE_BUY
-
-            tick = self._mt5.symbol_info_tick(pos.symbol)
-            if tick is None:
-                return OrderResult(success=False, ticket=ticket, error="Cannot get price")
-            close_price = tick.bid if pos.type == 0 else tick.ask
-
-            request = {
-                "action": mt5_const.TRADE_ACTION_DEAL,
-                "position": ticket,
-                "symbol": pos.symbol,
-                "volume": close_volume,
-                "type": close_type,
-                "price": close_price,
-                "deviation": 20,
-                "magic": self.magic_number,
-                "comment": "telebot_close",
-                "type_filling": mt5_const.ORDER_FILLING_IOC,
-            }
-
-            result = self._mt5.order_send(request)
-            if result is None or result.retcode != mt5_const.TRADE_RETCODE_DONE:
-                error = str(self._mt5.last_error()) if result is None else result.comment
-                return OrderResult(success=False, ticket=ticket, error=error)
-
-            logger.info("%s: Position %d closed — vol=%.2f price=%.2f", self.account_name, ticket, close_volume, close_price)
-            return OrderResult(success=True, ticket=ticket, price=close_price, volume=close_volume)
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return OrderResult(success=False, ticket=ticket, error="Connection lost")
-        except Exception as exc:
-            logger.error("%s: close_position failed: %s", self.account_name, exc)
-            return OrderResult(success=False, ticket=ticket, error=str(exc))
+        body = {}
+        if volume is not None:
+            body["volume"] = volume
+        data = await self._request("DELETE", f"/api/v1/position/{ticket}", json=body if body else None)
+        if data is None:
+            return OrderResult(success=False, ticket=ticket, error="REST API request failed")
+        if data.get("success"):
+            return OrderResult(
+                success=True,
+                ticket=data.get("ticket", ticket),
+                price=data.get("price", 0.0),
+                volume=data.get("volume", 0.0),
+            )
+        return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 
     async def cancel_pending(self, ticket: int) -> OrderResult:
-        if not self._mt5 or not self._connected:
-            return OrderResult(success=False, error="Not connected")
-        try:
-            import MetaTrader5 as mt5_const
-            request = {
-                "action": mt5_const.TRADE_ACTION_REMOVE,
-                "order": ticket,
-            }
-            result = self._mt5.order_send(request)
-            if result is None or result.retcode != mt5_const.TRADE_RETCODE_DONE:
-                error = str(self._mt5.last_error()) if result is None else result.comment
-                return OrderResult(success=False, ticket=ticket, error=error)
+        data = await self._request("DELETE", f"/api/v1/pending-order/{ticket}")
+        if data is None:
+            return OrderResult(success=False, ticket=ticket, error="REST API request failed")
+        if data.get("success"):
             return OrderResult(success=True, ticket=ticket)
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return OrderResult(success=False, ticket=ticket, error="Connection lost")
-        except Exception as exc:
-            return OrderResult(success=False, ticket=ticket, error=str(exc))
+        return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 
     async def get_pending_orders(self, symbol: str | None = None) -> list[dict]:
-        if not self._mt5 or not self._connected:
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+        data = await self._request("GET", "/api/v1/pending-orders", params=params)
+        if data is None:
             return []
-        try:
-            if symbol:
-                orders = self._mt5.orders_get(symbol=symbol)
-            else:
-                orders = self._mt5.orders_get()
-            if orders is None:
-                return []
-            return [
-                {
-                    "ticket": o.ticket,
-                    "symbol": o.symbol,
-                    "type": o.type,
-                    "volume": o.volume_current,
-                    "price": o.price_open,
-                    "sl": o.sl,
-                    "tp": o.tp,
-                }
-                for o in orders
-            ]
-        except (EOFError, ConnectionError, OSError):
-            self._connected = False
-            return []
-        except Exception as exc:
-            logger.error("%s: get_pending_orders failed: %s", self.account_name, exc)
-            return []
+        return data.get("orders", [])
 
 
 def create_connector(
@@ -625,11 +488,13 @@ def create_connector(
     password_env = kwargs.get("password_env", "")
     if backend == "dry_run":
         return DryRunConnector(account_name, server, login, password, magic_number=magic_number, password_env=password_env)
-    elif backend == "mt5linux":
-        return MT5LinuxConnector(
+    elif backend == "rest_api":
+        return RestApiConnector(
             account_name, server, login, password,
             host=kwargs.get("mt5_host", "localhost"),
-            port=kwargs.get("mt5_port", 18812),
+            port=kwargs.get("mt5_port", 8001),
+            api_key=kwargs.get("mt5_api_key", ""),
+            use_tls=kwargs.get("mt5_use_tls", True),
             magic_number=magic_number,
             password_env=password_env,
         )

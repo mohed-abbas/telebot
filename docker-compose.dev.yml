@@ -17,6 +17,17 @@ services:
       timeout: 3s
       retries: 5
 
+  mt5-simulator:
+    build: ./mt5-simulator
+    container_name: mt5-simulator
+    restart: unless-stopped
+    environment:
+      MT5_API_KEY: ${MT5_API_KEY:-dev-api-key}
+      SIMULATOR_PRICE_MODE: static
+      SIMULATOR_BALANCE: "10000.0"
+    ports:
+      - "8001:8001"
+
   telebot:
     build: .
     container_name: telebot-dev
@@ -30,6 +41,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      mt5-simulator:
+        condition: service_started
     logging:
       driver: json-file
       options:

@@ -11,7 +11,7 @@
       "max_open_trades": 3,
       "enabled": true,
       "mt5_host": "mt5-vantage",
-      "mt5_port": 18812
+      "mt5_port": 8001
     },
     {
       "name": "FN-10k",
@@ -24,7 +24,7 @@
       "max_open_trades": 3,
       "enabled": true,
       "mt5_host": "mt5-fundednext",
-      "mt5_port": 18812
+      "mt5_port": 8002
     }
   ],
   "global": {

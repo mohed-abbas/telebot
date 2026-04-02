@@ -33,10 +33,12 @@ class Settings:
     # ── Trading ──
     trading_enabled: bool
     trading_dry_run: bool
-    mt5_backend: str  # "dry_run", "mt5linux"
+    mt5_backend: str  # "dry_run", "rest_api"
     mt5_host: str
     mt5_port: int
     mt5_magic_number: int
+    mt5_api_key: str
+    mt5_use_tls: bool
     accounts_config_path: str
     database_url: str
 
@@ -80,6 +82,8 @@ def _load_settings() -> Settings:
         mt5_host=_opt("MT5_HOST", "localhost"),
         mt5_port=int(_opt("MT5_PORT", "18812")),
         mt5_magic_number=int(_opt("MT5_MAGIC_NUMBER", "202603")),
+        mt5_api_key=_opt("MT5_API_KEY", ""),
+        mt5_use_tls=_opt("MT5_USE_TLS", "true").lower() in ("true", "1", "yes"),
         accounts_config_path=_opt("ACCOUNTS_CONFIG", "accounts.json"),
         database_url=_req("DATABASE_URL", validator=_is_pg_url),
         dashboard_enabled=_opt("DASHBOARD_ENABLED", "true").lower() in ("true", "1", "yes"),

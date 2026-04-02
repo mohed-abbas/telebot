@@ -19,10 +19,10 @@ import pytest
 from mt5_connector import (
     AccountInfo,
     DryRunConnector,
-    MT5LinuxConnector,
     OrderResult,
     OrderType,
     Position,
+    RestApiConnector,
     create_connector,
 )
 
@@ -324,9 +324,13 @@ class TestCreateConnector:
         c = create_connector("dry_run", "acct", "Server", 111, "pwd")
         assert isinstance(c, DryRunConnector)
 
-    def test_mt5linux_backend(self):
-        c = create_connector("mt5linux", "acct", "Server", 111, "pwd")
-        assert isinstance(c, MT5LinuxConnector)
+    def test_rest_api_backend(self):
+        c = create_connector("rest_api", "acct", "Server", 111, "pwd",
+                             mt5_host="myhost", mt5_port=9000, mt5_api_key="key1")
+        assert isinstance(c, RestApiConnector)
+        assert c.host == "myhost"
+        assert c.port == 9000
+        assert c.api_key == "key1"
 
     def test_invalid_backend_raises(self):
         with pytest.raises(ValueError, match="Unknown MT5 backend"):
