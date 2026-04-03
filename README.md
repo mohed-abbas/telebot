@@ -23,8 +23,8 @@ A Python bot that listens to Telegram group chats, relays messages to Discord, a
                      │                         │
                proxy-net                  data-net
                      │                    │         │
-                  nginx ◄─┘          postgres    mt5-bridge
-                  (HTTPS)            (shared)    (Wine+RPyC)
+                  nginx ◄─┘          postgres    mt5-rest-server
+                  (HTTPS)            (shared)    (REST API on Windows)
 ```
 
 ### Features
@@ -44,7 +44,7 @@ A Python bot that listens to Telegram group chats, relays messages to Discord, a
 | Telegram client | [Telethon](https://docs.telethon.dev/) v1.42             | MTProto userbot — real-time message listener     |
 | Discord output  | Discord Webhooks                                         | Relay signals, trade fills, and alerts           |
 | HTTP client     | [httpx](https://www.python-httpx.org/) v0.28             | Async HTTP for Discord + external calls          |
-| Trading         | [mt5linux](https://pypi.org/project/mt5linux/) + RPyC    | MT5 Python API bridge for Linux                  |
+| Trading         | REST API + [httpx](https://www.python-httpx.org/)        | MT5 via REST server on Windows VPS               |
 | Database        | [asyncpg](https://github.com/MagicStack/asyncpg) + PostgreSQL | Trade log, signal audit, analytics          |
 | Dashboard       | [FastAPI](https://fastapi.tiangolo.com/) + Jinja2        | Web UI with kill switch and analytics            |
 | Config          | [python-dotenv](https://pypi.org/project/python-dotenv/) | Loads `.env` file                                |
@@ -61,7 +61,7 @@ telebot/
 ├── models.py               # SignalAction, AccountConfig, GlobalConfig
 ├── trade_manager.py        # Risk calc, order placement, zone logic
 ├── executor.py             # Heartbeat, reconnect, kill switch
-├── mt5_connector.py        # MT5 abstraction (DryRun + MT5Linux backends)
+├── mt5_connector.py        # MT5 abstraction (DryRun + RestApi backends)
 ├── notifier.py             # Discord notifications (fills, alerts)
 ├── db.py                   # asyncpg database layer
 ├── dashboard.py            # FastAPI web dashboard
@@ -72,11 +72,15 @@ telebot/
 ├── docker-compose.yml      # Production compose (proxy-net + data-net)
 ├── docker-compose.dev.yml  # Dev compose with local PostgreSQL
 ├── Dockerfile              # Python 3.12 slim image
-├── mt5-bridge/             # Wine + MT5 + RPyC bridge (see guide)
-│   ├── Dockerfile          # Ubuntu 22.04 + Wine 6.0 + Xvfb + noVNC
-│   ├── docker-compose.yml  # Single container, multi-account via MT5_ACCOUNTS
-│   ├── scripts/entrypoint.sh  # Multi-account init + dynamic supervisord.conf
-│   └── MT5_BRIDGE_GUIDE.md # Full setup documentation
+├── mt5-rest-server/        # REST API wrapping native MT5 (Windows VPS)
+│   ├── server.py           # FastAPI app — all mt5.* via run_in_executor
+│   ├── config.py           # Env var reader (API key, MT5 credentials)
+│   ├── requirements.txt    # fastapi, uvicorn, MetaTrader5
+│   └── install-service.ps1 # NSSM service installer (one per account)
+├── mt5-simulator/          # Docker-based MT5 simulator (local dev)
+│   ├── simulator.py        # FastAPI app — same REST API, in-memory state
+│   ├── state.py            # Positions, orders, P&L calculation
+│   └── Dockerfile          # python:3.12-slim + uvicorn
 ├── nginx/                  # Reverse proxy config
 │   └── telebot.conf
 ├── templates/              # Dashboard HTML templates
@@ -274,64 +278,43 @@ The bot auto-restarts on crashes and VPS reboots (`restart: unless-stopped`).
 
 No code changes or Docker rebuild needed.
 
-## MT5 Bridge (Live Trading)
+## MT5 Trading (REST API)
 
-A single container runs MetaTrader 5 inside Wine on Linux, serving **multiple broker
-accounts** from isolated Wine prefixes. Each account gets its own MT5 terminal and
-RPyC server on a unique port.
+The telebot connects to MetaTrader 5 via a REST API. The MT5 REST server runs natively
+on a Windows machine (VPS or home mini PC), one FastAPI process per broker account.
 
 ```
-  ┌─────────────────────────────────┐         ┌──────────────────┐
-  │  mt5-bridge (single container)  │         │  telebot          │
-  │                                 │         │                   │
-  │  Xvfb + noVNC      (shared)    │         │                   │
-  │                                 │  RPyC   │                   │
-  │  Wine + MT5 vantage     :18812 │◄────────│  MT5LinuxConnector│
-  │  Wine + MT5 fundednext  :18813 │◄────────│  (per-account)    │
-  │  Wine + MT5 ...         :18814 │         │                   │
-  │                                 │         │                   │
-  └────────────┬────────────────────┘         └────────┬──────────┘
-               │              data-net                 │
-               └───────────────────────────────────────┘
+  Hostinger VPS (Linux)              Windows (VPS or mini PC)
+  ┌──────────────────┐              ┌──────────────────────────┐
+  │ telebot           │              │ mt5-rest-server          │
+  │                   │    HTTPS     │                          │
+  │ RestApiConnector──┼────:8001───► │ server.py #1 → MT5 #1   │
+  │ RestApiConnector──┼────:8002───► │ server.py #2 → MT5 #2   │
+  │                   │              │ ...                      │
+  └──────────────────┘              └──────────────────────────┘
 ```
 
-Accounts are configured via the `MT5_ACCOUNTS` env var (e.g., `"vantage:18812,fundednext:18813"`).
-The entrypoint initializes each Wine prefix on first run and generates the supervisord
-config dynamically. Adding an account = add to env var + add volume mount.
+Each account is fully isolated: separate MT5 terminal, separate Python process,
+separate port, separate NSSM Windows service.
 
-### Quick Start
+### Deployment Options
 
-```bash
-# 1. Build the bridge image
-cd /home/murx/apps/mt5-bridge
-docker compose build
+- **Windows VPS** (~$10-20/mo) — see [docs/architecture-rest-api-bridge.md](docs/architecture-rest-api-bridge.md)
+- **Home mini PC** ($0/mo) — see [docs/deployment-home-mini-pc.md](docs/deployment-home-mini-pc.md)
 
-# 2. Start with VNC enabled for MT5 setup
-ENABLE_VNC=true docker compose up -d
-
-# 3. Install MT5 via noVNC (SSH tunnel + browser)
-ssh -L 6080:localhost:6080 murx@vps
-# Open http://localhost:6080/vnc.html
-docker exec -d mt5-bridge bash -c \
-  'DISPLAY=:99 WINEPREFIX=/root/.wine-vantage WINEDEBUG=-all wine /opt/mt5setup.exe'
-
-# 4. Log into broker, save password, enable algo trading
-# 5. Disable VNC for production
-docker compose down
-docker compose up -d
-```
-
-For the full guide with troubleshooting, compatibility notes, and adding new accounts,
-see **[mt5-bridge/MT5_BRIDGE_GUIDE.md](mt5-bridge/MT5_BRIDGE_GUIDE.md)**.
+Switching between them is just a hostname change in `accounts.json`.
 
 ## Development
 
 ### Local Dev Environment
 
 ```bash
-# Start local PostgreSQL + bot in dry-run mode
+# Start local PostgreSQL + MT5 simulator + bot
 docker compose -f docker-compose.dev.yml up --build
 ```
+
+This starts the MT5 simulator on port 8001, allowing full pipeline testing
+(Telegram signal → parse → REST execution → Discord notification) on Mac/Linux.
 
 Dashboard at http://localhost:8080 (admin / devpass123).
 
