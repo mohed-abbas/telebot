@@ -3,7 +3,9 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Support ENV_FILE for running multiple instances via NSSM services
+env_file = os.environ.get("ENV_FILE", ".env")
+load_dotenv(env_file)
 
 API_KEY = os.environ.get("MT5_API_KEY", "")
 MT5_LOGIN = int(os.environ.get("MT5_LOGIN", "0"))
