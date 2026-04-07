@@ -22,7 +22,7 @@ from models import (
     SignalAction,
     SignalType,
 )
-from mt5_connector import MT5Connector, OrderType, OrderResult
+from mt5_connector import MT5Connector, DryRunConnector, OrderType, OrderResult
 from risk_calculator import (
     calculate_lot_size,
     calculate_sl_distance,
@@ -188,6 +188,12 @@ class TradeManager:
             if pos.direction == signal.direction.value:
                 reason = f"Already have a {signal.direction.value} position open on {signal.symbol}"
                 return {"account": name, "status": "skipped", "reason": reason}
+
+        # ── Feed simulated price for dry-run connectors ────────────────
+        if isinstance(connector, DryRunConnector) and signal.entry_zone:
+            zone_mid = (signal.entry_zone[0] + signal.entry_zone[1]) / 2
+            spread = zone_mid * 0.0001  # ~1 pip spread
+            connector.set_simulated_price(signal.symbol, zone_mid - spread / 2, zone_mid + spread / 2)
 
         # ── Get current price ───────────────────────────────────────────
         price_data = await connector.get_price(signal.symbol)

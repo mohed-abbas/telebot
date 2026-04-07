@@ -23,7 +23,7 @@
         <tbody>
             {% for s in signals %}
             <tr>
-                <td class="text-slate-400 text-xs">{{ s.timestamp[:19] }}</td>
+                <td class="text-slate-400 text-xs">{{ s.timestamp.strftime('%Y-%m-%d %H:%M:%S') if s.timestamp else '-' }}</td>
                 <td>
                     {% if s.signal_type == 'open' %}
                         <span class="text-indigo-400">OPEN</span>

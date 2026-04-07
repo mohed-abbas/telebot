@@ -48,6 +48,10 @@ class Settings:
     dashboard_user: str
     dashboard_pass: str
 
+    # ── Simulation (dry-run only) ──
+    sim_volatility_multiplier: float
+    sim_initial_balance: float
+
 
 def _load_settings() -> Settings:
     def _req(key: str, validator=None) -> str:
@@ -90,6 +94,8 @@ def _load_settings() -> Settings:
         dashboard_port=int(_opt("DASHBOARD_PORT", "8080")),
         dashboard_user=_opt("DASHBOARD_USER", "admin"),
         dashboard_pass=_req("DASHBOARD_PASS"),
+        sim_volatility_multiplier=float(_opt("SIM_VOLATILITY_MULTIPLIER", "1.0")),
+        sim_initial_balance=float(_opt("SIM_INITIAL_BALANCE", "10000")),
     )
 
 

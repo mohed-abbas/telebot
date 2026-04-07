@@ -25,10 +25,12 @@ logger = logging.getLogger(__name__)
 
 
 class Executor:
-    def __init__(self, trade_manager: TradeManager, global_config: GlobalConfig, notifier: Notifier | None = None):
+    def __init__(self, trade_manager: TradeManager, global_config: GlobalConfig,
+                 notifier: Notifier | None = None, price_simulator=None):
         self.tm = trade_manager
         self.cfg = global_config
         self.notifier = notifier
+        self._price_simulator = price_simulator
         self._trading_paused: bool = False       # Kill switch flag
         self._reconnecting: set[str] = set()     # Account names currently reconnecting
         self._last_sync: dict[str, float] = {}   # account -> timestamp of last position sync
@@ -46,12 +48,28 @@ class Executor:
         return False
 
     async def start(self) -> None:
-        """Start background tasks (cleanup + heartbeat)."""
+        """Start background tasks (cleanup + heartbeat + simulation monitors)."""
+        if self._price_simulator:
+            await self._price_simulator.start()
+        # Start monitoring loops for dry-run connectors
+        from mt5_connector import DryRunConnector
+        for conn in self.tm.connectors.values():
+            if isinstance(conn, DryRunConnector) and conn.connected:
+                await conn.start_monitoring()
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         logger.info("Executor started — cleanup + heartbeat loops running")
 
     async def stop(self) -> None:
+        # Stop dry-run monitoring loops
+        from mt5_connector import DryRunConnector
+        for conn in self.tm.connectors.values():
+            if isinstance(conn, DryRunConnector):
+                await conn.stop_monitoring()
+        # Stop price simulator
+        if self._price_simulator:
+            await self._price_simulator.stop()
+        # Stop background tasks
         for task in (self._cleanup_task, self._heartbeat_task):
             if task:
                 task.cancel()
@@ -131,6 +149,11 @@ class Executor:
                         continue  # Already reconnecting
                     if self._trading_paused:
                         continue  # Kill switch active, don't bother checking
+                    # Skip accounts that were never connected (e.g. no password configured)
+                    if not connector.password and not (
+                        connector.password_env and os.environ.get(connector.password_env)
+                    ):
+                        continue
                     alive = await connector.ping()
                     if not alive:
                         # Connection lost or broker disconnected — start reconnect

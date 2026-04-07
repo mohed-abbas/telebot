@@ -83,6 +83,14 @@ async def _setup_trading(http: httpx.AsyncClient):
     connectors = {}
     backend = settings.mt5_backend if not settings.trading_dry_run else "dry_run"
 
+    # Create price simulator for dry-run mode
+    price_simulator = None
+    if backend == "dry_run":
+        from price_simulator import PriceSimulator
+        price_simulator = PriceSimulator(
+            volatility_multiplier=settings.sim_volatility_multiplier,
+        )
+
     for raw in accts_raw:
         acct = AccountConfig(
             name=raw["name"],
@@ -112,6 +120,8 @@ async def _setup_trading(http: httpx.AsyncClient):
             password_env=acct.password_env,
             mt5_api_key=settings.mt5_api_key,
             mt5_use_tls=settings.mt5_use_tls,
+            price_simulator=price_simulator,
+            initial_balance=settings.sim_initial_balance,
         )
         connectors[acct.name] = conn
 
@@ -125,7 +135,39 @@ async def _setup_trading(http: httpx.AsyncClient):
         executions_webhook=settings.discord_webhook_executions or None,
         alerts_webhook=settings.discord_webhook_alerts or None,
     )
-    executor = Executor(tm, global_config, notifier=notifier)
+
+    # Set up SL/TP hit callback for dry-run connectors
+    if backend == "dry_run":
+        from mt5_connector import DryRunConnector
+
+        async def _on_sim_position_closed(account_name, position, close_price, pnl, reason):
+            """Callback fired when DryRunConnector closes a position via SL/TP or fills a pending order."""
+            try:
+                if reason in ("SL hit", "TP hit"):
+                    await db.update_trade_close(position.ticket, account_name, pnl, close_price)
+                    if notifier.alerts_url:
+                        sign = "+" if pnl >= 0 else ""
+                        await notifier.notify_alert(
+                            f"SIM {reason.upper()}: {account_name} #{position.ticket} "
+                            f"{position.symbol} {position.direction.upper()} — "
+                            f"closed @ {close_price:.2f} | P&L: {sign}${pnl:.2f}"
+                        )
+                elif reason == "pending_filled":
+                    await db.mark_pending_filled(position.ticket, account_name)
+                    if notifier.alerts_url:
+                        await notifier.notify_alert(
+                            f"SIM FILL: {account_name} #{position.ticket} "
+                            f"{position.symbol} {position.direction.upper()} "
+                            f"filled @ {position.open_price:.2f}"
+                        )
+            except Exception as exc:
+                logger.error("SIM callback error for %s: %s", account_name, exc)
+
+        for conn in connectors.values():
+            if isinstance(conn, DryRunConnector):
+                conn._on_position_closed = _on_sim_position_closed
+
+    executor = Executor(tm, global_config, notifier=notifier, price_simulator=price_simulator)
 
     mode = "DRY-RUN" if settings.trading_dry_run else backend.upper()
     logger.info(
@@ -335,6 +377,12 @@ async def main() -> None:
             task.cancel()
     finally:
         logger.info("Cleaning up...")
+        # Stop executor (simulation monitors, price simulator, background tasks)
+        if executor:
+            try:
+                await executor.stop()
+            except Exception:
+                pass
         # Disconnect Telethon client
         try:
             await client.disconnect()
