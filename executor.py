@@ -186,7 +186,8 @@ class Executor:
             await asyncio.sleep(delay)
             attempt += 1
             try:
-                await connector.disconnect()
+                # Reset local state only — don't call server disconnect
+                connector._connected = False
                 success = await asyncio.wait_for(connector.connect(), timeout=15)
                 if success:
                     # Full position sync before accepting signals (REL-02)

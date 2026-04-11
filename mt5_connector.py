@@ -593,21 +593,22 @@ class RestApiConnector(MT5Connector):
             "password": pwd,
             "server": self.server,
         })
-        if data and data.get("connected"):
+        if data and data.get("login"):
             self._connected = True
-            self._clear_password()
             logger.info("%s: Connected via REST API", self.account_name)
             return True
         self._connected = False
         return False
 
     async def disconnect(self) -> None:
-        await self._request("POST", "/api/v1/disconnect")
+        # Don't call /api/v1/disconnect — it triggers mt5.shutdown() on the server,
+        # killing the entire MT5 runtime. Just reset local state; reconnect will
+        # re-login via /api/v1/connect which calls mt5.login() (safe to call repeatedly).
         self._connected = False
         if self._http:
             await self._http.aclose()
             self._http = None
-        logger.info("%s: Disconnected", self.account_name)
+        logger.info("%s: Disconnected (local)", self.account_name)
 
     async def get_price(self, symbol: str) -> tuple[float, float] | None:
         data = await self._request("GET", f"/api/v1/price/{symbol}")
