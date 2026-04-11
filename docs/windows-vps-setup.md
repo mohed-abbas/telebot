@@ -1,37 +1,53 @@
 # Windows VPS Setup — MT5 REST Server
 
-Provider: verycloud.fr | Specs: 4 cores, 12GB RAM, 60GB storage, 10TB bandwidth
+Complete guide for setting up the MT5 REST API server on a Windows VPS.
 
 ## Architecture
 
 ```
-Linux VPS (your existing)          Windows VPS (verycloud.fr)
+Linux VPS (telebot)                Windows VPS (MT5)
 ┌──────────────────────┐          ┌──────────────────────────┐
 │ telebot (Docker)     │          │ MT5 Terminal #1 (GUI)    │
 │  - Telegram listener │          │ MT5 Terminal #2 (GUI)    │
 │  - Signal parser     │   HTTP   │                          │
-│  - Trade executor    │────────→ │ mt5-rest-server :8001    │
-│  - Dashboard         │          │ mt5-rest-server :8002    │
+│  - Trade executor    │────────→ │ uvicorn :8001 (account1) │
+│  - Dashboard         │          │ uvicorn :8002 (account2) │
 │  - PostgreSQL        │          │                          │
-└──────────────────────┘          │ (NSSM Windows services)  │
+└──────────────────────┘          │ (startup app, same       │
+                                  │  desktop session as MT5) │
                                   └──────────────────────────┘
 ```
 
+**Important:** The MT5 Python API uses Windows named pipes to communicate with
+the terminal. Both must run in the **same Windows desktop session**. Running
+uvicorn as a Windows service (NSSM/Session 0) will NOT work — it causes
+`IPC timeout` errors. See [docs/issues-solved.md](issues-solved.md#issue-10)
+for details.
+
 ---
+
+## Prerequisites
+
+- Windows VPS (Windows Server 2019/2022/2025)
+- RDP access (Microsoft Remote Desktop app on Mac, or mstsc on Windows)
+- Your broker's MT5 terminal installer
+- Linux VPS with telebot already deployed
 
 ## Step 1: Connect via RDP
 
-Use Remote Desktop to connect to your Windows VPS with the credentials from verycloud.fr.
+**On Mac:** Install "Microsoft Remote Desktop" from the Mac App Store (free).
+Add a new PC with your VPS IP, username (usually `Administrateur` or `Administrator`),
+and the password from your VPS provider.
+
+**On Windows:** Press `Win+R`, type `mstsc`, enter your VPS IP.
 
 ## Step 2: Install Python 3.12
 
 Open PowerShell **as Administrator**:
 
 ```powershell
-# Download Python 3.12 installer
 Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe" -OutFile "$env:TEMP\python-installer.exe"
 
-# Install silently (adds to PATH)
 Start-Process -Wait "$env:TEMP\python-installer.exe" -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1"
 ```
 
@@ -45,31 +61,17 @@ pip --version
 ## Step 3: Install Git
 
 ```powershell
-# Download Git installer
 Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/Git-2.47.1-64-bit.exe" -OutFile "$env:TEMP\git-installer.exe"
 
-# Install silently
 Start-Process -Wait "$env:TEMP\git-installer.exe" -ArgumentList "/VERYSILENT /NORESTART"
 ```
 
 Close and reopen PowerShell, verify: `git --version`
 
-## Step 4: Install NSSM (service manager)
+**Note:** If `git` is not recognized after reopening PowerShell, use the full path:
+`& "C:\Program Files\Git\bin\git.exe"`
 
-```powershell
-New-Item -ItemType Directory -Force -Path "C:\nssm"
-
-Invoke-WebRequest -Uri "https://nssm.cc/release/nssm-2.24.zip" -OutFile "$env:TEMP\nssm.zip"
-
-Expand-Archive "$env:TEMP\nssm.zip" -DestinationPath "$env:TEMP\nssm-extract" -Force
-
-Copy-Item "$env:TEMP\nssm-extract\nssm-2.24\win64\nssm.exe" "C:\nssm\nssm.exe"
-
-# Verify
-C:\nssm\nssm.exe version
-```
-
-## Step 5: Clone the project and set up the REST server
+## Step 4: Clone the project and set up the REST server
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "C:\Apps"
@@ -77,154 +79,178 @@ cd C:\Apps
 git clone https://github.com/YOUR_USERNAME/telebot.git
 cd telebot\mt5-rest-server
 
-# Create virtual environment
 python -m venv venv
-
-# Activate and install dependencies
 .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-## Step 6: Install MT5 Terminals
+## Step 5: Install MT5 Terminals
 
-One separate MT5 installation per account (Python API is singleton per process).
+Each account needs its own MT5 terminal copy (the Python API is a singleton per process).
+
+**First account — install from broker:**
+
+1. Download MT5 installer from your broker's website
+2. Run the installer (it installs to a default location like `C:\Program Files\MetaTrader 5\`)
+3. Launch the terminal, log in, and verify it connects (green icon in bottom-right)
+
+**Create a portable copy:**
 
 ```powershell
-New-Item -ItemType Directory -Force -Path "C:\MT5\Account1"
-New-Item -ItemType Directory -Force -Path "C:\MT5\Account2"
+Copy-Item "C:\Program Files\MetaTrader 5" -Destination "C:\MT5\Account1" -Recurse
 ```
 
-For each account:
-1. Download MT5 installer from your broker (FundedNext, Vantage, etc.)
-2. Install Account 1 to `C:\MT5\Account1\`
-3. Install Account 2 to `C:\MT5\Account2\`
-4. **Launch each terminal once** and log in manually to accept EULA
-5. Verify each terminal shows green connection icon (bottom-right)
+The terminal path will be: `C:\MT5\Account1\MetaTrader 5\terminal64.exe`
 
-## Step 7: Create .env files for each account
+**For additional accounts**, copy the same installation:
+
+```powershell
+Copy-Item "C:\Program Files\MetaTrader 5" -Destination "C:\MT5\Account2" -Recurse
+```
+
+**Launch each copy with `/portable` and log in:**
+
+```powershell
+Start-Process "C:\MT5\Account1\MetaTrader 5\terminal64.exe" -ArgumentList "/portable"
+```
+
+The `/portable` flag keeps each terminal's data (login, settings) in its own directory,
+preventing conflicts between accounts.
+
+## Step 6: Create .env files for each account
 
 ```powershell
 cd C:\Apps\telebot\mt5-rest-server
 ```
 
-Generate a secure API key:
+Generate a secure API key (use the same key for all accounts):
 
 ```powershell
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-Create `.env.account1`:
+Create `.env.account1` — replace placeholders with your actual values:
 
 ```powershell
-@"
-MT5_API_KEY=YOUR_GENERATED_API_KEY
-MT5_LOGIN=YOUR_ACCOUNT1_LOGIN
-MT5_PASSWORD=YOUR_ACCOUNT1_PASSWORD
-MT5_SERVER=FundedNext-Server
-MT5_TERMINAL_PATH=C:\MT5\Account1\terminal64.exe
+Set-Content -Path ".env.account1" -Value "MT5_API_KEY=YOUR_GENERATED_API_KEY
+MT5_LOGIN=YOUR_LOGIN_NUMBER
+MT5_PASSWORD=YOUR_PASSWORD
+MT5_SERVER=YourBroker-Server
+MT5_TERMINAL_PATH=C:\MT5\Account1\MetaTrader 5\terminal64.exe
 MT5_MAGIC_NUMBER=202603
-PORT=8001
-"@ | Out-File -Encoding utf8 .env.account1
+PORT=8001"
 ```
 
-Create `.env.account2`:
+Also copy it as `.env` (the server loads `.env` by default, `ENV_FILE` overrides it):
 
 ```powershell
-@"
-MT5_API_KEY=YOUR_GENERATED_API_KEY
-MT5_LOGIN=YOUR_ACCOUNT2_LOGIN
-MT5_PASSWORD=YOUR_ACCOUNT2_PASSWORD
-MT5_SERVER=FundedNext-Server
-MT5_TERMINAL_PATH=C:\MT5\Account2\terminal64.exe
-MT5_MAGIC_NUMBER=202603
-PORT=8002
-"@ | Out-File -Encoding utf8 .env.account2
+Copy-Item ".env.account1" ".env"
 ```
 
-Use the **same API key** for both (it just needs to match your Linux bot's `MT5_API_KEY`).
+**Finding the server name:** In MT5 terminal, go to File > Login to Trade Account. The
+server name is shown (e.g., `VantageInternational-Demo`, `FundedNext-Server`).
 
-## Step 8: Test manually
+## Step 7: Test manually
 
-Make sure the corresponding MT5 terminal is open, then:
+Make sure the MT5 terminal is open and connected, then:
 
 ```powershell
 cd C:\Apps\telebot\mt5-rest-server
-$env:ENV_FILE = ".env.account1"
 .\venv\Scripts\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8001
 ```
 
-In another PowerShell window:
+You should see:
+```
+MT5 initialized
+MT5 logged in — balance=10000.00 equity=10000.00
+Uvicorn running on http://0.0.0.0:8001
+```
+
+In another PowerShell window, test:
 
 ```powershell
-# Test ping (no auth needed)
-Invoke-RestMethod -Uri "http://localhost:8001/api/v1/ping"
+# Test ping (no auth)
+curl.exe http://localhost:8001/api/v1/ping
 
 # Test with auth
 $headers = @{"X-API-Key" = "YOUR_API_KEY"}
 Invoke-RestMethod -Uri "http://localhost:8001/api/v1/account" -Headers $headers
 ```
 
-If you see balance/equity, it works. Press `Ctrl+C` to stop.
+If you see balance/equity data, it works. Press `Ctrl+C` to stop.
 
-## Step 9: Install as Windows Services
+## Step 8: Configure Windows Firewall
 
-```powershell
-cd C:\Apps\telebot\mt5-rest-server
-powershell -ExecutionPolicy Bypass -File .\install-service.ps1
-```
-
-Start services:
-
-```powershell
-net start mt5-rest-account1
-net start mt5-rest-account2
-```
-
-Check status:
-
-```powershell
-Get-Service mt5-rest-*
-```
-
-## Step 10: Configure Windows Firewall
-
-Only allow your Linux VPS IP:
+Only allow your Linux VPS IP to access the MT5 ports:
 
 ```powershell
 $LinuxVpsIp = "YOUR_LINUX_VPS_IP"
 
-New-NetFirewallRule -DisplayName "MT5 REST API" `
+New-NetFirewallRule -DisplayName "MT5 REST API Allow Linux VPS" `
     -Direction Inbound `
     -Protocol TCP `
     -LocalPort 8001-8010 `
     -RemoteAddress $LinuxVpsIp `
-    -Action Allow
-
-New-NetFirewallRule -DisplayName "MT5 REST API Block Others" `
-    -Direction Inbound `
-    -Protocol TCP `
-    -LocalPort 8001-8010 `
-    -Action Block
+    -Action Allow -Profile Any
 ```
 
-## Step 11: Auto-start MT5 Terminals on Boot
+Windows Firewall blocks other inbound connections by default — no need for an explicit block rule.
+
+## Step 9: Set up auto-start (startup app)
+
+The MT5 terminal and uvicorn must run in the **same desktop session**. We use a
+startup batch file (not a Windows service) to ensure this.
+
+**Create the startup script:**
 
 ```powershell
-@"
-Start-Process "C:\MT5\Account1\terminal64.exe" -ArgumentList "/portable"
-Start-Process "C:\MT5\Account2\terminal64.exe" -ArgumentList "/portable"
-"@ | Out-File -Encoding utf8 "C:\Apps\start-mt5-terminals.ps1"
+$lines = @(
+    '@echo off',
+    'start "" "C:\MT5\Account1\MetaTrader 5\terminal64.exe" /portable',
+    'timeout /t 15 /nobreak >nul',
+    'cd /d C:\Apps\telebot\mt5-rest-server',
+    'set ENV_FILE=C:\Apps\telebot\mt5-rest-server\.env.account1',
+    'start /B "" "C:\Apps\telebot\mt5-rest-server\venv\Scripts\python.exe" -m uvicorn server:app --host 0.0.0.0 --port 8001'
+)
+$lines -join "`r`n" | Out-File -Encoding ascii "C:\Apps\start-all.bat"
+```
 
-# Add to Windows startup
+**Create a startup shortcut:**
+
+```powershell
 $shortcutPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StartMT5.lnk"
+Remove-Item $shortcutPath -ErrorAction SilentlyContinue
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = "powershell.exe"
-$shortcut.Arguments = "-ExecutionPolicy Bypass -File C:\Apps\start-mt5-terminals.ps1"
+$shortcut.TargetPath = "C:\Apps\start-all.bat"
+$shortcut.WindowStyle = 7
 $shortcut.Save()
 ```
 
-## Step 12: Configure Linux VPS
+**Configure Windows auto-login** (so the desktop session starts automatically after reboot):
+
+```powershell
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name AutoAdminLogon -Value "1"
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultUserName -Value "Administrateur"
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name DefaultPassword -Value "YOUR_WINDOWS_PASSWORD"
+```
+
+**Note:** Use your actual Windows username. French VPS uses `Administrateur`, English uses `Administrator`.
+
+**Test by rebooting:**
+
+```powershell
+Restart-Computer
+```
+
+Wait 90 seconds, then from your Linux VPS:
+
+```bash
+curl http://WINDOWS_VPS_IP:8001/api/v1/ping
+# Should return: {"ok":true,"data":{"alive":true},"error":null}
+```
+
+## Step 10: Configure Linux VPS
 
 On your **Linux VPS**, update `accounts.json`:
 
@@ -233,7 +259,7 @@ On your **Linux VPS**, update `accounts.json`:
   "accounts": [
     {
       "name": "Account1",
-      "server": "FundedNext-Server",
+      "server": "YourBroker-Server",
       "login": 12345678,
       "password_env": "MT5_PASS_1",
       "risk_percent": 1.0,
@@ -243,19 +269,6 @@ On your **Linux VPS**, update `accounts.json`:
       "enabled": true,
       "mt5_host": "WINDOWS_VPS_IP",
       "mt5_port": 8001
-    },
-    {
-      "name": "Account2",
-      "server": "FundedNext-Server",
-      "login": 87654321,
-      "password_env": "MT5_PASS_2",
-      "risk_percent": 0.8,
-      "max_lot_size": 1.0,
-      "max_daily_loss_percent": 3.0,
-      "max_open_trades": 3,
-      "enabled": true,
-      "mt5_host": "WINDOWS_VPS_IP",
-      "mt5_port": 8002
     }
   ],
   "global": {
@@ -276,10 +289,81 @@ Update `.env` on the Linux VPS:
 ```
 MT5_BACKEND=rest_api
 MT5_API_KEY=same_key_from_windows_vps
+MT5_HOST=WINDOWS_VPS_IP
 MT5_USE_TLS=false
 TRADING_ENABLED=true
 TRADING_DRY_RUN=false
 ```
+
+Set the MT5 password environment variable:
+
+```
+MT5_PASS_1=your_mt5_account_password
+```
+
+Restart the bot:
+
+```bash
+cd /home/murx/apps/telebot
+docker compose up -d --build
+docker compose logs -f telebot --tail 20
+```
+
+You should see:
+```
+Trading ENABLED (REST_API) — 1 account(s) configured
+HTTP Request: POST http://WINDOWS_VPS_IP:8001/api/v1/connect "HTTP/1.1 200 OK"
+Executor started — cleanup + heartbeat loops running
+```
+
+## Step 11: Verify end-to-end
+
+1. Send a test signal in your Telegram test group
+2. Check telebot logs for signal parsing and execution
+3. Check Discord #executions channel for trade confirmation
+4. Check the MT5 terminal on Windows VPS for the opened position
+5. Check the dashboard for the account status and open positions
+
+---
+
+## RDP Disconnect vs Logout
+
+- **Disconnecting RDP** (closing the Remote Desktop app): Everything keeps running. The desktop session stays active.
+- **Logging out**: Kills everything. MT5 terminals close, uvicorn stops.
+- **VPS reboot**: Auto-login + startup script restarts everything automatically.
+
+You do NOT need to keep RDP connected for the bot to work.
+
+---
+
+## Troubleshooting
+
+### `alive: false` after reboot
+The MT5 terminal may not have connected to the broker yet. Wait 60-90 seconds.
+If still false, RDP in and check if the terminal shows a green connection icon.
+
+### `IPC timeout` or `No IPC connection`
+The MT5 terminal and uvicorn are in different Windows sessions. Make sure both
+are running as startup apps (not Windows services). See Issue #10 in
+[issues-solved.md](issues-solved.md).
+
+### `AUTH_FAILED` on API calls
+The `.env` file isn't being loaded. Make sure `.env` exists in the
+`mt5-rest-server` directory (copy from `.env.account1`).
+
+### Port already in use
+```powershell
+netstat -ano | findstr "8001"
+taskkill /PID <PID> /F
+```
+
+### Updating the code
+```powershell
+cd C:\Apps\telebot
+& "C:\Program Files\Git\bin\git.exe" pull
+```
+Then restart uvicorn (kill the python process and re-run `start-all.bat`,
+or just reboot the VPS).
 
 ---
 
@@ -288,12 +372,17 @@ TRADING_DRY_RUN=false
 - [ ] RDP into Windows VPS
 - [ ] Install Python 3.12
 - [ ] Install Git
-- [ ] Install NSSM
-- [ ] Clone repo, set up venv
-- [ ] Install MT5 terminals (one per account, separate folders)
-- [ ] Create `.env.account*` files with credentials
-- [ ] Test manually with uvicorn
-- [ ] Install as Windows services
-- [ ] Configure firewall (whitelist Linux VPS IP only)
-- [ ] Set up MT5 auto-start on boot
-- [ ] Update Linux VPS accounts.json and .env
+- [ ] Clone repo, set up venv, install dependencies
+- [ ] Install MT5 terminal, create portable copy in `C:\MT5\Account1\`
+- [ ] Launch terminal with `/portable`, log in, verify green icon
+- [ ] Create `.env.account1` with credentials and API key
+- [ ] Copy `.env.account1` to `.env`
+- [ ] Test manually with uvicorn (ping + account endpoint)
+- [ ] Configure Windows Firewall (whitelist Linux VPS IP)
+- [ ] Create `start-all.bat` startup script
+- [ ] Create startup shortcut
+- [ ] Configure Windows auto-login
+- [ ] Reboot and verify (`curl ping` from Linux VPS)
+- [ ] Update Linux VPS `accounts.json` and `.env`
+- [ ] Restart telebot and verify logs
+- [ ] Send test signal and verify end-to-end

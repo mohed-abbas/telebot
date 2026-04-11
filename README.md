@@ -75,8 +75,7 @@ telebot/
 ├── mt5-rest-server/        # REST API wrapping native MT5 (Windows VPS)
 │   ├── server.py           # FastAPI app — all mt5.* via run_in_executor
 │   ├── config.py           # Env var reader (API key, MT5 credentials)
-│   ├── requirements.txt    # fastapi, uvicorn, MetaTrader5
-│   └── install-service.ps1 # NSSM service installer (one per account)
+│   └── requirements.txt    # fastapi, uvicorn, MetaTrader5
 ├── mt5-simulator/          # Docker-based MT5 simulator (local dev)
 │   ├── simulator.py        # FastAPI app — same REST API, in-memory state
 │   ├── state.py            # Positions, orders, P&L calculation
@@ -84,6 +83,14 @@ telebot/
 ├── nginx/                  # Reverse proxy config
 │   └── telebot.conf
 ├── templates/              # Dashboard HTML templates
+├── price_simulator.py      # GBM price engine for dry-run simulation
+├── docs/                   # Documentation
+│   ├── windows-vps-setup.md          # Windows VPS setup guide
+│   ├── adding-new-account.md         # Adding/removing MT5 accounts
+│   ├── issues-solved.md              # Troubleshooting history
+│   ├── architecture-rest-api-bridge.md # REST API architecture
+│   ├── deployment-home-mini-pc.md    # Home mini PC deployment
+│   └── server-messages.md            # MT5 server message limits
 ├── tests/                  # pytest test suite (113+ tests)
 └── .env.example            # All environment variables
 ```
@@ -295,14 +302,21 @@ on a Windows machine (VPS or home mini PC), one FastAPI process per broker accou
 ```
 
 Each account is fully isolated: separate MT5 terminal, separate Python process,
-separate port, separate NSSM Windows service.
+separate port. Both MT5 and uvicorn run as startup apps in the same desktop
+session (required for MT5 IPC — Windows services won't work).
 
 ### Deployment Options
 
-- **Windows VPS** (~$10-20/mo) — see [docs/architecture-rest-api-bridge.md](docs/architecture-rest-api-bridge.md)
+- **Windows VPS** (~$10-20/mo) — see [docs/windows-vps-setup.md](docs/windows-vps-setup.md)
 - **Home mini PC** ($0/mo) — see [docs/deployment-home-mini-pc.md](docs/deployment-home-mini-pc.md)
+- **Architecture details** — see [docs/architecture-rest-api-bridge.md](docs/architecture-rest-api-bridge.md)
 
 Switching between them is just a hostname change in `accounts.json`.
+
+### Adding / Managing Accounts
+
+See [docs/adding-new-account.md](docs/adding-new-account.md) for the complete
+guide on adding, disabling, or removing broker accounts.
 
 ## Development
 
