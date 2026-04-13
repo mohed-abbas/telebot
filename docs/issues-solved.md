@@ -246,6 +246,32 @@ C:\nssm\nssm.exe set mt5-rest-account1 AppParameters "-m uvicorn server:app --ho
 
 ---
 
+## Issue #13: "Cannot get current price" on Live Account — Symbol Not in Market Watch
+
+**Date:** 2026-04-13
+**Component:** `mt5-rest-server/server.py` — `get_price` endpoint
+**Symptom:** Signal execution failed with `Vantage Demo-10k: FAILED — Cannot get current price` even though the VPS was reachable, `/api/v1/ping` returned 200 OK, the dashboard showed the account as Connected, and the signal price was in the active zone. Telebot logs showed no useful error.
+
+**Root Cause:** The MT5 Python API's `mt5.symbol_info_tick(symbol)` returns `None` whenever the requested symbol is **not enabled in the terminal's Market Watch**, even if the symbol name is exactly correct and tradeable on the broker. The REST server wraps `symbol_info_tick` without first calling `mt5.symbol_select(symbol, True)`, so any symbol missing from Market Watch produces a 404 `SYMBOL_NOT_FOUND` response.
+
+A secondary bug made this invisible: `RestApiConnector._request()` in `mt5_connector.py` does not unwrap FastAPI's `HTTPException` envelope (`{"detail": {...}}`), so the server's real error code/message never reached the telebot log — the failure surfaced only as a generic "Cannot get current price".
+
+**Fix (operational — immediate):** On the Windows VPS, open the MT5 terminal for the affected account → open Market Watch (Ctrl+M) → right-click → **Symbols** → search the instrument (e.g. XAUUSD) → **Show**. The symbol stays in Market Watch across restarts as long as the terminal profile is saved.
+
+**Fix (code — recommended):**
+1. In `mt5-rest-server/server.py`, call `mt5.symbol_select(symbol, True)` before `symbol_info_tick` in `get_price`, `create_order`, and `close_position`.
+2. In `mt5_connector.py:_request`, unwrap `body["detail"]` when present so `SYMBOL_NOT_FOUND` / `code` / `message` surface in telebot logs.
+
+**Verification:** From any shell with the API key:
+```bash
+curl -H "X-API-Key: <key>" http://<vps-ip>:8001/api/v1/price/XAUUSD
+```
+Should return `{"ok": true, "data": {"bid": ..., "ask": ...}}`. A 404 with `SYMBOL_NOT_FOUND` confirms the Market Watch issue.
+
+**Files Changed:** None yet (operational fix documented; code fix pending)
+
+---
+
 ## Summary
 
 | # | Issue | Severity | Component | Resolution |
@@ -262,3 +288,4 @@ C:\nssm\nssm.exe set mt5-rest-account1 AppParameters "-m uvicorn server:app --ho
 | 10 | NSSM Session 0 isolation | High | Windows deployment | Use startup app instead of service |
 | 11 | DNS resolution failure | Medium | accounts.json | Use IP instead of hostname |
 | 12 | Port not parsed by install script | Low | install-service.ps1 | Manual NSSM install with hardcoded port |
+| 13 | Cannot get current price (live) | High | mt5-rest-server | Add symbol to MT5 Market Watch |

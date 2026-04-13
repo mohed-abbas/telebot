@@ -318,6 +318,24 @@ Switching between them is just a hostname change in `accounts.json`.
 See [docs/adding-new-account.md](docs/adding-new-account.md) for the complete
 guide on adding, disabling, or removing broker accounts.
 
+### Important: Symbols Must Be in MT5 Market Watch
+
+Every symbol the bot trades (e.g. `XAUUSD`, `EURUSD`) **must be visible in the
+MT5 terminal's Market Watch** on the Windows machine. The MT5 Python API
+(`mt5.symbol_info_tick`) returns `None` for symbols that aren't in Market Watch,
+even if the symbol name is exactly correct and tradeable on the broker — this
+surfaces as `FAILED — Cannot get current price` at signal execution time.
+
+To add a symbol on the Windows VPS:
+
+1. Open the MT5 terminal for the affected account
+2. Press **Ctrl+M** to open Market Watch
+3. Right-click → **Symbols** (or Ctrl+U) → search the instrument → click **Show**
+4. Save the terminal profile so the symbol persists across restarts
+
+Do this once per account, for every symbol your signals reference. See
+[docs/issues-solved.md](docs/issues-solved.md) Issue #13 for diagnostic details.
+
 ## Development
 
 ### Local Dev Environment
