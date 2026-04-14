@@ -201,6 +201,7 @@ async def disconnect():
 
 @app.get("/api/v1/price/{symbol}", dependencies=[Depends(verify_api_key)])
 async def get_price(symbol: str):
+    await _run(mt5.symbol_select, symbol, True)
     tick = await _run(mt5.symbol_info_tick, symbol)
     if tick is None:
         _err("SYMBOL_NOT_FOUND", f"Symbol {symbol} not found", 404)
@@ -252,6 +253,12 @@ async def create_order(req: OrderRequest):
         _err("INVALID_ORDER_TYPE", f"Unknown order type: {req.order_type}")
 
     mt5_type, action = ORDER_TYPE_MAP[req.order_type]
+
+    # Ensure the symbol is selected in Market Watch before order_send.
+    # Without this, MT5's C-extension parameter validation rejects the request
+    # with (-2, 'Unnamed arguments not allowed'). Applies to both market and
+    # pending orders — market branch only incidentally activated via symbol_info_tick.
+    await _run(mt5.symbol_select, req.symbol, True)
 
     # For market orders, get fill price
     if action == mt5.TRADE_ACTION_DEAL:
@@ -313,6 +320,8 @@ async def modify_position(ticket: int, req: ModifyRequest):
         _err("POSITION_NOT_FOUND", f"Position {ticket} not found", 404)
     pos = positions[0]
 
+    await _run(mt5.symbol_select, pos.symbol, True)
+
     request = {
         "action": mt5.TRADE_ACTION_SLTP,
         "position": ticket,
@@ -343,6 +352,8 @@ async def close_position(ticket: int, req: CloseRequest = None):
 
     close_volume = req.volume if req.volume and req.volume < pos.volume else pos.volume
     close_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+
+    await _run(mt5.symbol_select, pos.symbol, True)
 
     tick = await _run(mt5.symbol_info_tick, pos.symbol)
     if tick is None:

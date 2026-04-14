@@ -559,8 +559,14 @@ class RestApiConnector(MT5Connector):
                     logger.warning("%s: REST API reports not connected (503)", self.account_name)
                     return None
                 body = resp.json()
+                # FastAPI wraps HTTPException payloads as {"detail": {...}}.
+                # Unwrap so structured error.code / error.message surface in logs
+                # instead of the generic "ok=false" fallback. Without this, server-side
+                # errors (e.g. SYMBOL_NOT_FOUND) appear as silent None returns.
+                if isinstance(body, dict) and "detail" in body and isinstance(body["detail"], dict) and "ok" in body["detail"]:
+                    body = body["detail"]
                 if not body.get("ok"):
-                    error = body.get("error", {})
+                    error = body.get("error") or {}
                     logger.warning("%s: REST API error: %s — %s", self.account_name, error.get("code"), error.get("message"))
                     return None
                 return body.get("data")
