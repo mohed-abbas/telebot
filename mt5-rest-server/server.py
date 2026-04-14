@@ -269,6 +269,23 @@ async def create_order(req: OrderRequest):
     else:
         price = req.price
 
+    # Select filling mode based on what the broker/symbol actually supports.
+    # symbol_info.filling_mode is a bitmask: 1=FOK, 2=IOC, 4=RETURN.
+    # Market-execution brokers (e.g. Vantage) typically reject IOC for pending
+    # orders — only RETURN is valid. Fall back to a sane default per action.
+    sym_info = await _run(mt5.symbol_info, req.symbol)
+    supported = int(sym_info.filling_mode) if sym_info is not None else 0
+    if action == mt5.TRADE_ACTION_DEAL:
+        if supported & 2:
+            type_filling = mt5.ORDER_FILLING_IOC
+        elif supported & 1:
+            type_filling = mt5.ORDER_FILLING_FOK
+        else:
+            type_filling = mt5.ORDER_FILLING_RETURN
+    else:
+        # Pending orders: most brokers require RETURN.
+        type_filling = mt5.ORDER_FILLING_RETURN
+
     request = {
         "action": action,
         "symbol": req.symbol,
@@ -281,8 +298,30 @@ async def create_order(req: OrderRequest):
         "magic": req.magic or config.MT5_MAGIC_NUMBER,
         "comment": req.comment or "telebot",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": type_filling,
     }
+
+    logger.info("order_send request: %s", request)
+
+    # Pre-flight validation — order_check returns a structured retcode that
+    # explains *why* order_send would fail, instead of the generic
+    # (-2, 'Unnamed arguments not allowed') that surfaces otherwise.
+    check = await _run(mt5.order_check, request)
+    if check is None:
+        logger.warning("order_check returned None: last_error=%s", mt5.last_error())
+    else:
+        logger.info(
+            "order_check: retcode=%s comment=%s margin=%s",
+            check.retcode, check.comment, getattr(check, "margin", None),
+        )
+        if check.retcode != 0:
+            return _ok({
+                "success": False,
+                "ticket": 0,
+                "price": 0.0,
+                "volume": 0.0,
+                "error": f"order_check retcode={check.retcode} {check.comment}",
+            })
 
     result = await _run(mt5.order_send, request)
     if result is None:
