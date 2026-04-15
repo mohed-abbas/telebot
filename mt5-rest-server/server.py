@@ -70,17 +70,16 @@ def _err(code: str, message: str, status: int = 400) -> dict:
 async def _run(fn, *args, **kwargs):
     """Call an MT5 function synchronously on the current (main) thread.
 
-    The MetaTrader5 Python extension pins session state to the thread that
-    imported the module. Any worker thread — including a dedicated one —
-    makes stateful calls (order_send / order_check) return None with
-    last_error=(-2, 'Unnamed arguments not allowed'). Running calls directly
-    on uvicorn's asyncio loop thread (which is the process main thread that
-    imported mt5) is the only reliable path. MT5 IPC calls complete in
-    milliseconds, so briefly blocking the event loop is acceptable for a
-    single-account REST server.
+    Must not expand an empty kwargs dict: MT5's C-extension functions
+    (order_check, order_send, symbol_info_tick, etc.) are METH_O and reject
+    any non-NULL kwargs object, even an empty one, with
+    (-2, 'Unnamed arguments not allowed'). `fn(*args, **{})` triggers that;
+    `fn(*args)` does not. See diag6.py variants A vs B.
     """
     try:
-        return fn(*args, **kwargs)
+        if kwargs:
+            return fn(*args, **kwargs)
+        return fn(*args)
     except Exception as exc:
         logger.error("MT5 call raised: %s — %s", getattr(fn, "__name__", fn), exc)
         return None
