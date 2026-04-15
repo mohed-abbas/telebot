@@ -3,12 +3,9 @@
 Runs on Windows VPS with a real MT5 terminal. One instance per account.
 """
 
-import asyncio
 import logging
 import secrets
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from functools import partial
 
 import MetaTrader5 as mt5
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -70,25 +67,22 @@ def _err(code: str, message: str, status: int = 400) -> dict:
     )
 
 
-# Dedicated single-threaded executor for MT5 calls. The MetaTrader5 Python
-# extension maintains thread-local session state — initialize() and login()
-# bind to a specific thread, and stateful calls (order_send, order_check)
-# from other threads return None with stale last_error (-2, 'Unnamed
-# arguments not allowed'). Pinning every MT5 call to one thread via this
-# executor guarantees they all see the same session.
-_MT5_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mt5")
-
-
 async def _run(fn, *args, **kwargs):
-    """Run a blocking MT5 function on the dedicated MT5 thread with timeout."""
-    loop = asyncio.get_event_loop()
+    """Call an MT5 function synchronously on the current (main) thread.
+
+    The MetaTrader5 Python extension pins session state to the thread that
+    imported the module. Any worker thread — including a dedicated one —
+    makes stateful calls (order_send / order_check) return None with
+    last_error=(-2, 'Unnamed arguments not allowed'). Running calls directly
+    on uvicorn's asyncio loop thread (which is the process main thread that
+    imported mt5) is the only reliable path. MT5 IPC calls complete in
+    milliseconds, so briefly blocking the event loop is acceptable for a
+    single-account REST server.
+    """
     try:
-        return await asyncio.wait_for(
-            loop.run_in_executor(_MT5_EXECUTOR, partial(fn, *args, **kwargs)),
-            timeout=10.0,
-        )
-    except asyncio.TimeoutError:
-        logger.error("MT5 call timed out: %s", fn.__name__)
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        logger.error("MT5 call raised: %s — %s", getattr(fn, "__name__", fn), exc)
         return None
 
 
