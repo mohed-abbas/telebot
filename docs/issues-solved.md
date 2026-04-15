@@ -272,6 +272,107 @@ Should return `{"ok": true, "data": {"bid": ..., "ask": ...}}`. A 404 with `SYMB
 
 ---
 
+## Issue #14: MT5 `order_send` / `order_check` Returns `(-2, 'Unnamed arguments not allowed')`
+
+**Date:** 2026-04-15
+**Component:** `mt5-rest-server/server.py` — `_run` helper
+**Severity:** Critical — every trade execution failed on the live Vantage Demo-10k account
+**Symptom:** Signal parser correctly produced the order. The server logged the request dict (`{'action': 1, 'symbol': 'XAUUSD', ...}`) and then:
+```
+[WARNING] server: order_check returned None: last_error=(-2, 'Unnamed arguments not allowed')
+```
+`POST /api/v1/order` returned `200 OK` with `{"success": false, ...}`, and the executor surfaced `FAILED — (-2, 'Unnamed arguments not allowed')` to Discord.
+
+**Hypotheses explored (and ruled out):**
+
+| # | Hypothesis | Evidence against |
+|---|------------|------------------|
+| 1 | Symbol not in Market Watch | `GET /api/v1/price/XAUUSD` returned `200 OK` with real bid/ask |
+| 2 | Filling-mode mismatch (IOC vs RETURN) | Fix applied (commit `361cb70`); still failed |
+| 3 | MT5 pins to import thread; asyncio offloads to a worker | Removed executor (commit `2fc1d48`); still failed |
+| 4 | Broker-specific symbol suffix (Vantage `.` / `+`) | `symbol_info_tick` resolved, price lookups worked |
+| 5 | NumPy 2.x × MetaTrader5 ABI mismatch | `numpy 2.4.4` confirmed, but diag3/diag4 passed with full server-shaped dicts |
+| 6 | `tick.ask` returning `numpy.float64` | `type(tick.ask)` reported `float`; all variants A–G in diag4 passed |
+| 7 | `mt5.login()` clobbering the Python binding | diag5 replicated full `initialize + login + order_check` standalone → passed |
+
+**Root cause (isolated by diag6.py — a minimal uvicorn app with four call variants):**
+
+The server's helper was:
+```python
+async def _run(fn, *args, **kwargs):
+    return fn(*args, **kwargs)   # expands kwargs even when empty
+```
+
+MT5's C-extension functions `order_check`, `order_send`, `symbol_info_tick`, `symbol_info`, `symbol_select`, `positions_get` are declared `METH_O` (single positional argument, no keywords accepted). Their CPython binding rejects **any non-NULL kwargs object — including an empty dict** — with `(-2, 'Unnamed arguments not allowed')`.
+
+Python bytecode details:
+- `mt5.order_check(request)` → `CALL_FUNCTION` opcode → C-level `kwds = NULL` → **accepted**
+- `fn(*args, **kwargs)` with empty `kwargs={}` → `CALL_FUNCTION_EX` → C-level `kwds` points to an empty `PyDict` (non-NULL) → **rejected**
+
+The diag6 matrix (all four on `MainThread`, same process, same MT5 session):
+
+| Variant | Pattern | kwargs passed | Result |
+|---|---|---|---|
+| A | `mt5.order_check(req)` (direct) | NULL | PASS |
+| B | `_run` wrapper → `fn(*args, **{})` | `{}` (non-NULL empty) | **FAIL** |
+| C | `asyncio.to_thread(fn, req)` | NULL (stripped by `Context.run` vectorcall) | PASS |
+| D | `loop.run_in_executor(None, fn, req)` → `_WorkItem.run()` → `fn(*args, **{})` | `{}` (non-NULL empty) | **FAIL** |
+
+Same root cause for B and D. C passes because `asyncio.to_thread` wraps the call via `functools.partial(ctx.run, func, *args, **kwargs)`; `Context.run` is implemented in C (`context_run`) and uses `_PyObject_VectorcallTstate` with `kwnames = NULL` when no keyword arguments were bound, never synthesizing an empty kwargs dict.
+
+**Fix:** Skip kwargs expansion when empty (commit `a2ff05b`):
+
+```python
+async def _run(fn, *args, **kwargs):
+    """Must not expand an empty kwargs dict — MT5's METH_O functions reject
+    any non-NULL kwargs object, even an empty one, with
+    (-2, 'Unnamed arguments not allowed'). See diag6.py variants A vs B.
+    """
+    try:
+        if kwargs:
+            return fn(*args, **kwargs)
+        return fn(*args)
+    except Exception as exc:
+        logger.error("MT5 call raised: %s — %s", getattr(fn, "__name__", fn), exc)
+        return None
+```
+
+This preserves `_run`'s behavior for calls with actual kwargs (e.g. `mt5.login(login, password=..., server=...)`) while fixing the empty-kwargs case.
+
+**Verification:** After pulling commit `a2ff05b`, clearing `__pycache__`, and restarting the REST server, a live SELL/BUY XAUUSD signal produced `order_check: retcode=0 comment='Done'` and a real ticket number from `order_send` — the error never returned.
+
+**Diagnostic artifacts left in the repo for future reference:**
+- `mt5-rest-server/diag.py` / `diag2.py` — thread-pinning exploration
+- `mt5-rest-server/diag3.py` — numpy ABI hypothesis (disproven)
+- `mt5-rest-server/diag4.py` — per-field binary search across the request dict
+- `mt5-rest-server/diag5.py` — replication of server lifespan in standalone Python
+- `mt5-rest-server/diag6.py` — the decisive uvicorn A/B/C/D test
+
+**Files Changed:** `mt5-rest-server/server.py`
+
+---
+
+## Issue #15: `retcode=10027 AutoTrading disabled by client`
+
+**Date:** 2026-04-15
+**Component:** MT5 terminal (Windows VPS) — Algo Trading toggle
+**Symptom:** After the Issue #14 fix landed, `order_check` succeeded but `order_send` returned:
+```
+retcode=10027 AutoTrading disabled by client
+```
+
+**Root Cause:** MT5's **Algo Trading** (formerly "AutoTrading") button in the terminal toolbar was off. This setting gates *all* outbound automated orders — from EAs, scripts, and the Python API alike. `order_check` validates the request against the account and is allowed; `order_send` is blocked at the terminal before the request leaves the machine.
+
+**Fix:** On the Windows VPS, in the MT5 terminal for the affected account:
+- Toolbar: click the **Algo Trading** button until it turns green (▶), or
+- Menu: **Tools → Options → Expert Advisors → Allow algorithmic trading** → OK
+
+The menu option persists across terminal restarts as long as the profile is saved. The toolbar toggle is authoritative at runtime. No code change and no server restart required — the next signal executed cleanly.
+
+**Files Changed:** None (MT5 terminal UI setting)
+
+---
+
 ## Summary
 
 | # | Issue | Severity | Component | Resolution |
@@ -289,3 +390,5 @@ Should return `{"ok": true, "data": {"bid": ..., "ask": ...}}`. A 404 with `SYMB
 | 11 | DNS resolution failure | Medium | accounts.json | Use IP instead of hostname |
 | 12 | Port not parsed by install script | Low | install-service.ps1 | Manual NSSM install with hardcoded port |
 | 13 | Cannot get current price (live) | High | mt5-rest-server | Add symbol to MT5 Market Watch |
+| 14 | `order_send` returns `(-2, 'Unnamed arguments not allowed')` | Critical | mt5-rest-server | `_run` stops expanding empty kwargs dict |
+| 15 | `retcode=10027 AutoTrading disabled by client` | High | MT5 terminal | Enable Algo Trading in terminal toolbar |
