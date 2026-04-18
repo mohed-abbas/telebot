@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Improved trade executions and UI
-status: Defining requirements
+status: Roadmap complete — ready to plan Phase 5
 stopped_at: —
 last_updated: "2026-04-18T00:00:00Z"
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -19,14 +19,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Milestone v1.1 — defining requirements
+**Current focus:** Milestone v1.1 — roadmap complete, ready to plan Phase 5
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 5 — Foundation (UI substrate, auth, settings data model) — not started
 Plan: —
-Status: Defining requirements
-Last activity: 2026-04-18 — Milestone v1.1 started
+Status: Roadmap complete — awaiting `/gsd-plan-phase 5`
+Last activity: 2026-04-18 — v1.1 roadmap written, 30/30 requirements mapped across 3 phases
+
+## v1.1 Milestone Map
+
+| Phase | Name | Requirements | Depends on |
+|-------|------|--------------|------------|
+| 5 | Foundation — UI substrate, auth, and settings data model | 15 (UI-01..05, AUTH-01..06, SET-01/02/04/05) | Phase 4 (v1.0 complete) |
+| 6 | Staged entry execution | 10 (STAGE-01..09, SET-03) | Phase 5 |
+| 7 | Dashboard redesign | 5 (DASH-01..05) | Phase 5, Phase 6 |
 
 ## Performance Metrics
 
@@ -42,12 +50,8 @@ Last activity: 2026-04-18 — Milestone v1.1 started
 |-------|-------|-------|----------|
 | - | - | - | - |
 
-**Recent Trend:**
+**Recent Trend (v1.0 carryover):**
 
-- Last 5 plans: —
-- Trend: —
-
-*Updated after each plan completion*
 | Phase 01 P03 | 1min | 1 tasks | 1 files |
 | Phase 01 P01 | 2min | 2 tasks | 4 files |
 | Phase 01 P02 | 2min | 2 tasks | 2 files |
@@ -66,27 +70,20 @@ Last activity: 2026-04-18 — Milestone v1.1 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [Init]: Conservative approach — small isolated changes; real money at stake
-- [Init]: Migrate to aiosqlite (already in requirements.txt but unused) — solves thread safety and performance
-- [Init]: Stay on Telethon 1.42.0 — 2.x is alpha with breaking changes; evaluate only
-- [Phase 01]: Password cleared to empty string (not None) for type consistency; retained on failed connection for retry
-- [Phase 01]: Removed dashboard.py hardcoded changeme fallback to fully eliminate default credentials (SEC-02)
-- [Phase 01]: Pool sizing min=2, max=5 for asyncpg -- conservative for single-process trading bot
-- [Phase 01]: log_pending_order accepts both str and datetime for expires_at -- backward compat with callers passing ISO strings
-- [Phase 03]: Division-by-zero handled in SQL via NULLIF rather than Python application code
-- [Phase 03]: Analytics computed on page load from SQL (no caching or background jobs)
-- [Phase 03]: Signal-like heuristic: 2+ keywords OR 1 keyword + price to reduce false positive Discord alerts
-- [Phase 03]: Symbol regex keys sorted by length descending so xau/usd matches before xau
-- [Phase 03]: FastAPI lifespan used instead of deprecated on_event pattern for ASGI lifecycle
-- [Phase 03]: Stay on Telethon 1.42.0 -- 2.x alpha with breaking changes; re-evaluate when stable
-- [Phase 03]: Docker external networks (proxy-net, data-net) with no direct port exposure
-- [Phase 04]: Session-scoped event loop for DB-dependent tests to share asyncpg pool
-- [Phase 04]: pytest.skip() in db_pool fixture when PostgreSQL unreachable -- allows unit tests without Docker
-- [Phase 04]: Reset DryRunConnector._ticket_counter in autouse fixture to prevent cross-test interference
-- [Phase 04]: FailingConnector uses fail_on set for configurable failure simulation in MT5 connector tests
-- [Phase 04]: PricedDryRunConnector defined locally per test file to avoid cross-file import fragility
+- [v1.1 Init]: Focused milestone — 3 phases (not 5); consolidate UI + auth + settings data into one foundation phase
+- [v1.1 Init]: Staged-entry isolated in its own phase (Phase 6) because it's the highest-risk live-money logic
+- [v1.1 Init]: Two-signal correlation model (text-only signal + follow-up with zone/SL/TP), NOT one-signal zone-watcher
+- [v1.1 Init]: UI substrate — Basecoat UI (`basecoat-css@0.3.3`) + Tailwind v3.4 standalone CLI on HTMX + Jinja; no SPA rewrite
+- [v1.1 Init]: Auth — argon2-cffi + Starlette SessionMiddleware; no fastapi-users / JWT
+- [v1.1 Init]: Schema — hand-written additive-only DDL; alembic (DBE-01) stays deferred to v1.2
+- [v1.0 Phase 01]: Password cleared to empty string (not None) for type consistency; retained on failed connection for retry
+- [v1.0 Phase 01]: Removed dashboard.py hardcoded changeme fallback to fully eliminate default credentials (SEC-02)
+- [v1.0 Phase 01]: Pool sizing min=2, max=5 for asyncpg — conservative for single-process trading bot
+- [v1.0 Phase 03]: FastAPI lifespan used instead of deprecated on_event pattern for ASGI lifecycle
+- [v1.0 Phase 03]: Stay on Telethon 1.42.0 — 2.x alpha with breaking changes; re-evaluate when stable
+- [v1.0 Phase 03]: Docker external networks (proxy-net, data-net) with no direct port exposure
+- [v1.0 Phase 04]: Session-scoped event loop for DB-dependent tests to share asyncpg pool
 - [Quick]: Single container with isolated Wine prefixes per account instead of one container per account
-- [Quick]: supervisord.conf generated dynamically at runtime from MT5_ACCOUNTS env var, static file deleted
 
 ### Pending Todos
 
@@ -94,9 +91,14 @@ None yet.
 
 ### Blockers/Concerns
 
-- [Phase 1]: aiosqlite migration is highest-risk change — touches every DB operation; migrate function-by-function with tests
-- [Phase 2]: Reconnect cascade risk — signals queuing during reconnect may execute with stale data; need "paused" state during sync
-- [Phase 2]: Kill switch must cancel pending orders, not just close positions — orphaned limits will fill later otherwise
+- [Phase 6]: Live-money staged-entry logic is the highest-risk phase — isolate it and gate on thorough integration tests before enabling
+- [Phase 6]: Text-only signal must open with non-zero default SL; `sl=0.0` is never an acceptable submit (Pitfall 1)
+- [Phase 6]: Duplicate-direction guard in `trade_manager.py:187-190` must be signal-id-aware or stages 2..N silently fail (Pitfall 2)
+- [Phase 6]: Kill switch must drain `staged_entries` BEFORE closing positions (Pitfall 4)
+- [Phase 6]: Reconnect must reconcile `staged_entries` against MT5 by comment-based idempotency key (Pitfall 5)
+- [Phase 5]: Tailwind `content` glob must include `*.py` files; classes inlined in `dashboard.py` HTMLResponse fragments will otherwise be purged (Pitfall 10)
+- [Phase 5]: Login CSRF uses double-submit cookie on `/login` ONLY; existing HTMX-header CSRF preserved elsewhere (Pitfall 13)
+- [Phase 5]: Login form must land before any editable settings UI is exposed — avoid editable settings under HTTPBasic
 
 ### Quick Tasks Completed
 
@@ -106,5 +108,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-03-30 - Completed quick task 260330-shy: Optimize mt5-bridge and telebot Docker images
+Last activity: 2026-04-18 — v1.1 roadmap created; 3 phases (5, 6, 7); 30/30 requirements mapped
 Resume file: None
+Next action: `/gsd-plan-phase 5` to decompose Phase 5 (Foundation — UI, auth, settings data model) into plans

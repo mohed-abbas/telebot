@@ -1,7 +1,7 @@
 # Requirements: Telebot v1.1 — Improved trade executions and UI
 
 **Defined:** 2026-04-18
-**Milestone:** v1.1 (focused — 2–3 phases)
+**Milestone:** v1.1 (focused — 3 phases)
 **Core Value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
 
 **Source material:**
@@ -90,17 +90,47 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STAGE-01..STAGE-09 | TBD | Pending |
-| SET-01..SET-05 | TBD | Pending |
-| UI-01..UI-05 | TBD | Pending |
-| DASH-01..DASH-05 | TBD | Pending |
-| AUTH-01..AUTH-06 | TBD | Pending |
+| STAGE-01 | Phase 6 | Pending |
+| STAGE-02 | Phase 6 | Pending |
+| STAGE-03 | Phase 6 | Pending |
+| STAGE-04 | Phase 6 | Pending |
+| STAGE-05 | Phase 6 | Pending |
+| STAGE-06 | Phase 6 | Pending |
+| STAGE-07 | Phase 6 | Pending |
+| STAGE-08 | Phase 6 | Pending |
+| STAGE-09 | Phase 6 | Pending |
+| SET-01 | Phase 5 | Pending |
+| SET-02 | Phase 5 | Pending |
+| SET-03 | Phase 6 | Pending |
+| SET-04 | Phase 5 | Pending |
+| SET-05 | Phase 5 | Pending |
+| UI-01 | Phase 5 | Pending |
+| UI-02 | Phase 5 | Pending |
+| UI-03 | Phase 5 | Pending |
+| UI-04 | Phase 5 | Pending |
+| UI-05 | Phase 5 | Pending |
+| DASH-01 | Phase 7 | Pending |
+| DASH-02 | Phase 7 | Pending |
+| DASH-03 | Phase 7 | Pending |
+| DASH-04 | Phase 7 | Pending |
+| DASH-05 | Phase 7 | Pending |
+| AUTH-01 | Phase 5 | Pending |
+| AUTH-02 | Phase 5 | Pending |
+| AUTH-03 | Phase 5 | Pending |
+| AUTH-04 | Phase 5 | Pending |
+| AUTH-05 | Phase 5 | Pending |
+| AUTH-06 | Phase 5 | Pending |
 
 **Coverage:**
 - v1.1 requirements: 30 total
-- Mapped to phases: 0 (to be filled by roadmapper)
-- Unmapped: 30
+- Mapped to phases: 30
+- Unmapped: 0
+
+**Distribution:**
+- Phase 5 (Foundation — UI, auth, settings data): 15 requirements (UI-01..05, AUTH-01..06, SET-01, SET-02, SET-04, SET-05)
+- Phase 6 (Staged entry execution): 10 requirements (STAGE-01..09, SET-03)
+- Phase 7 (Dashboard redesign): 5 requirements (DASH-01..05)
 
 ---
 *Requirements defined: 2026-04-18*
-*Roadmap will fill Phase column and update to 30/30 mapped.*
+*Roadmap traceability filled: 2026-04-18 — 30/30 mapped.*
