@@ -11,3 +11,7 @@ DISCORD_IMPLEMENTATION_PLAN.md
 accounts.json
 data/
 *.db
+
+# Tailwind build outputs (generated at Docker build)
+static/css/app.*.css
+static/css/manifest.json

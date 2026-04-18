@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import "./_compat.css";
+/* Basecoat vendored — only /login uses the primitives in Phase 5 per D-03 */
+@import "../vendor/basecoat/basecoat.css";
