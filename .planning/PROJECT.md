@@ -40,15 +40,37 @@ Every change must preserve existing trading reliability while making the bot saf
 | Kill switch with confirmation | Prevent accidental activation | v1.0 shipped |
 | Drop signals during reconnect | Safest approach for stale data prevention | v1.0 shipped |
 
-## Next Milestone Goals
+## Current Milestone: v1.1 Improved trade executions and UI
 
-*Not yet defined — run `/gsd:new-milestone` to start the next cycle.*
+**Goal:** Stop missing trades via a staged-entry strategy, modernize the dashboard with shadcn + tailwind, and replace basic-auth with a proper login form.
 
-Potential areas:
-- v2 monitoring: structured logging, connection uptime metrics, execution latency
-- CI/CD pipeline (GitHub Actions)
-- Signal accuracy auto-disable for low-performing sources
-- Schema migration tooling (alembic)
+**Target features:**
+- **Staged entry strategy** — text-only signals ("Gold buy now") open 1 initial position immediately; follow-up signal with zone/SL/TP opens additional positions when price enters the zone. Max positions and risk mode (percentage OR fixed lot) are configurable per account.
+- **Per-account settings page** — UI for editing risk mode, lot size, and max positions at runtime (beyond static accounts.json).
+- **Dashboard redesign** — shadcn + tailwind via `/frontend-design`, mobile-responsive, richer positions/trades views and analytics drilldowns.
+- **Proper login form** — styled login UX replacing the current basic-auth prompt.
+
+**Key context:**
+- Focused milestone (2–3 phases).
+- Open item for `/gsd-discuss-phase`: shadcn targets React/Vue while the current dashboard is FastAPI + HTMX — the frontend substrate (stay HTMX + Tailwind w/ shadcn CSS tokens vs. SPA rewrite) must be decided before UI phases start.
+- Safety bar from v1.0 still applies: real money; no regressions on live trading.
+
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
 
 ---
-*Last updated: 2026-03-23 after v1.0 milestone completion*
+*Last updated: 2026-04-18 — milestone v1.1 started*

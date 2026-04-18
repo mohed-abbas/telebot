@@ -1,30 +1,32 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: Milestone archived
-stopped_at: v1.0 milestone archived
-last_updated: "2026-03-30T18:39:00Z"
+milestone: v1.1
+milestone_name: Improved trade executions and UI
+status: Defining requirements
+stopped_at: —
+last_updated: "2026-04-18T00:00:00Z"
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 13
-  completed_plans: 13
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-19)
+See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 04 — testing
+**Current focus:** Milestone v1.1 — defining requirements
 
 ## Current Position
 
-Phase: 04
-Plan: Not started
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-04-18 — Milestone v1.1 started
 
 ## Performance Metrics
 
