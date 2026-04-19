@@ -27,7 +27,9 @@ def test_tailwind_content_glob_includes_python():
 
 def test_input_css_imports_compat_and_basecoat():
     src = (REPO / "static/css/input.css").read_text()
-    assert "@tailwind base" in src
+    assert '@import "tailwindcss"' in src, (
+        "v4 entrypoint must use @import (Gap #1 / D-04-REVISED)"
+    )
     assert "_compat.css" in src
     assert "basecoat.css" in src
 
@@ -47,7 +49,9 @@ def test_htmx_bridge_installed():
 def test_dockerfile_has_tailwind_build_stage():
     df = (REPO / "Dockerfile").read_text()
     assert "AS css-build" in df
-    assert "v3.4.19" in df, "Tailwind CLI version must be pinned to v3.4.19"
+    assert "TAILWIND_VERSION=v4" in df, (
+        "Tailwind CLI must be v4+ (Basecoat v0.3.3 is v4-native — Gap #1)"
+    )
     assert "tailwindcss-linux-x64" in df
     assert "COPY --from=css-build" in df
 
@@ -88,3 +92,46 @@ def test_manifest_schema_when_present(tmp_path):
     m = json.loads(manifest_path.read_text())
     assert "app.css" in m
     assert m["app.css"].startswith("app.") and m["app.css"].endswith(".css")
+
+
+def test_compiled_css_contains_basecoat_and_compat_markers():
+    """Gap #1 regression guard — compiled app.<hash>.css MUST contain both
+    Basecoat primitives (proves `@import "../vendor/basecoat/basecoat.css"`
+    was resolved by Tailwind) AND compat-shim rules (proves
+    `@import "./_compat.css"` was resolved).
+
+    Self-skips if `tailwindcss` CLI is not on PATH — the Docker css-build
+    stage is the enforcing path in that case. The Gap #1 UAT failure manifests
+    as this test failing (v3 CLI silently drops @import statements; v4 resolves them).
+    """
+    import shutil
+    if shutil.which("tailwindcss") is None:
+        pytest.skip(
+            "tailwindcss CLI not on PATH; Docker css-build stage enforces this "
+            "regression check (see Gap #1 / D-04-REVISED)"
+        )
+
+    r = subprocess.run(["bash", "scripts/build_css.sh"], cwd=REPO, capture_output=True)
+    assert r.returncode == 0, r.stderr.decode()
+
+    manifest = json.loads((REPO / "static/css/manifest.json").read_text())
+    hashed = manifest["app.css"]
+    compiled = (REPO / "static/css" / hashed).read_text()
+
+    fix_hint = (
+        "Gap #1 regression — check Dockerfile TAILWIND_VERSION (must be v4+) "
+        'and static/css/input.css @import syntax (must be `@import "tailwindcss";`). '
+        "v3.4.19 CLI silently drops CSS @import statements; v4 resolves them natively."
+    )
+    assert ".alert-destructive" in compiled, (
+        f"Basecoat primitive missing from compiled CSS (source: "
+        f"static/vendor/basecoat/basecoat.css). {fix_hint}"
+    )
+    assert ".nav-active" in compiled, (
+        f"Compat-shim rule missing from compiled CSS (source: "
+        f"static/css/_compat.css). {fix_hint}"
+    )
+    assert ".btn-primary" in compiled, (
+        f"Basecoat button primitive missing from compiled CSS (source: "
+        f"static/vendor/basecoat/basecoat.css). {fix_hint}"
+    )
