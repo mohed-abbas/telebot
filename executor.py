@@ -141,6 +141,8 @@ class Executor:
             accounts=[self.tm.accounts[target_account]],
             global_config=self.tm.cfg,
         )
+        temp_tm.settings_store = getattr(self.tm, "settings_store", None)
+        temp_tm.correlator = getattr(self.tm, "correlator", None)
         return await temp_tm.handle_signal(signal)
 
     # ── Heartbeat & Reconnect ────────────────────────────────────────
