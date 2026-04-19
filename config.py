@@ -45,8 +45,9 @@ class Settings:
     # ── Dashboard ──
     dashboard_enabled: bool
     dashboard_port: int
-    dashboard_user: str
-    dashboard_pass: str
+    session_secret: str
+    dashboard_pass_hash: str
+    session_cookie_secure: bool
 
     # ── Simulation (dry-run only) ──
     sim_volatility_multiplier: float
@@ -71,6 +72,47 @@ def _load_settings() -> Settings:
     def _is_pg_url(v: str) -> bool:
         return v.startswith(("postgres://", "postgresql://"))
 
+    def _require_session_secret(val: str | None) -> str:
+        """D-15 / Pitfall 5: ≥32 BYTES of entropy."""
+        if not val:
+            raise SystemExit(
+                "FATAL: Missing SESSION_SECRET. Generate one with:\n"
+                "  openssl rand -base64 48\n"
+                "or: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+            )
+        # Try base64 decode first; fall back to utf-8 byte length
+        byte_len = 0
+        try:
+            import base64
+            byte_len = len(base64.b64decode(val, validate=False))
+        except Exception:
+            pass
+        if byte_len < 32:
+            byte_len = len(val.encode("utf-8"))
+        if byte_len < 32:
+            raise SystemExit(
+                f"FATAL: SESSION_SECRET has only {byte_len} bytes of entropy; need >=32. "
+                "Use: openssl rand -base64 48"
+            )
+        return val
+
+    def _require_dashboard_hash() -> str:
+        """D-20/D-21: hard cutover. No fallback to plaintext."""
+        if environ.get("DASHBOARD_PASS"):
+            raise SystemExit(
+                "FATAL: DASHBOARD_PASS plaintext env var detected. "
+                "Remove it from .env and set DASHBOARD_PASS_HASH via scripts/hash_password.py "
+                "(see VPS_DEPLOYMENT_GUIDE.md)."
+            )
+        # D-22: DASHBOARD_USER is silently ignored if still present (harmless legacy).
+        h = environ.get("DASHBOARD_PASS_HASH", "")
+        if len(h) < 60:  # argon2 encoded hash is ~97 chars; 60 is a conservative lower bound
+            raise SystemExit(
+                "FATAL: DASHBOARD_PASS_HASH missing or malformed. "
+                "Generate via: python scripts/hash_password.py"
+            )
+        return h
+
     return Settings(
         tg_api_id=int(_req("TG_API_ID", validator=_is_numeric)),
         tg_api_hash=_req("TG_API_HASH"),
@@ -92,8 +134,9 @@ def _load_settings() -> Settings:
         database_url=_req("DATABASE_URL", validator=_is_pg_url),
         dashboard_enabled=_opt("DASHBOARD_ENABLED", "true").lower() in ("true", "1", "yes"),
         dashboard_port=int(_opt("DASHBOARD_PORT", "8080")),
-        dashboard_user=_opt("DASHBOARD_USER", "admin"),
-        dashboard_pass=_req("DASHBOARD_PASS"),
+        session_secret=_require_session_secret(environ.get("SESSION_SECRET")),
+        dashboard_pass_hash=_require_dashboard_hash(),
+        session_cookie_secure=_opt("SESSION_COOKIE_SECURE", "true").lower() in ("true", "1", "yes"),
         sim_volatility_multiplier=float(_opt("SIM_VOLATILITY_MULTIPLIER", "1.0")),
         sim_initial_balance=float(_opt("SIM_INITIAL_BALANCE", "10000")),
     )
