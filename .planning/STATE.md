@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Improved trade executions and UI
 status: executing
-last_updated: "2026-04-19T13:49:08.919Z"
-last_activity: 2026-04-19 -- Phase 05 complete (all 4 plans + verification gap closed)
+last_updated: "2026-04-19T18:14:30Z"
+last_activity: 2026-04-19 -- Phase 05-05 gap closure complete (Tailwind v4 bump closes UAT Gap #1)
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 5
+  completed_plans: 5
   percent: 100
 ---
 
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 
 ## Current Position
 
-Phase: 05 (foundation) — EXECUTING
-Plan: 4 of 4
-Status: Ready to execute
-Last activity: 2026-04-19 -- Phase 05 complete (all 4 plans + verification gap closed)
+Phase: 05 (foundation) — COMPLETE (inc. 05-05 gap closure)
+Plan: 5 of 5
+Status: Phase 5 done; UAT Gap #1 closed via Tailwind v4 bump
+Last activity: 2026-04-19 -- Phase 05-05 gap-closure complete (Tailwind v3.4.19 → v4.2.2; compiled CSS 11KB → 145KB with Basecoat + compat-shim rules)
 
 ## v1.1 Milestone Map
 
@@ -62,6 +62,7 @@ Last activity: 2026-04-19 -- Phase 05 complete (all 4 plans + verification gap c
 | Phase 04 P01 | 4min | 2 tasks | 6 files |
 | Phase 04 P02 | 4min | 2 tasks | 2 files |
 | Phase 04 P03 | 6min | 2 tasks | 2 files |
+| Phase 05 P05 | 5min | 3 tasks | 5 files |
 | Quick 260330-shy | 4min | 3 tasks | 7 files |
 
 ## Accumulated Context
@@ -85,6 +86,8 @@ Recent decisions affecting current work:
 - [v1.0 Phase 03]: Docker external networks (proxy-net, data-net) with no direct port exposure
 - [v1.0 Phase 04]: Session-scoped event loop for DB-dependent tests to share asyncpg pool
 - [Quick]: Single container with isolated Wine prefixes per account instead of one container per account
+- [v1.1 Phase 05-05]: Bump Tailwind standalone CLI v3.4.19 → v4.2.2 (Basecoat v0.3.3 is v4-native; v4 resolves @import natively; kept tailwind.config.js alive via v4 @config directive — minimum-churn migration)
+- [v1.1 Phase 05-05]: Dockerfile TARGETARCH-aware binary selection (linux-x64 on amd64, linux-arm64 on arm64) — v4's native Rust binary doesn't tolerate Rosetta/qemu emulation where v3's did
 
 ### Pending Todos
 
@@ -109,6 +112,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-18 — Phase 5 discussed, researched, planned; 4 plans verified across 3 revision iterations
+Last activity: 2026-04-19 — Phase 05-05 gap-closure complete (UAT Gap #1 closed: compiled CSS now contains Basecoat + compat-shim rules; 11KB → 145KB; 3 TDD commits + 1 groundwork commit)
 Resume file: None
-Next action: `/gsd-execute-phase 5` — Wave 1 (Plans 01 + 02 parallel) → Wave 2 (Plan 03) → Wave 3 (Plan 04)
+Next action: Re-run UAT Tests 3 + 4 (visual verification of /login with Basecoat styling + red `.alert-destructive` banner on wrong password), then `/gsd-execute-phase 6`
