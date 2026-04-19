@@ -3,7 +3,7 @@ status: complete
 phase: 05-foundation
 source: [05-01-SUMMARY.md, 05-02-SUMMARY.md, 05-03-SUMMARY.md, 05-04-SUMMARY.md]
 started: 2026-04-19T13:53:14Z
-updated: 2026-04-19T15:10:00Z
+updated: 2026-04-19T18:45:00Z
 ---
 
 ## Current Test
@@ -23,17 +23,15 @@ result: pass
 
 ### 3. Login Page Renders with Basecoat Styling
 expected: /login shows a styled card-based form with a password input and "Sign In" button. No raw/unstyled HTML, no 404s on CSS (app.{hash}.css loads from /static/css/). No reference to cdn.tailwindcss.com in page source. Dark theme applied.
-result: issue
-reported: "yes it showed the login page but UI is so bad."
-severity: major
-notes: "Initially classified cosmetic, upgraded to major after Test 4 diagnostic. Compiled app.css (11134B) contains ZERO Basecoat rules and ZERO compat-shim rules. Integration appeared to work (page 200, hashed link, manifest resolved) but the bundle is missing content. Login form is rendering bare HTML wrapped in Tailwind utilities. See Gap #1 for root cause."
+result: pass
+resolved_at: 2026-04-19T18:45:00Z
+notes: "Originally failed on 2026-04-19 (Gap #1 — compiled CSS had zero Basecoat rules because Tailwind v3.4.19 CLI silently dropped @import lines). Resolved by Plan 05-05 (Tailwind v4.2.2 bump). User visually re-verified 2026-04-19T18:45:00Z: styled Basecoat card renders as designed."
 
 ### 4. Wrong Password Shows Error Banner
 expected: Submit /login with an incorrect password. Page re-renders with a red "Invalid credentials" alert banner (Basecoat alert-destructive). A fresh CSRF token cookie is issued so the form is immediately retryable. No session cookie set.
-result: issue
-reported: "it shows the message but there is no styling on the text just pure plain text."
-severity: major
-notes: "Server-side logic works — error message is rendered server-side and returned. Styling is missing because `.alert alert-destructive` classes are not defined in the compiled CSS. Same root cause as Test 3. See Gap #1."
+result: pass
+resolved_at: 2026-04-19T18:45:00Z
+notes: "Originally failed on 2026-04-19 (same Gap #1 root cause as Test 3). Resolved by Plan 05-05. User visually re-verified 2026-04-19T18:45:00Z: red alert-destructive banner renders above the form on wrong password."
 
 ### 5. Correct Password Logs In
 expected: Submit /login with the correct password (the plaintext used when generating DASHBOARD_PASS_HASH). Server sets telebot_session cookie and 303-redirects to / (or next path). Visiting / now renders the authenticated dashboard — sidebar, overview, positions, etc.
@@ -55,8 +53,8 @@ result: pass
 ## Summary
 
 total: 8
-passed: 6
-issues: 2
+passed: 8
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0
@@ -64,7 +62,9 @@ blocked: 0
 ## Gaps
 
 - truth: "Compiled app.css includes both the v1.0 compat-shim rules and Basecoat primitives so templates render as designed."
-  status: failed
+  status: resolved
+  resolution: "Plan 05-05 landed on 2026-04-19 (commits 74e0568 RED → 03209a0 GREEN → 78ef13f docs). Tailwind standalone CLI bumped v3.4.19 → v4.2.2 (v4 resolves @import natively and parses Basecoat v0.3.3's v4-native directives). Compiled CSS grew 11,134 B → 144,827 B (13×); all Basecoat markers (.alert-destructive, .btn-primary, .card, .card-header, .card-body, .input, .label) and compat-shim markers (.nav-active, .btn-red/blue/green, .profit, .loss, .badge-*) confirmed present via curl. Regression guard test_compiled_css_contains_basecoat_and_compat_markers added. User visually verified Tests 3 & 4 render styled Basecoat card + red alert-destructive banner on wrong password."
+  resolved_at: 2026-04-19T18:45:00Z
   reason: "User reported in tests 3 and 4: UI is bare and alert banners render as plain text — Basecoat classes (.alert-destructive, .card, .card-header, .card-body, .btn-primary, .input, .label) and compat-shim classes (.nav-active, .card, .btn, .profit, .loss, .badge-*, .btn-red/blue/green) are absent from the compiled app.css."
   severity: major
   test: [3, 4]
