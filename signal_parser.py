@@ -45,6 +45,16 @@ _RE_OPEN_SINGLE = re.compile(
     re.IGNORECASE,
 )
 
+# Phase 6 D-01 / D-02 — text-only "now" signal ("Gold buy now", "XAU sell now").
+# Anchors ^...$ + \b keyword boundaries ensure any trailing numeric token makes
+# this recognizer miss, so _RE_OPEN / _RE_OPEN_SINGLE still win for priced text.
+_RE_OPEN_TEXT_ONLY = re.compile(
+    r"^\s*(?P<symbol>gold|xauusd|xau/?usd|xau)\s+"
+    r"(?P<direction>buy|sell)\s+"
+    r"\b(?:now|asap|immediate)\b\s*$",
+    re.IGNORECASE,
+)
+
 # SL line: "SL: 4986" or "SL 4986" or "sl : 4986"
 _RE_SL = re.compile(
     r"(?:^|\n)\s*sl\s*[:.]?\s*(?P<sl>[\d]+(?:\.[\d]+)?)",
@@ -209,6 +219,28 @@ def parse_signal(text: str) -> SignalAction | None:
     open_single = _RE_OPEN_SINGLE.search(stripped)
     if open_single:
         return _build_open_signal(open_single, stripped, text, zone=False)
+
+    # ── 8. New trade text-only "now" (Phase 6 D-01/D-02) ───────────────
+    # Runs LAST among OPEN branches so priced messages still hit _RE_OPEN /
+    # _RE_OPEN_SINGLE first. The regex is line-anchored so any numeric/extra
+    # token forces a miss here — maintaining the D-02 "no numerics" invariant.
+    text_only_match = _RE_OPEN_TEXT_ONLY.match(stripped)
+    if text_only_match:
+        symbol = _resolve_symbol(text_only_match.group("symbol"))
+        direction = (
+            Direction.BUY
+            if text_only_match.group("direction").lower() == "buy"
+            else Direction.SELL
+        )
+        return SignalAction(
+            type=SignalType.OPEN_TEXT_ONLY,
+            symbol=symbol,
+            raw_text=text,
+            direction=direction,
+            entry_zone=None,
+            sl=None,
+            tps=[],
+        )
 
     # Not a recognized signal
     if is_signal_like(stripped):

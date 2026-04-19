@@ -182,6 +182,20 @@ async def _setup_trading(http: httpx.AsyncClient):
     await settings_store.load_all()
     tm.settings_store = settings_store
 
+    # ── Wire SignalCorrelator (Phase 6, D-04..D-07) ────────────────────
+    # In-memory orphan/follow-up pairing for OPEN_TEXT_ONLY signals.
+    # Attached to TradeManager BEFORE the Telegram handler is installed,
+    # so the very first parsed signal has access to the correlator.
+    from signal_correlator import SignalCorrelator
+    correlator = SignalCorrelator(
+        window_seconds=global_config.correlation_window_seconds,
+    )
+    tm.correlator = correlator
+    logger.info(
+        "SignalCorrelator attached — window=%ds",
+        global_config.correlation_window_seconds,
+    )
+
     notifier = Notifier(
         http=http,
         executions_webhook=settings.discord_webhook_executions or None,
