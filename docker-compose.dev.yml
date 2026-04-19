@@ -34,6 +34,10 @@ services:
     restart: unless-stopped
     env_file: .env.dev
     ports:
+      # Host port 8090 because 8080 commonly collides with devdock-caddy or
+      # other dev reverse proxies on shared dev machines. 8080 inside the
+      # container is fixed (DASHBOARD_PORT=8080). If 8090 is also in use
+      # on your host, remap to any free port (e.g. "8091:8080").
       - "8090:8080"
     volumes:
       - ./data:/app/data
