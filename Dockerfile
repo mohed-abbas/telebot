@@ -1,10 +1,25 @@
-# ── Stage 1: CSS build (Tailwind v3.4.19 standalone CLI) ────────────
+# ── Stage 1: CSS build (Tailwind v4 standalone CLI) ─────────────────
+# v4 (Basecoat v0.3.3 is Tailwind-v4-native — uses @custom-variant / @theme /
+# has-data-[slot=...]). v4 CLI natively resolves CSS @import statements; v3's
+# CLI silently dropped them (UAT Gap #1). Asset name tailwindcss-linux-x64 is
+# identical across v3/v4 releases.
 FROM debian:bookworm-slim AS css-build
-ARG TAILWIND_VERSION=v3.4.19
+ARG TAILWIND_VERSION=v4.2.2
+# TARGETARCH is auto-populated by BuildKit (amd64 / arm64). v4's standalone CLI
+# ships native binaries for both — pick the matching one, otherwise the
+# linux-x64 binary trips Rosetta/qemu emulation on Apple Silicon dev machines
+# ("rosetta error: failed to open elf at /lib64/ld-linux-x86-64.so.2"; exit 133).
+# Release assets: tailwindcss-linux-x64 (amd64) + tailwindcss-linux-arm64 (arm64).
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64" \
+RUN case "${TARGETARCH}" in \
+        amd64) TW_ASSET="tailwindcss-linux-x64" ;; \
+        arm64) TW_ASSET="tailwindcss-linux-arm64" ;; \
+        *)     echo "Unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/${TW_ASSET}" \
         -o /usr/local/bin/tailwindcss \
     && chmod +x /usr/local/bin/tailwindcss
 
