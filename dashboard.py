@@ -333,14 +333,298 @@ async def signals_page(request: Request, user: str = Depends(_verify_auth)):
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, user: str = Depends(_verify_auth)):
+    """SET-03: per-account tabbed settings form with audit timeline."""
     accounts_data = await _get_accounts_overview()
+    store = _get_settings_store()
+    settings_by_account: dict[str, object] = {}
+    audit_by_account: dict[str, list[dict]] = {}
+    for a in accounts_data:
+        name = a["name"]
+        settings_by_account[name] = store.effective(name) if store else None
+        audit_by_account[name] = await db.get_settings_audit(name, limit=50)
     return templates.TemplateResponse("settings.html", {
         "request": request,
         "accounts": accounts_data,
+        "settings_by_account": settings_by_account,
+        "audit_by_account": audit_by_account,
         "trading_enabled": _settings.trading_enabled if _settings else False,
         "dry_run": _settings.trading_dry_run if _settings else True,
         "page": "settings",
     })
+
+
+# ─── SET-03: per-account settings form (POST handlers) ──────────────────
+
+from dataclasses import dataclass
+
+
+@dataclass
+class _SettingsValidationError:
+    field: str
+    message: str
+
+
+_SETTINGS_HARD_CAPS_INT: dict[str, tuple[int, int]] = {
+    "max_stages": (1, 10),
+    "default_sl_pips": (1, 500),
+    "max_daily_trades": (1, 100),
+}
+
+
+def validate_settings_form(
+    form: dict, max_lot_size: float,
+) -> tuple[dict, list[_SettingsValidationError]]:
+    """D-29: server-side hard-cap validator for the per-account settings form.
+
+    Returns (parsed_values, errors). parsed_values is empty when errors is non-empty.
+    Client-echo via HTML min/max attributes is cosmetic — this is authoritative.
+    """
+    errors: list[_SettingsValidationError] = []
+    parsed: dict = {}
+
+    risk_mode = str(form.get("risk_mode", "")).strip()
+    if risk_mode not in ("percent", "fixed_lot"):
+        errors.append(_SettingsValidationError(
+            "risk_mode", 'Risk mode must be "percent" or "fixed_lot".'))
+    else:
+        parsed["risk_mode"] = risk_mode
+
+    # risk_value — cap depends on risk_mode
+    risk_value = None
+    try:
+        risk_value = float(form.get("risk_value", ""))
+    except (ValueError, TypeError):
+        errors.append(_SettingsValidationError("risk_value", "Risk value must be a number."))
+    if risk_value is not None:
+        if risk_value <= 0:
+            errors.append(_SettingsValidationError(
+                "risk_value", "Risk value must be greater than 0."))
+        elif risk_mode == "percent" and risk_value > 5.0:
+            errors.append(_SettingsValidationError(
+                "risk_value", "risk_value must be between 0 and 5.0."))
+        elif risk_mode == "fixed_lot" and risk_value > max_lot_size:
+            errors.append(_SettingsValidationError(
+                "risk_value", "Risk value exceeds max_lot_size for this account."))
+        elif risk_mode in ("percent", "fixed_lot"):
+            parsed["risk_value"] = risk_value
+
+    # Integer hard caps
+    for field, (min_v, max_v) in _SETTINGS_HARD_CAPS_INT.items():
+        raw = form.get(field, "")
+        try:
+            v = int(raw)
+        except (ValueError, TypeError):
+            errors.append(_SettingsValidationError(field, f"{field} must be an integer."))
+            continue
+        if v < min_v or v > max_v:
+            errors.append(_SettingsValidationError(
+                field, f"{field} must be between {min_v} and {max_v}."))
+        else:
+            parsed[field] = v
+
+    return (parsed if not errors else {}), errors
+
+
+def _get_settings_store():
+    """Return the live SettingsStore (attached to TradeManager in bot.py)."""
+    if _executor is None:
+        return None
+    return getattr(_executor.tm, "settings_store", None)
+
+
+def _accounts_by_name() -> dict[str, object]:
+    """Return AccountConfig-by-name for lookup (max_lot_size etc.)."""
+    if _executor is None:
+        return {}
+    return dict(getattr(_executor.tm, "accounts", {}) or {})
+
+
+def _compute_dry_run(parsed: dict, current) -> str:
+    """D-27: concise dry-run string rendered inside the confirmation modal."""
+    risk_mode = parsed.get("risk_mode", current.risk_mode)
+    risk_value = float(parsed.get("risk_value", current.risk_value))
+    max_stages = int(parsed.get("max_stages", current.max_stages))
+    per_stage = risk_value / max_stages if max_stages else 0.0
+    if risk_mode == "percent":
+        return (
+            f"A typical signal would size {max_stages} stages at "
+            f"{per_stage:.3f}% risk per stage."
+        )
+    return (
+        f"A typical signal would size {max_stages} stages at "
+        f"{per_stage:.3f} lots per stage (fixed_lot)."
+    )
+
+
+def _render_tab_partial(
+    request: Request, account_name: str, errors: dict | None = None, status_code: int = 200,
+):
+    """Re-render the per-account settings tab partial (form + audit timeline)."""
+    store = _get_settings_store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="SettingsStore not initialised")
+    try:
+        s = store.effective(account_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    # Shim the overview row shape expected by the tab partial (it only reads .name)
+    account_row = {"name": account_name}
+    return templates.TemplateResponse(
+        "partials/account_settings_tab.html",
+        {
+            "request": request,
+            "a": account_row,
+            "s": s,
+            "errors": errors or {},
+            "audit": None,  # filled below by caller that awaits DB
+        },
+        status_code=status_code,
+    )
+
+
+@app.post("/settings/{account_name}", response_class=HTMLResponse)
+async def settings_validate(
+    account_name: str, request: Request,
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
+):
+    """D-27/D-29: validate hard caps. On success render modal; on failure 422 partial."""
+    store = _get_settings_store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="SettingsStore not initialised")
+    try:
+        current = store.effective(account_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown account: {account_name}")
+
+    max_lot_size = float(getattr(current, "max_lot_size", 1.0) or 1.0)
+
+    form = dict(await request.form())
+    parsed, errors = validate_settings_form(form, max_lot_size=max_lot_size)
+
+    if errors:
+        # Re-render the form partial with per-field red-400 messages
+        audit = await db.get_settings_audit(account_name, limit=50)
+        return templates.TemplateResponse(
+            "partials/account_settings_tab.html",
+            {
+                "request": request,
+                "a": {"name": account_name},
+                "s": current,
+                "errors": {e.field: e.message for e in errors},
+                "audit": audit,
+            },
+            status_code=422,
+        )
+
+    # Compute diff vs current effective settings
+    diff: list[dict] = []
+    for field, new_val in parsed.items():
+        old_val = getattr(current, field)
+        if str(old_val) != str(new_val):
+            diff.append({"field": field, "old": old_val, "new": new_val})
+
+    if not diff:
+        return HTMLResponse(
+            '<div class="text-xs text-slate-500">No changes to save.</div>'
+        )
+
+    dry_run = _compute_dry_run(parsed, current)
+    return templates.TemplateResponse(
+        "partials/settings_confirm_modal.html",
+        {
+            "request": request,
+            "account_name": account_name,
+            "diff": diff,
+            "dry_run": dry_run,
+            "pending_values": parsed,
+            "is_revert": False,
+        },
+    )
+
+
+@app.post("/settings/{account_name}/confirm", response_class=HTMLResponse)
+async def settings_confirm(
+    account_name: str, request: Request,
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
+):
+    """D-27: persist validated settings + audit row via SettingsStore.update (atomic)."""
+    store = _get_settings_store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="SettingsStore not initialised")
+    try:
+        current = store.effective(account_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown account: {account_name}")
+
+    max_lot_size = float(getattr(current, "max_lot_size", 1.0) or 1.0)
+    form = dict(await request.form())
+    parsed, errors = validate_settings_form(form, max_lot_size=max_lot_size)
+    if errors:
+        raise HTTPException(status_code=422, detail="Re-validation failed")
+
+    # Apply each changed field; SettingsStore.update writes settings + audit atomically.
+    for field, new_val in parsed.items():
+        current = store.effective(account_name)
+        if str(getattr(current, field)) != str(new_val):
+            await store.update(account_name, field, new_val, actor=user)
+
+    fresh = store.effective(account_name)
+    audit = await db.get_settings_audit(account_name, limit=50)
+    return templates.TemplateResponse(
+        "partials/account_settings_tab.html",
+        {
+            "request": request,
+            "a": {"name": account_name},
+            "s": fresh,
+            "errors": {},
+            "audit": audit,
+        },
+    )
+
+
+@app.post("/settings/{account_name}/revert", response_class=HTMLResponse)
+async def settings_revert(
+    account_name: str, audit_id: int, request: Request,
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
+):
+    """D-28: re-open the two-step modal pre-populated with the inverted diff."""
+    row = await db.get_settings_audit_row(audit_id)
+    if row is None or row["account_name"] != account_name:
+        raise HTTPException(status_code=404, detail="Audit row not found")
+
+    store = _get_settings_store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="SettingsStore not initialised")
+    try:
+        current = store.effective(account_name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown account: {account_name}")
+
+    field = row["field"]
+    old_value_str = row["old_value"]
+    current_val = getattr(current, field)
+
+    diff = [{
+        "field": field,
+        "old": current_val,
+        "new": old_value_str,
+    }]
+    pending_values = {field: old_value_str}
+    dry_run = (
+        f"Reverting {field} from {current_val} back to {old_value_str}. "
+        "The revert itself is recorded as a new audit entry."
+    )
+    return templates.TemplateResponse(
+        "partials/settings_confirm_modal.html",
+        {
+            "request": request,
+            "account_name": account_name,
+            "diff": diff,
+            "dry_run": dry_run,
+            "pending_values": pending_values,
+            "is_revert": True,
+        },
+    )
 
 
 @app.get("/analytics", response_class=HTMLResponse)

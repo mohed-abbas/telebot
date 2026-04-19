@@ -1,0 +1,37 @@
+{% if audit %}
+<div class="card overflow-x-auto">
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th><th>Field</th><th>Change</th><th>Actor</th><th>Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in audit %}
+            <tr>
+                <td class="font-mono text-xs text-slate-400">{{ row.timestamp.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+                <td class="text-sm font-semibold">{{ row.field }}</td>
+                <td class="text-sm">
+                    <span class="text-slate-500 line-through">{{ row.old_value }}</span>
+                    &#8594;
+                    <span class="text-indigo-400 font-semibold">{{ row.new_value }}</span>
+                </td>
+                <td class="text-xs text-slate-400">{{ row.actor }}</td>
+                <td>
+                    <button class="btn btn-blue"
+                            type="button"
+                            hx-post="/settings/{{ a.name }}/revert?audit_id={{ row.id }}"
+                            hx-target="#modal-root"
+                            hx-swap="innerHTML"
+                            hx-headers='{"hx-request": "true"}'>
+                        Revert change
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<p class="text-sm text-slate-500">No changes recorded for this account.</p>
+{% endif %}

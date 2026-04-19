@@ -324,5 +324,6 @@ async def test_revert_confirm_writes_new_audit_row(authenticated_client, seeded_
     # Newest row (ORDER BY id DESC) reverts risk_value 2.5 → 1.0
     latest = rows_after_revert[0]
     assert latest["field"] == "risk_value"
-    assert latest["old_value"] == "2.5"
-    assert latest["new_value"] == "1.0"
+    # risk_value is NUMERIC(10,4) → stored-as-TEXT keeps 4 decimals
+    assert float(latest["old_value"]) == 2.5
+    assert float(latest["new_value"]) == 1.0

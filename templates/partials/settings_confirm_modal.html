@@ -1,0 +1,58 @@
+<div role="dialog" aria-modal="true" aria-labelledby="confirm-heading-{{ account_name }}"
+     class="dialog fixed inset-0 bg-dark-900/80 flex items-center justify-center z-50"
+     onkeydown="if(event.key==='Escape'){document.getElementById('modal-root').innerHTML='';}">
+    <div class="card p-8 max-w-lg mx-auto">
+        <h3 id="confirm-heading-{{ account_name }}" class="text-lg font-semibold">
+            {% if is_revert %}Revert change &mdash; {{ account_name }}{% else %}Confirm settings change &mdash; {{ account_name }}{% endif %}
+        </h3>
+        <p class="text-sm text-slate-400 mt-2">Review the change below. It will apply to signals received AFTER you confirm.</p>
+
+        <table class="mt-4 w-full text-sm">
+            <thead>
+                <tr>
+                    <th class="text-left text-xs text-slate-500">Field</th>
+                    <th class="text-left text-xs text-slate-500">Change</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in diff %}
+                <tr>
+                    <td class="py-2 font-semibold">{{ d.field }}</td>
+                    <td class="py-2">
+                        <span class="text-slate-500 line-through">{{ d.old }}</span>
+                        &#8594;
+                        <span class="text-indigo-400 font-semibold">{{ d.new }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+        <div class="bg-dark-900 p-4 rounded border border-dark-700 mt-4">
+            <div class="text-xs text-slate-500 font-semibold">Effect on a typical signal</div>
+            <p class="text-sm mt-1">{{ dry_run }}</p>
+        </div>
+
+        <div class="alert alert-destructive mt-4">
+            This applies to signals received AFTER you confirm. In-flight staged sequences are unaffected.
+            {% if pending_values.risk_mode %}
+                Switching risk mode affects how every future signal is sized. Review the dry-run above carefully.
+            {% endif %}
+        </div>
+
+        <form hx-post="/settings/{{ account_name }}/confirm"
+              hx-target="#tab-{{ account_name }} .card"
+              hx-swap="innerHTML"
+              hx-headers='{"hx-request": "true"}'
+              class="flex gap-2 mt-6 justify-end">
+            {% for field, val in pending_values.items() %}
+                <input type="hidden" name="{{ field }}" value="{{ val }}" />
+            {% endfor %}
+            <button type="button" class="btn"
+                    onclick="document.getElementById('modal-root').innerHTML='';">
+                Discard changes
+            </button>
+            <button type="submit" class="btn btn-primary">Confirm change</button>
+        </form>
+    </div>
+</div>

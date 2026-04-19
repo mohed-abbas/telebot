@@ -1,83 +1,35 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-6">
-    <h2 class="text-2xl font-bold">Settings</h2>
-    <p class="text-slate-500 text-sm mt-1">Account configuration and bot controls</p>
+    <h2 class="text-2xl font-semibold">Settings</h2>
+    <p class="text-slate-500 text-sm mt-1">Per-account runtime configuration. Changes apply to the next signal received &#8212; in-flight staged sequences are unaffected.</p>
 </div>
 
-<!-- Bot Status -->
-<div class="card p-6 mb-6">
-    <h3 class="text-lg font-semibold mb-4">Bot Status</h3>
-    <div class="grid grid-cols-2 gap-4 text-sm">
-        <div>
-            <span class="text-slate-400">Trading:</span>
-            {% if trading_enabled %}
-                <span class="text-green-400 font-semibold ml-2">ENABLED</span>
-            {% else %}
-                <span class="text-red-400 font-semibold ml-2">DISABLED</span>
-            {% endif %}
-        </div>
-        <div>
-            <span class="text-slate-400">Mode:</span>
-            {% if dry_run %}
-                <span class="text-yellow-400 font-semibold ml-2">DRY-RUN</span>
-            {% else %}
-                <span class="text-green-400 font-semibold ml-2">LIVE</span>
-            {% endif %}
+<div role="tablist" class="mb-4 border-b border-dark-700 flex gap-2">
+    {% for a in accounts %}
+    <button role="tab"
+            type="button"
+            class="px-4 py-2 text-sm font-semibold text-slate-400 hover:text-slate-200 data-[state=active]:text-indigo-400 data-[state=active]:border-b-2 data-[state=active]:border-indigo-400 -mb-px"
+            data-tab-target="tab-{{ a.name }}"
+            data-state="{% if loop.first %}active{% else %}inactive{% endif %}"
+            onclick="(function(btn){var root=btn.closest('[role=tablist]').parentElement;root.querySelectorAll('[role=tab]').forEach(function(b){b.setAttribute('data-state','inactive');});root.querySelectorAll('[role=tabpanel]').forEach(function(p){p.setAttribute('data-state','inactive');p.classList.add('hidden');});btn.setAttribute('data-state','active');var panel=document.getElementById(btn.getAttribute('data-tab-target'));if(panel){panel.setAttribute('data-state','active');panel.classList.remove('hidden');}})(this);">
+        {{ a.name }}
+    </button>
+    {% endfor %}
+</div>
+
+{% for a in accounts %}
+    {% set s = settings_by_account[a.name] %}
+    {% set audit = audit_by_account[a.name] %}
+    <div role="tabpanel"
+         id="tab-{{ a.name }}"
+         data-state="{% if loop.first %}active{% else %}inactive{% endif %}"
+         class="{% if not loop.first %}hidden{% endif %}">
+        <div class="card p-6">
+            {% include "partials/account_settings_tab.html" %}
         </div>
     </div>
-    <p class="text-xs text-slate-600 mt-4">
-        To change: edit .env file and restart the bot container.
-        TRADING_ENABLED=true/false, TRADING_DRY_RUN=true/false
-    </p>
-</div>
+{% endfor %}
 
-<!-- Accounts -->
-<div class="card p-6">
-    <h3 class="text-lg font-semibold mb-4">Accounts</h3>
-    <table>
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Balance</th>
-                <th>Equity</th>
-                <th>Risk %</th>
-                <th>Max Lot</th>
-                <th>Open Trades</th>
-                <th>Daily Trades</th>
-                <th>Daily Messages</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for a in accounts %}
-            <tr>
-                <td class="font-semibold">{{ a.name }}</td>
-                <td>
-                    {% if a.connected and a.enabled %}
-                        <span class="text-green-400 text-xs px-2 py-0.5 rounded badge-connected">Active</span>
-                    {% elif a.connected and not a.enabled %}
-                        <span class="text-yellow-400 text-xs">Disabled</span>
-                    {% else %}
-                        <span class="text-red-400 text-xs px-2 py-0.5 rounded badge-disconnected">Disconnected</span>
-                    {% endif %}
-                </td>
-                <td class="font-mono">${{ "%.2f"|format(a.balance) }}</td>
-                <td class="font-mono">${{ "%.2f"|format(a.equity) }}</td>
-                <td>{{ a.risk_percent }}%</td>
-                <td>{{ a.max_lot }}</td>
-                <td>{{ a.open_trades }}</td>
-                <td>{{ a.daily_trades }} / 30</td>
-                <td>{{ a.daily_messages }} / 500</td>
-            </tr>
-            {% endfor %}
-            {% if not accounts %}
-            <tr><td colspan="9" class="text-center text-slate-500 py-8">No accounts configured</td></tr>
-            {% endif %}
-        </tbody>
-    </table>
-    <p class="text-xs text-slate-600 mt-4">
-        To modify: edit accounts.json and restart the bot container.
-    </p>
-</div>
+<div id="modal-root"></div>
 {% endblock %}
