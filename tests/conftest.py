@@ -78,6 +78,31 @@ async def seeded_account(db_pool):
     return "test-acct"
 
 
+@pytest_asyncio.fixture
+async def seeded_signal(db_pool):
+    """Insert one signals row (FK target for staged_entries); returns the id.
+
+    Promoted from tests/test_staged_db.py (Plan 01 local fixture) to conftest
+    so Phase 6 Plan 02 test files (test_staged_executor, test_staged_safety_hooks,
+    test_staged_attribution) can share it — Rule 3 deviation, blocking otherwise.
+    """
+    async with db._pool.acquire() as conn:
+        sid = await conn.fetchval(
+            """INSERT INTO signals (raw_text, signal_type, symbol, direction, action_taken)
+               VALUES ($1, $2, $3, $4, $5) RETURNING id""",
+            "test signal", "open_text_only", "XAUUSD", "buy", "staged",
+        )
+    return sid
+
+
+@pytest_asyncio.fixture
+async def seeded_staged_account(db_pool, seeded_account):
+    """seeded_account with max_stages=5 + default_sl_pips=100 suitable for band tests."""
+    await db.update_account_setting("test-acct", "max_stages", 5, actor="test")
+    await db.update_account_setting("test-acct", "default_sl_pips", 100, actor="test")
+    return seeded_account
+
+
 @pytest.fixture
 def global_config():
     """Trading config with zero jitter/delay for deterministic tests."""

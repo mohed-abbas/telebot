@@ -9,17 +9,7 @@ import pytest_asyncio
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-@pytest_asyncio.fixture
-async def seeded_signal(db_pool):
-    """Insert one signals row (FK target for staged_entries); returns the id."""
-    import db
-    async with db._pool.acquire() as conn:
-        sid = await conn.fetchval(
-            """INSERT INTO signals (raw_text, signal_type, symbol, direction, action_taken)
-               VALUES ($1, $2, $3, $4, $5) RETURNING id""",
-            "test signal", "open_text_only", "XAUUSD", "buy", "staged",
-        )
-    return sid
+# seeded_signal is now provided by tests/conftest.py so multiple Phase 6 test files can share it.
 
 
 async def test_create_staged_entries_returns_ids(db_pool, seeded_account, seeded_signal):
