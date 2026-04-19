@@ -57,7 +57,8 @@ async def clean_tables():
         async with db._pool.acquire() as conn:
             await conn.execute(
                 "TRUNCATE signals, trades, daily_stats, pending_orders, "
-                "settings_audit, account_settings, accounts, failed_login_attempts "
+                "settings_audit, account_settings, accounts, failed_login_attempts, "
+                "staged_entries, signal_daily_counted "
                 "RESTART IDENTITY CASCADE"
             )
     except Exception:
