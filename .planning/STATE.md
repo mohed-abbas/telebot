@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Improved trade executions and UI
-status: completed
-last_updated: "2026-04-19T19:08:17.176Z"
-last_activity: 2026-04-19 -- Phase 05-05 gap-closure complete (Tailwind v3.4.19 → v4.2.2; compiled CSS 11KB → 145KB with Basecoat + compat-shim rules)
+status: executing
+last_updated: "2026-04-19T22:15:48.304Z"
+last_activity: 2026-04-19 -- Phase 06 execution started
 progress:
   total_phases: 3
   completed_phases: 1
-  total_plans: 5
+  total_plans: 10
   completed_plans: 5
-  percent: 100
+  percent: 50
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 05 — foundation
+**Current focus:** Phase 06 — staged-entry-execution
 
 ## Current Position
 
-Phase: 05 (foundation) — COMPLETE (inc. 05-05 gap closure)
-Plan: 5 of 5
-Status: Phase 5 done; UAT Gap #1 closed via Tailwind v4 bump
-Last activity: 2026-04-19 -- Phase 05-05 gap-closure complete (Tailwind v3.4.19 → v4.2.2; compiled CSS 11KB → 145KB with Basecoat + compat-shim rules)
+Phase: 06 (staged-entry-execution) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 06
+Last activity: 2026-04-19 -- Phase 06 execution started
 
 ## v1.1 Milestone Map
 
@@ -112,6 +112,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-04-19 — Phase 05-05 gap-closure complete (UAT Gap #1 closed: compiled CSS now contains Basecoat + compat-shim rules; 11KB → 145KB; 3 TDD commits + 1 groundwork commit)
-Resume file: .planning/phases/06-staged-entry-execution/06-CONTEXT.md
-Next action: Re-run UAT Tests 3 + 4 (visual verification of /login with Basecoat styling + red `.alert-destructive` banner on wrong password), then `/gsd-execute-phase 6`
+Last activity: 2026-04-20 — Phase 6 planned (5 plans, 3 waves); plan-checker PASSED after 1 revision (resolved 2 blockers + 1 warning + 1 info)
+Resume file: .planning/phases/06-staged-entry-execution/06-01-PLAN.md
+Next action: `/gsd-execute-phase 6` — Wave 1 [06-01] → Wave 2 [06-02, 06-03 parallel] → Wave 3 [06-04, 06-05 parallel]

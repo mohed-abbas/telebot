@@ -924,26 +924,31 @@ Note: the existing method signature of `_execute_open_on_account` accepts `signa
 | A3 | `signal.max_age_minutes` exists as a `GlobalConfig` field (used by D-24 reconcile logic to decide "abandoned vs still-valid"). | Example 2 (_sync_positions) | LOW — if the field does not exist, add it to `GlobalConfig` with a default of 30 minutes. One-line addition, no cross-cutting impact. |
 | A4 | A Postgres `UNIQUE` constraint on `staged_entries.mt5_comment` is enforceable given the deterministic comment format and the D-25 idempotency semantics (i.e., the same comment is never intentionally reused). | Pattern 6 (DDL) | LOW — by construction, `telebot-{signal_id}-s{stage}` is unique per (signal_id, stage_number) pair, and the same pair is not INSERTed twice in normal flow. Retry/reconcile logic marks-filled rather than re-inserts. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does the MT5 REST bridge preserve `comment` end-to-end?**
    - What we know: the Python connector passes `comment` into POST body and reads `comment` from GET response [VERIFIED: mt5_connector.py:640-692].
    - What's unclear: whether the bridge server process (Wine MT5 + mt5linux RPyC shim + REST wrapper) translates the JSON `comment` into MT5's `order.request.comment` and reads it back from `mt5.positions_get().comment`.
    - Recommendation: Plan MUST include an integration test that opens+queries a position with a known comment and asserts round-trip, runnable in both CI (DryRun) and UAT (real bridge). Block phase progression on UAT pass.
+   - **RESOLVED:** Bridge verification lives in BOTH surfaces. (a) **In-plan integration test** — `tests/test_staged_safety.py::test_mt5_comment_round_trip` runs in CI against `DryRunConnector` (Plan 02 / Plan 04 test battery; listed as adversarial case #9 under Validation Architecture above). (b) **UAT-only** — the real Wine-MT5 bridge round-trip is exercised by the VALIDATION.md "Manual-Only Verifications" row (operator opens a test stage, confirms comment round-trips via MT5 terminal + dashboard pending-stages panel). Phase gate = both CI test green AND UAT checkbox ticked.
 
 2. **What does `signal.max_age_minutes` resolve to today?**
    - Search `config.py` / `models.py::GlobalConfig` for the field. If absent, add it as `signal_max_age_minutes: int = 30` in `GlobalConfig` (consistent with existing `limit_order_expiry_minutes` convention [VERIFIED: models.py:100]). Plan should include the field addition as a task.
+   - **RESOLVED:** Field is ABSENT from `models.py::GlobalConfig` [VERIFIED this session: models.py:94-105]. Plan 01 Task 2 Step 3 adds `signal_max_age_minutes: int = 30` to the `GlobalConfig` dataclass in `models.py` (authoritative location; NOT `config.py`). Plan 04's `_sync_positions` reconcile logic reads `global_config.signal_max_age_minutes` to distinguish "abandoned vs still-valid" staged rows.
 
 3. **Correlator behavior on bot restart mid-orphan-window.**
    - Known: In-memory correlator is empty on restart (per Pattern 3 rationale). A follow-up that arrives post-restart for a text-only fired pre-restart is treated as independent (D-05 fallback path).
    - Unclear: Is a WARN-level log sufficient, or should Discord alert operator so they know to close the would-be orphan manually?
    - Recommendation: Discord WARN alert. Operator judgment is cheap insurance.
+   - **RESOLVED:** Discord WARN alert on the fallback path. Plan 02 Step 2 (`handle_signal`) emits a Discord WARN when `pair_followup` returns None and the signal shape suggests a likely orphan (follow-up OPEN with zone + SL + TPs on a symbol/direction with no registered orphan). Log + Discord line: `"Correlator miss: follow-up {symbol} {direction} has no pending orphan (post-restart? manual-close candidate)"`.
 
 4. **"Typical signal" definition for dry-run preview in SET-03 modal.**
    - Planner call. Recommend: current account balance × proposed risk% with SL distance of 100 pips (XAUUSD convention). Display as literal computation: "Balance $X × Y% risk ÷ SL 100 pips = Z lots".
+   - **RESOLVED:** Plan 03 (SET-03 form) renders the dry-run preview as the literal formula string: `"Balance $<current_balance> × <risk_value>% risk ÷ SL 100 pips = <computed_lots> lots"` for percent-mode; for fixed_lot mode, preview shows `"Fixed lot <risk_value> ÷ <max_stages> stages = <per_stage_lot> lots/stage"`. SL distance fixed at 100 pips (XAUUSD convention, pip_value=0.01).
 
 5. **Zone-width degenerate case (`zone_low == zone_high`).**
    - Recommended behaviour per Pattern 2: all N-1 remaining stages share the same point-band; on in-zone-arrival check, all fire together. Alternative (reject at correlation time) was considered and rejected. Planner: add explicit test.
+   - **RESOLVED:** Accept point-zone. `compute_bands(zone_low=X, zone_high=X, max_stages=N, ...)` returns `N-1` bands each with `low==high==X` (degenerate point-bands). Plan 02 Task 2 Step 1 must handle equality (`zone_low == zone_high`) without asserting — replace `assert zone_low < zone_high` with `if zone_low > zone_high: raise ValueError(...)` and short-circuit on equality to produce point-bands. `stage_is_in_zone_at_arrival` must evaluate true when `price == band.high == band.low` (both BUY `current_ask <= band.high` and SELL `current_bid >= band.low` remain valid with inclusive `<=` / `>=`). Dedicated unit test: `TestComputeBands::test_zero_width_zone_produces_point_bands`. Dedicated integration test: extend `test_in_zone_at_arrival_fires_crossed_bands_immediately` with a point-zone scenario asserting all N-1 stages fire in one pass.
 
 ## Environment Availability
 

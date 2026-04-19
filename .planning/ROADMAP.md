@@ -58,7 +58,13 @@ Plans:
   4. MT5 reconnect reconciles `staged_entries` against actual MT5 positions by comment-based idempotency key — no stage is duplicated, no stage is silently lost
   5. Dashboard shows a live pending-stages panel (symbol, direction, stages filled / total, price target band, elapsed time) and every staged fill is attributed to its originating signal in the trades table for per-source analytics
   6. Operator can edit per-account settings (risk mode, lot size, max stages, default SL pips) from a dashboard form; changes are validated against server-side hard caps and apply only to signals received after the edit
-**Plans**: TBD
+**Plans**: 5 plans
+Plans:
+- [ ] 06-01-PLAN.md — Data + parser + correlator: staged_entries DDL, signal_daily_counted idempotency table, db helpers, SignalType.OPEN_TEXT_ONLY + StagedEntryRecord, text-only "now" parser, SignalCorrelator module, bot.py wiring (STAGE-01, STAGE-03, STAGE-09)
+- [ ] 06-02-PLAN.md — Stage-execution path: stage-aware _execute_open_on_account, default-SL hard reject, dup-guard bypass, daily-limit helper wrap, per-symbol cap, _handle_text_only_open + _handle_correlated_followup + compute_bands + in-zone-at-arrival (STAGE-02, STAGE-04, STAGE-05, STAGE-09)
+- [ ] 06-03-PLAN.md — Per-account settings form: /settings GET + validate/confirm/revert POSTs + server-side hard caps + Basecoat tabs + two-step modal + audit timeline + revert button (SET-03)
+- [ ] 06-04-PLAN.md — Safety hooks: _zone_watch_loop peer task + emergency_close drain + _sync_positions reconnect reconciliation + idempotency probe (STAGE-04, STAGE-06, STAGE-07)
+- [ ] 06-05-PLAN.md — Pending-stages panel: SSE payload extension + /staged page + /partials/pending_stages polling fallback + overview.html include + templates + price-flash JS helper (STAGE-08)
 
 ### Phase 7: Dashboard redesign
 **Goal**: Every dashboard view is restyled on Basecoat components with richer drilldowns, the layout is usable on a phone, and operators can filter/analyze trade history by account, source, symbol, and date range — with zero regressions in any v1.0 or v1.1 functionality.
