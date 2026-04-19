@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re as _re
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 
 
@@ -11,6 +12,7 @@ class SignalType(Enum):
     MODIFY_TP = "modify_tp"
     CLOSE = "close"
     CLOSE_PARTIAL = "close_partial"
+    OPEN_TEXT_ONLY = "open_text_only"  # Phase 6 D-01 — "Gold buy now" / "XAU sell now"
 
 
 class Direction(Enum):
@@ -91,6 +93,37 @@ class AccountSettings:
     max_lot_size: float
 
 
+@dataclass(frozen=True, slots=True)
+class StagedEntryRecord:
+    """Per-stage DB row for Phase 6 staged_entries (D-37).
+
+    Mirrors the staged_entries table columns. Frozen + slotted so instances
+    are cheap to copy via dataclasses.replace() when re-snapshotting.
+    """
+
+    id: int
+    signal_id: int
+    stage_number: int
+    account_name: str
+    symbol: str
+    direction: str  # 'buy' | 'sell'
+    zone_low: float
+    zone_high: float
+    band_low: float
+    band_high: float
+    target_lot: float
+    snapshot_settings: dict  # JSONB — risk_mode/value/max_stages/default_sl_pips/max_daily_trades
+    mt5_comment: str
+    mt5_ticket: int | None
+    # 'awaiting_followup' | 'awaiting_zone' | 'filled'
+    # | 'cancelled_by_kill_switch' | 'cancelled_stage1_closed'
+    # | 'failed' | 'capped' | 'abandoned_reconnect'
+    status: str
+    created_at: datetime
+    filled_at: datetime | None
+    cancelled_reason: str | None
+
+
 @dataclass
 class GlobalConfig:
     """Global trading configuration."""
@@ -103,6 +136,8 @@ class GlobalConfig:
     stagger_delay_max: float = 5.0
     lot_jitter_percent: float = 4.0
     sl_tp_jitter_points: float = 0.8
+    correlation_window_seconds: int = 600  # Phase 6 D-04 — orphan/follow-up pairing window
+    signal_max_age_minutes: int = 30       # Phase 6 Research Q2 — reconcile cutoff for abandoned stages
 
 
 @dataclass

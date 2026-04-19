@@ -5,6 +5,7 @@ Uses asyncpg connection pool for async operations.
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
@@ -206,6 +207,41 @@ async def _create_tables() -> None:
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_failed_login_ip_ts
                 ON failed_login_attempts(ip_addr, attempted_at)
+        """)
+        # ── staged_entries + signal_daily_counted (Phase 6, D-37..D-39) ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS staged_entries (
+                id                 SERIAL PRIMARY KEY,
+                signal_id          INTEGER NOT NULL REFERENCES signals(id),
+                stage_number       INTEGER NOT NULL,
+                account_name       TEXT NOT NULL REFERENCES accounts(name),
+                symbol             TEXT NOT NULL,
+                direction          TEXT NOT NULL CHECK (direction IN ('buy','sell')),
+                zone_low           DOUBLE PRECISION NOT NULL,
+                zone_high          DOUBLE PRECISION NOT NULL,
+                band_low           DOUBLE PRECISION NOT NULL,
+                band_high          DOUBLE PRECISION NOT NULL,
+                target_lot         DOUBLE PRECISION NOT NULL,
+                snapshot_settings  JSONB NOT NULL,
+                mt5_comment        TEXT NOT NULL UNIQUE,
+                mt5_ticket         BIGINT,
+                status             TEXT NOT NULL DEFAULT 'awaiting_zone',
+                created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                filled_at          TIMESTAMPTZ,
+                cancelled_reason   TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_staged_entries_active
+                ON staged_entries(status, account_name, signal_id)
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS signal_daily_counted (
+                signal_id     INTEGER NOT NULL REFERENCES signals(id),
+                account_name  TEXT NOT NULL REFERENCES accounts(name),
+                date          DATE NOT NULL DEFAULT CURRENT_DATE,
+                PRIMARY KEY (signal_id, account_name, date)
+            )
         """)
 
 
@@ -673,3 +709,147 @@ async def clear_failed_logins(ip_addr: str) -> None:
             "DELETE FROM failed_login_attempts WHERE ip_addr = $1",
             ip_addr,
         )
+
+
+# ── staged_entries helpers (Phase 6, D-37..D-39) ─────────────────────
+
+
+async def create_staged_entries(rows: list[dict]) -> list[int]:
+    """Bulk insert one row per stage. Returns ids in input order (D-37)."""
+    ids: list[int] = []
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            for r in rows:
+                new_id = await conn.fetchval(
+                    """INSERT INTO staged_entries
+                       (signal_id, stage_number, account_name, symbol, direction,
+                        zone_low, zone_high, band_low, band_high, target_lot,
+                        snapshot_settings, mt5_comment, status)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
+                       RETURNING id""",
+                    r["signal_id"], r["stage_number"], r["account_name"],
+                    r["symbol"], r["direction"],
+                    r["zone_low"], r["zone_high"], r["band_low"], r["band_high"],
+                    r["target_lot"], json.dumps(r["snapshot_settings"]),
+                    r["mt5_comment"], r.get("status", "awaiting_zone"),
+                )
+                ids.append(new_id)
+    return ids
+
+
+async def update_stage_status(
+    stage_id: int,
+    status: str,
+    mt5_ticket: int | None = None,
+    cancelled_reason: str | None = None,
+) -> None:
+    """Status mutation; sets filled_at=NOW() when status='filled'."""
+    if status == "filled":
+        await _pool.execute(
+            """UPDATE staged_entries
+               SET status=$1, mt5_ticket=$2, filled_at=NOW()
+               WHERE id=$3""",
+            status, mt5_ticket, stage_id,
+        )
+    else:
+        await _pool.execute(
+            """UPDATE staged_entries
+               SET status=$1, cancelled_reason=$2
+               WHERE id=$3""",
+            status, cancelled_reason, stage_id,
+        )
+
+
+async def get_pending_stages(
+    account_name: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Rows with status IN ('awaiting_followup','awaiting_zone'). Newest first."""
+    base_sql = (
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
+        "mt5_comment, mt5_ticket, status, created_at "
+        "FROM staged_entries "
+        "WHERE status IN ('awaiting_followup','awaiting_zone') "
+    )
+    if account_name:
+        base_sql += "AND account_name=$1 "
+        params: list = [account_name]
+    else:
+        params = []
+    base_sql += "ORDER BY created_at DESC"
+    if limit is not None:
+        # T-06-02 mitigation: coerce to int before interpolation
+        base_sql += f" LIMIT {int(limit)}"
+    rows = await _pool.fetch(base_sql, *params)
+    return [dict(r) for r in rows]
+
+
+async def get_active_stages() -> list[dict]:
+    """Polling helper for _zone_watch_loop (status='awaiting_zone' only)."""
+    rows = await _pool.fetch(
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
+        "mt5_comment FROM staged_entries WHERE status='awaiting_zone'"
+    )
+    return [dict(r) for r in rows]
+
+
+async def drain_staged_entries_for_kill_switch() -> int:
+    """D-21 — terminal cancel all pending rows. Returns affected count."""
+    result = await _pool.execute(
+        "UPDATE staged_entries "
+        "SET status='cancelled_by_kill_switch', cancelled_reason='kill_switch' "
+        "WHERE status IN ('awaiting_followup','awaiting_zone')"
+    )
+    # asyncpg returns command tag like 'UPDATE 7'
+    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+
+
+async def cancel_unfilled_stages_for_signal(
+    signal_id: int, reason: str = "stage1_closed",
+) -> int:
+    """D-16 — stage-1 exit cascade; cancels unfilled sibling stages."""
+    result = await _pool.execute(
+        "UPDATE staged_entries "
+        "SET status='cancelled_stage1_closed', cancelled_reason=$1 "
+        "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
+        reason, signal_id,
+    )
+    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+
+
+async def get_recently_resolved_stages(limit: int = 50) -> list[dict]:
+    """For /staged 'Recently resolved' section (D-36)."""
+    rows = await _pool.fetch(
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "status, cancelled_reason, created_at, filled_at "
+        "FROM staged_entries "
+        "WHERE status IN ('filled','cancelled_by_kill_switch',"
+        "'cancelled_stage1_closed','abandoned_reconnect','failed','capped') "
+        "ORDER BY COALESCE(filled_at, created_at) DESC LIMIT $1",
+        limit,
+    )
+    return [dict(r) for r in rows]
+
+
+async def mark_signal_counted_today(signal_id: int, account_name: str) -> bool:
+    """D-18 — returns True iff this (signal_id, account, today) is the first fill."""
+    row = await _pool.fetchrow(
+        """INSERT INTO signal_daily_counted (signal_id, account_name)
+           VALUES ($1, $2)
+           ON CONFLICT (signal_id, account_name, date) DO NOTHING
+           RETURNING signal_id""",
+        signal_id, account_name,
+    )
+    return row is not None
+
+
+async def get_stage_by_comment(mt5_comment: str) -> dict | None:
+    """D-25 idempotency probe — look up a stage by its canonical mt5_comment."""
+    row = await _pool.fetchrow(
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "status, mt5_ticket FROM staged_entries WHERE mt5_comment=$1",
+        mt5_comment,
+    )
+    return dict(row) if row else None
