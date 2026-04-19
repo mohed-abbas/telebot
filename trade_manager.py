@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 import db
 from models import (
     AccountConfig,
+    AccountSettings,
     Direction,
     GlobalConfig,
     SignalAction,
@@ -31,6 +34,95 @@ from risk_calculator import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── Phase 6 staged-entry pure helpers (D-11..D-15) ───────────────────
+
+class Band(NamedTuple):
+    """One entry band for a correlated follow-up stage (stages 2..N).
+
+    stage_number is 2..N because stage 1 is the text-only market fill and
+    does not get a band.
+    """
+    stage_number: int
+    low: float
+    high: float
+
+
+def compute_bands(
+    zone_low: float,
+    zone_high: float,
+    max_stages: int,
+    direction: str,
+) -> list[Band]:
+    """D-11/D-12: N-1 equal-width bands across (zone_low, zone_high).
+
+    Stage 1 is the text-only market fill and does NOT get a band — bands
+    are only emitted for stages 2..N.
+
+    Invariants:
+      - len(return) == max_stages - 1
+      - bands[i].low == zone_low + i*width; bands[i].high == zone_low + (i+1)*width
+      - bands are contiguous, non-overlapping, partition the zone exactly.
+      - stage_number = i + 2
+
+    Research Q5 RESOLVED: zone_low == zone_high is accepted; all N-1 stages
+    are collapsed to point-bands, which fire together on arrival.
+
+    Raises:
+      ValueError if zone_low > zone_high (inverted zone).
+    """
+    if max_stages < 2:
+        return []
+    if zone_low > zone_high:
+        raise ValueError(f"zone_low {zone_low} must be <= zone_high {zone_high}")
+    n_bands = max_stages - 1
+    if zone_low == zone_high:
+        return [Band(stage_number=i + 2, low=zone_low, high=zone_low) for i in range(n_bands)]
+    width = (zone_high - zone_low) / n_bands
+    return [
+        Band(stage_number=i + 2, low=zone_low + i * width, high=zone_low + (i + 1) * width)
+        for i in range(n_bands)
+    ]
+
+
+def stage_is_in_zone_at_arrival(
+    band: Band, current_bid: float, current_ask: float, direction: str,
+) -> bool:
+    """D-13: True if price has already crossed this band's trigger edge.
+
+    BUY — long sequence, price moving DOWN into the zone. Trigger edge is
+    band.high; in-zone when current_ask <= band.high.
+    SELL — short sequence, price moving UP into the zone. Trigger edge is
+    band.low; in-zone when current_bid >= band.low.
+
+    Equality is inclusive; a point-band (band.low == band.high) fires when
+    the relevant side of the spread equals that point.
+    """
+    if direction == "buy":
+        return current_ask <= band.high
+    return current_bid >= band.low
+
+
+def stage_lot_size(snapshot: AccountSettings) -> float:
+    """D-15: equal split across max_stages for both risk modes.
+
+    For fixed_lot mode, snapshot.risk_value carries the target total lot size
+    across all stages. For percent mode, snapshot.risk_value carries the total
+    risk percent; per-stage slice is the equal share. Downstream sizing logic
+    consumes this slice directly.
+    """
+    if snapshot.max_stages <= 0:
+        return 0.0
+    return snapshot.risk_value / snapshot.max_stages
+
+
+def _pip_size_for_symbol(symbol: str) -> float:
+    """Pip size by symbol — v1.1 only supports XAUUSD (1 pip = $0.01)."""
+    if symbol.upper() == "XAUUSD":
+        return 0.01
+    logger.warning("Non-XAUUSD symbol %s — defaulting pip size to 0.0001", symbol)
+    return 0.0001
 
 
 # ── Effective-settings lookup (Phase 5, D-27) ───────────────────────
@@ -136,7 +228,19 @@ class TradeManager:
 
     async def handle_signal(self, signal: SignalAction) -> list[dict]:
         """Process a parsed signal. Returns list of execution results for notification."""
+        if signal.type == SignalType.OPEN_TEXT_ONLY:
+            return await self._handle_text_only_open(signal)
         if signal.type == SignalType.OPEN:
+            # Phase 6 D-05 — try to correlate to a recent orphan first.
+            paired_signal_id = None
+            correlator = getattr(self, "correlator", None)
+            if correlator and signal.direction is not None:
+                paired_signal_id = await correlator.pair_followup(
+                    symbol=signal.symbol, direction=signal.direction.value,
+                )
+            if paired_signal_id is not None:
+                return await self._handle_correlated_followup(signal, paired_signal_id)
+            # v1.0 fallback — standalone OPEN, unchanged.
             return await self._handle_open(signal)
         elif signal.type == SignalType.CLOSE:
             return await self._handle_close(signal)
@@ -147,6 +251,217 @@ class TradeManager:
         elif signal.type == SignalType.MODIFY_TP:
             return await self._handle_modify_tp(signal)
         return []
+
+    # ── Phase 6: TEXT-ONLY OPEN (STAGE-02) ───────────────────────────
+
+    async def _handle_text_only_open(self, signal: SignalAction) -> list[dict]:
+        """OPEN_TEXT_ONLY: fire stage 1 at market with default SL; register orphan.
+
+        Per account:
+          1. Log the signal row (signal_id).
+          2. Register the orphan with the correlator so a follow-up can pair.
+          3. Snapshot AccountSettings (D-30) and compute default_sl_price.
+          4. Insert a staged_entries row for stage 1 (status='awaiting_zone').
+          5. Call _execute_open_on_account(staged=True, stage_number=1, stage_row_id=...).
+        """
+        results: list[dict] = []
+
+        signal_id = await db.log_signal(
+            raw_text=signal.raw_text,
+            signal_type="open_text_only",
+            action_taken="staged",
+            symbol=signal.symbol,
+            direction=signal.direction.value if signal.direction else "",
+        )
+
+        correlator = getattr(self, "correlator", None)
+        if correlator and signal.direction is not None:
+            await correlator.register_orphan(
+                signal_id=signal_id,
+                symbol=signal.symbol,
+                direction=signal.direction.value,
+            )
+
+        store = getattr(self, "settings_store", None)
+        pip_size = _pip_size_for_symbol(signal.symbol)
+
+        for acct_name, connector in self.connectors.items():
+            acct = self.accounts.get(acct_name)
+            if not acct or not acct.enabled:
+                continue
+            if not connector.connected:
+                results.append({"account": acct_name, "status": "skipped", "reason": "disconnected"})
+                continue
+
+            try:
+                snapshot = store.snapshot(acct_name) if store else None
+            except KeyError:
+                snapshot = None
+
+            price_data = await connector.get_price(signal.symbol)
+            if price_data is None:
+                results.append({"account": acct_name, "status": "failed", "reason": "no price for default SL"})
+                continue
+            bid, ask = price_data
+            default_sl_pips = snapshot.default_sl_pips if snapshot else 100
+            if signal.direction == Direction.BUY:
+                sl_price = ask - (default_sl_pips * pip_size)
+            else:
+                sl_price = bid + (default_sl_pips * pip_size)
+
+            comment = f"telebot-{signal_id}-s1"
+
+            stage_row = {
+                "signal_id": signal_id,
+                "stage_number": 1,
+                "account_name": acct_name,
+                "symbol": signal.symbol,
+                "direction": signal.direction.value,
+                "zone_low": 0.0,
+                "zone_high": 0.0,
+                "band_low": 0.0,
+                "band_high": 0.0,
+                "target_lot": stage_lot_size(snapshot) if snapshot else 0.0,
+                "snapshot_settings": asdict(snapshot) if snapshot else {},
+                "mt5_comment": comment,
+                "status": "awaiting_zone",
+            }
+            try:
+                [stage_id] = await db.create_staged_entries([stage_row])
+            except Exception as exc:  # UNIQUE(mt5_comment) violation — idempotency
+                logger.warning("%s: stage 1 insert failed (idempotency?): %s", acct_name, exc)
+                results.append({"account": acct_name, "status": "skipped", "reason": "duplicate"})
+                continue
+
+            synth = SignalAction(
+                type=SignalType.OPEN_TEXT_ONLY,
+                symbol=signal.symbol,
+                raw_text=signal.raw_text,
+                direction=signal.direction,
+                entry_zone=None,
+                sl=sl_price,
+                tps=[],
+                target_tp=None,
+            )
+            result = await self._execute_open_on_account(
+                synth, signal_id, acct, connector,
+                staged=True, stage_number=1, stage_row_id=stage_id, snapshot=snapshot,
+            )
+            if result.get("status") == "failed":
+                await db.update_stage_status(
+                    stage_id, "failed",
+                    cancelled_reason=result.get("reason", "unknown"),
+                )
+            results.append(result)
+
+        return results
+
+    # ── Phase 6: CORRELATED FOLLOW-UP (STAGE-04) ──────────────────────
+
+    async def _handle_correlated_followup(
+        self, signal: SignalAction, paired_signal_id: int,
+    ) -> list[dict]:
+        """Follow-up OPEN paired with a text-only orphan.
+
+        Per account:
+          1. Snapshot AccountSettings (D-30).
+          2. Compute N-1 equal bands across (zone_low, zone_high) (D-11/D-12).
+          3. Insert all bands as staged_entries rows (status='awaiting_zone').
+          4. Fire bands in-zone-at-arrival (D-13) immediately at market.
+          5. Remaining armed bands stay awaiting_zone — Plan 04's _zone_watch_loop.
+
+        Failure isolation (D-17): one band's broker-reject does not abort the rest.
+        """
+        results: list[dict] = []
+        if signal.entry_zone is None or signal.direction is None:
+            logger.warning("correlated follow-up missing entry_zone/direction — ignoring")
+            return results
+
+        store = getattr(self, "settings_store", None)
+
+        for acct_name, connector in self.connectors.items():
+            acct = self.accounts.get(acct_name)
+            if not acct or not acct.enabled:
+                continue
+            if not connector.connected:
+                results.append({"account": acct_name, "status": "skipped", "reason": "disconnected"})
+                continue
+
+            try:
+                snapshot = store.snapshot(acct_name) if store else None
+            except KeyError:
+                snapshot = None
+            max_stages = snapshot.max_stages if snapshot else 1
+            bands = compute_bands(
+                signal.entry_zone[0], signal.entry_zone[1],
+                max_stages, signal.direction.value,
+            )
+            if not bands:
+                results.append({"account": acct_name, "status": "no_bands", "reason": "max_stages=1"})
+                continue
+
+            rows = [
+                {
+                    "signal_id": paired_signal_id,
+                    "stage_number": b.stage_number,
+                    "account_name": acct_name,
+                    "symbol": signal.symbol,
+                    "direction": signal.direction.value,
+                    "zone_low": signal.entry_zone[0],
+                    "zone_high": signal.entry_zone[1],
+                    "band_low": b.low,
+                    "band_high": b.high,
+                    "target_lot": stage_lot_size(snapshot) if snapshot else 0.0,
+                    "snapshot_settings": asdict(snapshot) if snapshot else {},
+                    "mt5_comment": f"telebot-{paired_signal_id}-s{b.stage_number}",
+                    "status": "awaiting_zone",
+                }
+                for b in bands
+            ]
+            stage_ids = await db.create_staged_entries(rows)
+
+            price_data = await connector.get_price(signal.symbol)
+            if price_data is None:
+                results.append({"account": acct_name, "status": "staged", "reason": "no_price_yet", "stages": len(rows)})
+                continue
+            bid, ask = price_data
+
+            fired_count = 0
+            for band, stage_id in zip(bands, stage_ids):
+                if not stage_is_in_zone_at_arrival(band, bid, ask, signal.direction.value):
+                    continue  # armed — Plan 04 will fire later
+                synth = SignalAction(
+                    type=SignalType.OPEN,
+                    symbol=signal.symbol,
+                    raw_text=signal.raw_text,
+                    direction=signal.direction,
+                    entry_zone=(band.low, band.high),
+                    sl=signal.sl,
+                    tps=list(signal.tps) if signal.tps else [],
+                    target_tp=signal.target_tp,
+                )
+                result = await self._execute_open_on_account(
+                    synth, paired_signal_id, acct, connector,
+                    staged=True, stage_number=band.stage_number,
+                    stage_row_id=stage_id, snapshot=snapshot,
+                )
+                if result.get("status") == "failed":
+                    await db.update_stage_status(
+                        stage_id, "failed",
+                        cancelled_reason=result.get("reason", "broker_reject"),
+                    )
+                if result.get("status") in ("executed", "filled"):
+                    fired_count += 1
+                results.append(result)
+
+            results.append({
+                "account": acct_name, "status": "staged",
+                "fired_at_arrival": fired_count,
+                "armed": len(bands) - fired_count,
+                "total": len(bands),
+            })
+
+        return results
 
     # ── OPEN ────────────────────────────────────────────────────────────
 
