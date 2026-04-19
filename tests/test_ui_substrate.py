@@ -59,8 +59,12 @@ def test_build_css_script_is_executable_and_produces_hashed_output(tmp_path, mon
     """Actually runs build_css.sh locally if tailwindcss is installed.
     Skips cleanly if the CLI isn't present (CI validates this in Docker)."""
     import shutil
-    if shutil.which("tailwindcss") is None:
-        pytest.skip("tailwindcss CLI not on PATH; Docker build stage exercises this path")
+    for tool in ("tailwindcss", "sha256sum", "bash", "python3"):
+        if shutil.which(tool) is None:
+            pytest.skip(
+                f"{tool!r} not on PATH; Docker css-build stage enforces this "
+                "regression check (see Gap #1 / D-04-REVISED)"
+            )
 
     # Run in repo root (deterministic output test — Pitfall 11)
     r1 = subprocess.run(["bash", "scripts/build_css.sh"], cwd=REPO, capture_output=True)
@@ -105,11 +109,12 @@ def test_compiled_css_contains_basecoat_and_compat_markers():
     as this test failing (v3 CLI silently drops @import statements; v4 resolves them).
     """
     import shutil
-    if shutil.which("tailwindcss") is None:
-        pytest.skip(
-            "tailwindcss CLI not on PATH; Docker css-build stage enforces this "
-            "regression check (see Gap #1 / D-04-REVISED)"
-        )
+    for tool in ("tailwindcss", "sha256sum", "bash", "python3"):
+        if shutil.which(tool) is None:
+            pytest.skip(
+                f"{tool!r} not on PATH; Docker css-build stage enforces this "
+                "regression check (see Gap #1 / D-04-REVISED)"
+            )
 
     r = subprocess.run(["bash", "scripts/build_css.sh"], cwd=REPO, capture_output=True)
     assert r.returncode == 0, r.stderr.decode()
