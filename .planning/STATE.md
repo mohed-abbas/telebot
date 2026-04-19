@@ -1,15 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: Improved trade executions and UI
-status: Phase 5 in progress — Wave 1 complete (2/4 plans)
-stopped_at: end of Wave 1; awaiting /clear + --wave 2
-last_updated: "2026-04-19T15:00:00Z"
+milestone_name: — Improved trade executions and UI
+status: executing
+last_updated: "2026-04-19T13:08:18.398Z"
+last_activity: 2026-04-19 -- Phase 05 Wave 2 complete (Plan 03)
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State
@@ -19,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Milestone v1.1 — roadmap complete, ready to plan Phase 5
+**Current focus:** Phase 05 — foundation
 
 ## Current Position
 
-Phase: 5 — Foundation (UI substrate, auth, settings data model) — Wave 1 complete
-Plan: 05-01 ✓ data layer · 05-02 ✓ UI substrate · 05-03 ⏳ auth backend (Wave 2) · 05-04 ⏳ /login + CSRF + rate-limit (Wave 3)
-Status: Wave 1 merged to main; paused per between-wave `/clear` pattern — resume with `/gsd-execute-phase 5 --wave 2`
-Last activity: 2026-04-19 — Wave 1 executors ran in parallel worktrees, merged back, 36/36 Wave 1 tests pass in isolation
+Phase: 05 (foundation) — EXECUTING
+Plan: 3 of 4 (Wave 2 complete; Wave 3 / Plan 04 pending)
+Status: Executing Phase 05
+Last activity: 2026-04-19 -- Phase 05 Wave 2 complete (Plan 03)
 
 ## v1.1 Milestone Map
 
