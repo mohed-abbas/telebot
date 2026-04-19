@@ -22,7 +22,7 @@ def _reload_config(env: dict[str, str]):
     # Purge conflicting vars
     for key in list(os.environ):
         if key in baseline or key in env or key in (
-            "DASHBOARD_USER", "DASHBOARD_PASS",
+            "DASHBOARD_USER", "DASHBOARD_PASS", "SESSION_COOKIE_SECURE",
         ):
             os.environ.pop(key, None)
     os.environ.update(merged)

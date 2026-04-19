@@ -9,18 +9,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
 import db
+from config import settings as app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,38 @@ _notifier = None
 _settings = None
 _daily_limit_warned: set[str] = set()  # Account names that already received 80% warning today
 
-security = HTTPBasic()
-
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# ─── Asset manifest (Phase 5 UI-04) ──────────────────────────────────────────
+# Resolves logical CSS names (e.g. "app.css") to content-hashed filenames built
+# by scripts/build_css.sh. Loaded once at module import; falls back to the
+# logical name when the manifest is absent (dev workflow before first build).
+_asset_manifest: dict[str, str] = {}
+
+
+def _load_manifest() -> None:
+    global _asset_manifest
+    path = BASE_DIR / "static" / "css" / "manifest.json"
+    if path.exists():
+        try:
+            _asset_manifest = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            logger.warning("manifest.json unreadable: %s", exc)
+            _asset_manifest = {}
+
+
+_load_manifest()
+
+
+def asset_url(logical_name: str) -> str:
+    """Jinja global: resolves logical css name to hashed filename via manifest.
+    Falls back to the logical name if manifest missing (dev workflow)."""
+    hashed = _asset_manifest.get(logical_name, logical_name)
+    return f"/static/css/{hashed}"
+
+
+templates.env.globals["asset_url"] = asset_url
 
 
 def init_dashboard(executor, notifier, settings):
@@ -44,24 +73,33 @@ def init_dashboard(executor, notifier, settings):
     _settings = settings
 
 
-def _verify_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    """Verify basic auth credentials."""
-    if not _settings:
-        raise HTTPException(status_code=500, detail="Dashboard not initialized")
+def _verify_auth(request: Request) -> str:
+    """Session-based auth (AUTH-01 consumer contract).
 
-    expected_user = getattr(_settings, "dashboard_user", "") or "admin"
-    expected_pass = getattr(_settings, "dashboard_pass", "")
+    Page routes: HTTPException(303, Location=/login?next=…) to redirect.
+    HTMX / API routes: HTTPException(401) so HTMX shows an inline error.
 
-    user_ok = secrets.compare_digest(credentials.username.encode(), expected_user.encode())
-    pass_ok = secrets.compare_digest(credentials.password.encode(), expected_pass.encode())
+    Signature preserved: still returns the username string so the existing
+    18+ `user: str = Depends(_verify_auth)` call sites compile unchanged.
+    """
+    user = request.session.get("user")
+    if user:
+        return user
 
-    if not (user_ok and pass_ok):
+    if request.headers.get("hx-request") or request.url.path.startswith("/api/"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            detail="Session expired",
         )
-    return credentials.username
+
+    next_path = quote(
+        request.url.path
+        + ("?" + request.url.query if request.url.query else "")
+    )
+    raise HTTPException(
+        status_code=status.HTTP_303_SEE_OTHER,
+        headers={"Location": f"/login?next={next_path}"},
+    )
 
 
 async def _verify_csrf(request: Request):
@@ -83,6 +121,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Telebot Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+# Phase 5 AUTH-03: SessionMiddleware — must be added before first request.
+# D-11: 30-day cookie. Pitfall 3: https_only config-driven for dev/tests.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=app_settings.session_secret,
+    session_cookie="telebot_session",
+    max_age=30 * 24 * 60 * 60,        # 30 days (D-11)
+    same_site="lax",
+    https_only=app_settings.session_cookie_secure,
+    path="/",
+)
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
