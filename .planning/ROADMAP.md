@@ -40,8 +40,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Basecoat interactive components (dropdowns, tabs, dialogs) stay functional after HTMX partial swaps; no class names used by Python-side HTMX fragments are purged from the built CSS
 **Plans**: 4 plans
 Plans:
-- [ ] 05-01-PLAN.md — Data layer: 4 tables (accounts, account_settings, settings_audit, failed_login_attempts), SettingsStore abstraction, seed-from-JSON, migrate v1.0 callers (SET-01, SET-02, SET-04, SET-05)
-- [ ] 05-02-PLAN.md — UI substrate: Tailwind v3.4.19 standalone CLI build stage, Basecoat v0.3.3 vendoring, content-hashed CSS with manifest, compat shim for v1.0 classes, HTMX re-init bridge (UI-01..UI-05)
+- [x] 05-01-PLAN.md — Data layer: 4 tables (accounts, account_settings, settings_audit, failed_login_attempts), SettingsStore abstraction, seed-from-JSON, migrate v1.0 callers (SET-01, SET-02, SET-04, SET-05)
+- [x] 05-02-PLAN.md — UI substrate: Tailwind v3.4.19 standalone CLI build stage, Basecoat v0.3.3 vendoring, content-hashed CSS with manifest, compat shim for v1.0 classes, HTMX re-init bridge (UI-01..UI-05)
 - [ ] 05-03-PLAN.md — Auth backend: argon2-cffi + SessionMiddleware wired, SESSION_SECRET/DASHBOARD_PASS_HASH fail-fast validation, _verify_auth swap to session cookie, hash_password CLI, asset_url helper + base.html cutover (AUTH-02, AUTH-03)
 - [ ] 05-04-PLAN.md — /login + /logout + CSRF + rate-limit: styled login form, double-submit cookie CSRF, per-IP 5/15min lockout, nginx limit_req snippet, deployment runbook update (AUTH-01, AUTH-04, AUTH-05, AUTH-06)
 **UI hint**: yes
@@ -79,6 +79,6 @@ v1.1 phases execute in numeric order: 5 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 5. Foundation — UI, auth, settings data | 0/4 | Not started | - |
+| 5. Foundation — UI, auth, settings data | 2/4 | In progress | - |
 | 6. Staged entry execution | 0/? | Not started | - |
 | 7. Dashboard redesign | 0/? | Not started | - |

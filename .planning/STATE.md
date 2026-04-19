@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: Improved trade executions and UI
-status: Phase 5 planned — ready to execute
-stopped_at: —
-last_updated: "2026-04-18T23:55:00Z"
+status: Phase 5 in progress — Wave 1 complete (2/4 plans)
+stopped_at: end of Wave 1; awaiting /clear + --wave 2
+last_updated: "2026-04-19T15:00:00Z"
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
+  completed_plans: 2
 ---
 
 # Project State
@@ -23,10 +23,10 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 
 ## Current Position
 
-Phase: 5 — Foundation (UI substrate, auth, settings data model) — plans ready
-Plan: 4 plans written (05-01 data layer · 05-02 UI substrate · 05-03 auth backend · 05-04 /login + CSRF + rate-limit)
-Status: Plans passed checker (3 iterations) — awaiting `/gsd-execute-phase 5`
-Last activity: 2026-04-18 — CONTEXT.md (32 decisions), RESEARCH.md, VALIDATION.md, and 4 PLAN.md files produced; all 15 Phase 5 REQ-IDs mapped
+Phase: 5 — Foundation (UI substrate, auth, settings data model) — Wave 1 complete
+Plan: 05-01 ✓ data layer · 05-02 ✓ UI substrate · 05-03 ⏳ auth backend (Wave 2) · 05-04 ⏳ /login + CSRF + rate-limit (Wave 3)
+Status: Wave 1 merged to main; paused per between-wave `/clear` pattern — resume with `/gsd-execute-phase 5 --wave 2`
+Last activity: 2026-04-19 — Wave 1 executors ran in parallel worktrees, merged back, 36/36 Wave 1 tests pass in isolation
 
 ## v1.1 Milestone Map
 
