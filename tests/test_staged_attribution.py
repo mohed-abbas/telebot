@@ -121,7 +121,7 @@ async def test_staged_entries_joins_trades_by_ticket(
     )
     result = await tm_with_store._execute_open_on_account(
         synth, seeded_signal, acct, priced_connector,
-        stage_number=1, stage_row_id=stage_id,
+        staged=True, stage_number=1, stage_row_id=stage_id,
     )
     assert result["status"] == "executed"
     ticket = result["ticket"]
@@ -162,7 +162,7 @@ async def test_one_signal_id_one_daily_slot(
     )
     r1 = await tm_with_store._execute_open_on_account(
         synth1, seeded_signal, acct, priced_connector,
-        stage_number=1, stage_row_id=stage1_id,
+        staged=True, stage_number=1, stage_row_id=stage1_id,
     )
     assert r1["status"] == "executed"
     assert await db.get_daily_stat(seeded_account, "trades_count") == 1
@@ -179,7 +179,7 @@ async def test_one_signal_id_one_daily_slot(
     )
     r2 = await tm_with_store._execute_open_on_account(
         synth2, seeded_signal, acct, priced_connector,
-        stage_number=2, stage_row_id=stage2_id,
+        staged=True, stage_number=2, stage_row_id=stage2_id,
     )
     assert r2["status"] in ("executed", "limit_placed")
     # Critical: trades_count did NOT increment a second time.

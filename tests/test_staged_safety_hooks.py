@@ -84,7 +84,7 @@ async def test_default_sl_zero_hard_rejects_text_only(
     )
     result = await tm_with_store._execute_open_on_account(
         bad_signal, seeded_signal, acct, priced_connector,
-        stage_number=1,
+        staged=True, stage_number=1,
     )
     assert result["status"] == "failed"
     assert "sl=0.0" in result["reason"]
@@ -122,7 +122,7 @@ async def test_dup_guard_bypass_same_signal_id_different_stage(
     )
     result = await tm_with_store._execute_open_on_account(
         sibling_signal, seeded_signal, acct, priced_connector,
-        stage_number=2,
+        staged=True, stage_number=2,
     )
     # Stage 2 must NOT be skipped by the dup-guard — either executed or a later
     # stage-specific outcome, but NOT the "Already have a buy position" message.
@@ -156,7 +156,7 @@ async def test_dup_guard_still_rejects_unrelated_same_direction(
     )
     result = await tm_with_store._execute_open_on_account(
         unrelated_signal, seeded_signal, acct, priced_connector,
-        stage_number=1,
+        staged=True, stage_number=1,
     )
     assert result["status"] == "skipped"
     assert "Already have a buy" in result["reason"]

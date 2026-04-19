@@ -186,16 +186,39 @@ class TradeManager:
         signal_id: int,
         acct: AccountConfig,
         connector: MT5Connector,
+        *,
+        staged: bool = False,
+        stage_number: int = 1,
+        stage_row_id: int | None = None,
+        snapshot: "AccountSettings | None" = None,  # type: ignore[name-defined]
     ) -> dict:
-        """Execute an open signal on a single account with all checks."""
+        """Execute an open signal on a single account with all checks.
+
+        Phase 6 additions (all keyword-only; defaults preserve v1.0 behavior):
+          staged:       True when called from a Phase 6 staged dispatcher
+                        (_handle_text_only_open or _handle_correlated_followup).
+                        False for v1.0 _handle_open. Gates the D-18/D-19/D-23/D-24/D-25
+                        staged-only behaviors so v1.0 callers stay on the literal
+                        comment="telebot" + unconditional trades_count increment path.
+          stage_number: 1 for text-only stage-1; 2..N for sibling stages
+          stage_row_id: staged_entries.id — persisted on fill (D-38)
+          snapshot:     frozen AccountSettings for per-stage D-30 snapshot; falls back
+                        to SettingsStore.effective() via _effective() helper when None
+        """
         name = acct.name
+        # Phase 6 — stage_number > 1 on a staged call means stages 2..N of a
+        # correlated sequence; the first fill already burned the daily-trades slot (D-18).
+        is_sibling_stage = staged and stage_number > 1
 
         # ── Check daily limits ──────────────────────────────────────────
-        trade_count = await db.get_daily_stat(name, "trades_count")
-        if trade_count >= self.cfg.max_daily_trades_per_account:
-            reason = f"Daily trade limit ({self.cfg.max_daily_trades_per_account}) reached"
-            logger.warning("%s: %s", name, reason)
-            return {"account": name, "status": "skipped", "reason": reason}
+        # D-18: sibling stages (2..N) of a signal whose stage 1 already fired
+        # do NOT re-check the trade-count budget — 1 signal = 1 slot.
+        if not is_sibling_stage:
+            trade_count = await db.get_daily_stat(name, "trades_count")
+            if trade_count >= self.cfg.max_daily_trades_per_account:
+                reason = f"Daily trade limit ({self.cfg.max_daily_trades_per_account}) reached"
+                logger.warning("%s: %s", name, reason)
+                return {"account": name, "status": "skipped", "reason": reason}
 
         msg_count = await db.get_daily_stat(name, "server_messages")
         if msg_count >= self.cfg.max_daily_server_messages:
@@ -204,15 +227,33 @@ class TradeManager:
             return {"account": name, "status": "skipped", "reason": reason}
 
         # ── Check max open trades (Phase 5: via SettingsStore when attached) ─
+        # D-19: for staged submissions, over-cap stages are marked 'capped' (not skipped)
+        # so they show correctly on the /staged panel and don't resurrect on reconnect.
         positions = await connector.get_positions(signal.symbol)
         _, _, max_open = _effective(self, acct)
         if len(positions) >= max_open:
+            if staged:
+                # D-19 staged path — mark the row capped; never submit.
+                if stage_row_id is not None:
+                    await db.update_stage_status(
+                        stage_row_id, "capped",
+                        cancelled_reason=f"max_open_trades={max_open}",
+                    )
+                return {
+                    "account": name, "status": "capped",
+                    "reason": f"max_open_trades={max_open}",
+                }
             reason = f"Max open trades ({max_open}) reached for {signal.symbol}"
             return {"account": name, "status": "skipped", "reason": reason}
 
         # ── Check duplicate (same direction already open) ───────────────
+        # D-23 bypass: sibling stages of the same signal_id match the
+        # 'telebot-{signal_id}-s*' comment prefix and skip the block.
+        sibling_prefix = f"telebot-{signal_id}-s" if staged else None
         for pos in positions:
             if pos.direction == signal.direction.value:
+                if sibling_prefix is not None and getattr(pos, "comment", "").startswith(sibling_prefix):
+                    continue  # D-23 — sibling stage, allow
                 reason = f"Already have a {signal.direction.value} position open on {signal.symbol}"
                 return {"account": name, "status": "skipped", "reason": reason}
 
@@ -236,10 +277,14 @@ class TradeManager:
             return {"account": name, "status": "skipped", "reason": stale_reason}
 
         # ── Zone check → market or limit ────────────────────────────────
-        zone_low, zone_high = signal.entry_zone
-        use_market, limit_price = self._determine_order_type(
-            signal.direction, current_price, zone_low, zone_high,
-        )
+        # Phase 6 text-only path (entry_zone=None) always fires at market.
+        if signal.entry_zone is None:
+            use_market, limit_price = True, 0.0
+        else:
+            zone_low, zone_high = signal.entry_zone
+            use_market, limit_price = self._determine_order_type(
+                signal.direction, current_price, zone_low, zone_high,
+            )
 
         # ── Calculate lot size ──────────────────────────────────────────
         acct_info = await connector.get_account_info()
@@ -272,16 +317,54 @@ class TradeManager:
                 jittered_tp, self.cfg.sl_tp_jitter_points, signal.direction,
             )
 
+        # ── D-08: sl=0.0 is never acceptable ────────────────────────────
+        # Applies to all paths; text-only is the likeliest source of this footgun
+        # (default_sl_pips mis-computed or yielding a non-positive sl price).
+        if jittered_sl is None or jittered_sl <= 0.0:
+            reason = "Refusing to submit sl=0.0 — default_sl_pips must yield non-zero SL (D-08)"
+            logger.error("%s: %s", name, reason)
+            return {"account": name, "status": "failed", "reason": reason}
+
         # ── EXEC-02: Stale re-check immediately before order ─────────
-        price_data_recheck = await connector.get_price(signal.symbol)
-        if price_data_recheck is None:
-            return {"account": name, "status": "failed", "reason": "Cannot get price for stale re-check"}
-        bid_recheck, ask_recheck = price_data_recheck
-        current_recheck = bid_recheck if signal.direction == Direction.SELL else ask_recheck
-        stale_recheck = self._check_stale(signal, current_recheck)
-        if stale_recheck:
-            logger.info("%s: Stale on re-check — %s", name, stale_recheck)
-            return {"account": name, "status": "skipped", "reason": f"Stale (re-check): {stale_recheck}"}
+        # Skip for text-only (no TPs) and follow-up stages where TPs are carried
+        # but the correlated-followup dispatcher has already decided in-zone.
+        if signal.tps:
+            price_data_recheck = await connector.get_price(signal.symbol)
+            if price_data_recheck is None:
+                return {"account": name, "status": "failed", "reason": "Cannot get price for stale re-check"}
+            bid_recheck, ask_recheck = price_data_recheck
+            current_recheck = bid_recheck if signal.direction == Direction.SELL else ask_recheck
+            stale_recheck = self._check_stale(signal, current_recheck)
+            if stale_recheck:
+                logger.info("%s: Stale on re-check — %s", name, stale_recheck)
+                return {"account": name, "status": "skipped", "reason": f"Stale (re-check): {stale_recheck}"}
+
+        # ── D-25 idempotency probe (staged path only) ───────────────────
+        # Before submit, check if this stage already exists (DB status='filled')
+        # or if MT5 already has a position with our exact comment (prior submit
+        # that we lost track of due to crash/disconnect). In either case, skip
+        # the resubmit.
+        target_comment = f"telebot-{signal_id}-s{stage_number}" if staged else "telebot"
+        if staged:
+            existing = await db.get_stage_by_comment(target_comment)
+            if existing and existing.get("status") == "filled":
+                logger.info(
+                    "%s: stage already filled (idempotency hit) signal_id=%d stage=%d",
+                    name, signal_id, stage_number,
+                )
+                return {"account": name, "status": "skipped", "reason": "already_filled"}
+            for p in positions:
+                if getattr(p, "comment", "") == target_comment:
+                    if stage_row_id is not None:
+                        await db.update_stage_status(stage_row_id, "filled", mt5_ticket=p.ticket)
+                    logger.info(
+                        "%s: idempotency match — marked stage filled without resubmit ticket=%d",
+                        name, p.ticket,
+                    )
+                    return {
+                        "account": name, "status": "filled",
+                        "ticket": p.ticket, "idempotent": True,
+                    }
 
         # ── Execute ─────────────────────────────────────────────────────
         if use_market:
@@ -295,7 +378,7 @@ class TradeManager:
                 volume=lot_size,
                 sl=jittered_sl,
                 tp=jittered_tp or 0.0,
-                comment="telebot",
+                comment=target_comment,
             )
         else:
             order_type = (
@@ -309,13 +392,24 @@ class TradeManager:
                 price=limit_price,
                 sl=jittered_sl,
                 tp=jittered_tp or 0.0,
-                comment="telebot",
+                comment=target_comment,
             )
 
         await db.increment_daily_stat(name, "server_messages")
 
         if result.success:
-            await db.increment_daily_stat(name, "trades_count")
+            # D-18 — 1 signal = 1 daily slot. For staged path, only increment
+            # trades_count on the first successful fill of this signal_id on this
+            # account (today). Unstaged v1.0 path keeps unconditional increment.
+            if staged:
+                first_fill = await db.mark_signal_counted_today(signal_id, name)
+                if first_fill:
+                    await db.increment_daily_stat(name, "trades_count")
+            else:
+                await db.increment_daily_stat(name, "trades_count")
+            # Populate the staged_entries row with the fill ticket (D-38).
+            if stage_row_id is not None:
+                await db.update_stage_status(stage_row_id, "filled", mt5_ticket=result.ticket)
             await db.log_trade(
                 signal_id=signal_id,
                 account_name=name,
