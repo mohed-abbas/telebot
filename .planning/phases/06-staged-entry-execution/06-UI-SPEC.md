@@ -22,6 +22,10 @@ Two net-new UI surfaces land in this phase:
 
 No Phase-7 work (full Basecoat restyle, mobile slide-over, positions drilldown) is in scope. Other dashboard pages (overview shell, positions, history, analytics) keep their v1.0 compat-shim look; only the two surfaces above are touched.
 
+**Focal point per surface:**
+- `/settings` → the **active tab's form card** (the editable configuration for the selected account); audit log is secondary and sits below.
+- `/staged` → the **active sequences table** (full list of in-flight staged sequences); "Recently resolved" is collapsed-by-default secondary content.
+
 ---
 
 ## Design System
@@ -44,38 +48,36 @@ No Phase-7 work (full Basecoat restyle, mobile slide-over, positions drilldown) 
 
 ## Spacing Scale
 
-Tailwind v4 default spacing scale (`0.25rem` step; 1 unit = 4px). Declared values used by this phase's surfaces:
+Tailwind v4 default spacing scale (`0.25rem` step; 1 unit = 4px). Canonical set used by this phase's surfaces: **{4, 8, 16, 24, 32, 48, 64}**.
 
 | Token | Tailwind class | Value | Usage in Phase 6 |
 |-------|---------------|-------|------------------|
 | xs | `p-1`, `gap-1` | 4px | Icon-less inline gaps (inline help text next to label) |
 | sm | `p-2`, `gap-2` | 8px | Tight control spacing (between form field + hint); badge internal padding |
-| md | `p-4`, `gap-4`, `space-y-4` | 16px | Default field-to-field vertical rhythm in settings form; table row vertical padding |
+| md | `p-4`, `gap-4`, `space-y-4`, `px-4 py-4` | 16px | Default field-to-field vertical rhythm in settings form; pending-stages and audit-log table cell padding |
 | lg | `p-6`, `gap-6`, `mb-6` | 24px | Card internal padding; section-to-section vertical gap |
 | xl | `p-8`, `gap-8` | 32px | Modal dialog padding; page-header-to-content separation |
 | 2xl | `mt-12`, `gap-12` | 48px | Major section breaks on `/staged` (active table → collapsed "Recently resolved") |
 | 3xl | `p-16` | 64px | Not used this phase |
 
-**Exceptions:**
-- Compact table cell padding (`px-3 py-3` = 12px, matching existing `_compat.css` `thead th` / `tbody td`). 12px falls outside the 4/8/16/24 canonical steps but is the locked v1.0 table rhythm this phase must preserve for visual continuity with `/overview` and `/positions`.
-- Sidebar nav row padding (`px-4 py-2.5` = 10px vertical): locked in `templates/base.html:20-25`; Phase 6 does not touch the sidebar.
+**Note on sidebar nav row padding:** The existing sidebar in `templates/base.html:20-25` uses `px-4 py-2.5` (10px vertical). This is inherited from `base.html` and not modified in Phase 6, so it is not declared in the Phase 6 scale.
 
 ---
 
 ## Typography
 
-Three sizes, two weights (matches Tailwind v4 defaults + existing base.html usage). Body line-height 1.5 (Tailwind default for `text-sm`/`text-base`); heading line-height 1.25 (Tailwind default for `text-xl`/`text-2xl`).
+Three sizes, two weights. Body line-height 1.5 (Tailwind default for `text-sm`/`text-base`); heading line-height 1.25 (Tailwind default for `text-xl`/`text-2xl`).
 
 | Role | Tailwind class | Size | Weight | Line Height | Usage in Phase 6 |
 |------|---------------|------|--------|-------------|------------------|
 | Helper | `text-xs` | 12px | 400 (normal) | 1.33 | Inline hints ("Changes apply to next signal only"), audit-log timestamps, sidebar status line, field-validation error text |
 | Body | `text-sm` | 14px | 400 (normal) | 1.43 | All form labels, table cells, audit-log rows, pending-stages values, modal body copy |
 | Emphasis | `text-sm font-semibold` | 14px | 600 (semibold) | 1.43 | Account tab labels, field labels emphasized in diff view, stage count "3 / 5" |
-| Heading | `text-lg` or `text-2xl` | 18px / 24px | 700 (bold, heading-only) | 1.33 / 1.25 | `text-lg` for card headings ("Account: acc-01", "Recently resolved"); `text-2xl` for page `<h2>` ("Settings", "Pending Stages") |
+| Heading | `text-lg font-semibold` or `text-2xl font-semibold` | 18px / 24px | 600 (semibold) | 1.33 / 1.25 | `text-lg` for card headings ("Account: acc-01", "Recently resolved"); `text-2xl` for page `<h2>` ("Settings", "Pending Stages") |
 
 **Font-family:** Tailwind default `font-sans` (system-ui stack). No `font-mono` new usage this phase — existing `.font-mono` on balance/equity cells is compat-shim territory, not Phase 6.
 
-**Weight discipline:** Only 400 and 600 in form + panel body. 700 reserved for page-level `<h2>` to match `templates/login.html:7` and `templates/overview.html:4`. No other weights (no 300/500/800) introduced.
+**Weight discipline:** Exactly two weights — 400 (normal) for body/helper text and 600 (semibold) for emphasis and all heading levels (including page-level `<h2>`). No 300/500/700/800 introduced anywhere in Phase 6 surfaces.
 
 ---
 
@@ -95,7 +97,7 @@ Inherited palette (all declared in `tailwind.config.js` custom `dark` namespace 
 **Accent reserved-for list (explicit):**
 1. Primary `Save Settings` button per tab
 2. Primary `Confirm change` button inside the two-step modal
-3. `Revert` button on each audit-log row
+3. `Revert change` button on each audit-log row
 4. Active tab indicator underline / background on the Basecoat tabs
 5. Focus ring on form inputs (Basecoat default via `ring-2 ring-indigo-400`)
 6. Live current-price cell in pending-stages table (brief 150ms tint flash on tick update — no persistent color; returns to `text-slate-200`)
@@ -120,7 +122,7 @@ Components instantiated by Phase 6 from the Basecoat + compat-shim surface. Exec
 
 | Component | Source | Basecoat class / compat class | Count |
 |-----------|--------|------------------------------|-------|
-| Page heading | native | `<h2 class="text-2xl font-bold">Settings</h2>` | 1 |
+| Page heading | native | `<h2 class="text-2xl font-semibold">Settings</h2>` | 1 |
 | Tabs (one per account) | Basecoat | `<div role="tablist">` + `<button role="tab">` (Basecoat tabs primitive — see `basecoat.min.js` init) | N accounts |
 | Tab panel | Basecoat | `<div role="tabpanel">` | N accounts |
 | Card (form container) | compat-shim | `.card` + `.card-body` (Basecoat card class, already exported via `_compat.css` + Basecoat) | 1 per tab |
@@ -129,25 +131,25 @@ Components instantiated by Phase 6 from the Basecoat + compat-shim surface. Exec
 | Number input | Basecoat | `<input type="number" class="input">` | 4 (risk_value, max_stages, default_sl_pips, max_daily_trades) |
 | Inline field hint | native | `<p class="text-xs text-slate-500">` | 5 (one per field; "Changes apply to next signal only" on the form) |
 | Field error | native + destructive | `<p class="text-xs text-red-400">` (populated by server render on 422) | 0–5 per render |
-| Primary CTA | Basecoat | `<button class="btn btn-primary">Save Settings</button>` | 1 per tab |
+| Primary CTA | Basecoat | `<button class="btn btn-primary">Save settings</button>` | 1 per tab |
 | Two-step modal | Basecoat | `<dialog class="dialog">` with `role="dialog"` + `data-state` (Basecoat dialog primitive) | 1 (reused across tabs via HTMX swap) |
 | Modal diff view | native | `<table>` with `old → new` rows; old = `text-slate-500 line-through`, new = `text-indigo-400 font-semibold` | 1 |
 | Modal dry-run preview | native + `.card` inset | `<div class="bg-dark-900 p-4 rounded border border-dark-700">` — "Next typical signal would size X lots at Y% risk" | 1 |
 | Modal warning banner | destructive | `<div class="alert alert-destructive">` | 1 |
 | Confirm CTA | Basecoat | `<button class="btn btn-primary">Confirm change</button>` | 1 |
-| Cancel CTA | compat-shim | `<button class="btn">Cancel</button>` (neutral, no color) | 1 |
-| Audit-log timeline | native table | `<table>` (compat-shim default), with rows = `timestamp | field | old → new | Revert button` | 1 per tab |
-| Revert button | compat-shim | `<button class="btn btn-blue">Revert</button>` | N rows |
+| Modal discard CTA | compat-shim | `<button class="btn">Discard changes</button>` (neutral, no color) | 1 |
+| Audit-log timeline | native table | `<table>` (compat-shim default) with `px-4 py-4` cells; rows = `timestamp \| field \| old → new \| Revert change button` | 1 per tab |
+| Revert CTA | compat-shim | `<button class="btn btn-blue">Revert change</button>` | N rows |
 
 ### Pending-stages partial (`templates/partials/pending_stages.html`) + full page (`templates/staged.html`)
 
 | Component | Source | Class / primitive | Count |
 |-----------|--------|------------------|-------|
-| Page heading | native | `<h2 class="text-2xl font-bold">Pending Stages</h2>` (full page only) | 1 |
+| Page heading | native | `<h2 class="text-2xl font-semibold">Pending Stages</h2>` (full page only) | 1 |
 | Section heading | native | `<h3 class="text-lg font-semibold mb-4">Active sequences</h3>` | 1 |
 | Partial heading (overview) | native | `<h3 class="text-lg font-semibold mb-4">Pending Stages <span class="text-xs text-slate-500">(showing top 5)</span></h3>` | 1 |
 | Card wrapper | compat-shim | `.card p-6` | 1 per section |
-| Data table | compat-shim | default `<table>` from `_compat.css` | 1 |
+| Data table | compat-shim | default `<table>` from `_compat.css` with `px-4 py-4` cells for readable density | 1 |
 | Columns (7) | native | account, symbol, direction, stages (`3 / 5`), price target band, current price + distance-to-next, elapsed | per D-33 |
 | Direction badge | compat-shim | `.badge-buy` / `.badge-sell` | 1 per row |
 | Stage progress text | native | `<span class="font-mono text-sm">3 / 5</span>` — green if on-track, slate if cap-limited | 1 per row |
@@ -168,16 +170,16 @@ Components instantiated by Phase 6 from the Basecoat + compat-shim surface. Exec
 
 1. **Enter page.** Tabs rendered with first account pre-selected. Form fields populated from `SettingsStore.effective(account)`. Audit log for that account rendered below the form.
 2. **Edit field.** No inline validation flash; client echoes hard caps in `min`/`max` HTML attributes (D-29 Claude's discretion) but server is authoritative.
-3. **Click `Save Settings`.** `hx-post="/settings/{account}"` with HTMX-header CSRF (D-31). Server validates hard caps.
+3. **Click `Save settings`.** `hx-post="/settings/{account}"` with HTMX-header CSRF (D-31). Server validates hard caps.
    - If validation fails → server returns `422` + partial re-render of form with `text-red-400` field errors. No modal.
-   - If validation passes → server returns modal HTML (`hx-swap="innerHTML" hx-target="#modal-root"`) containing diff + dry-run preview + Confirm/Cancel buttons.
-4. **Modal opens.** Basecoat dialog with `role="dialog"`, focus-trapped (Basecoat handles), `Esc` closes (= Cancel).
+   - If validation passes → server returns modal HTML (`hx-swap="innerHTML" hx-target="#modal-root"`) containing diff + dry-run preview + Confirm/Discard buttons.
+4. **Modal opens.** Basecoat dialog with `role="dialog"`, focus-trapped (Basecoat handles), `Esc` closes (= Discard changes).
    - Diff table shows every changed field; unchanged fields omitted.
    - Dry-run block shows computed effect on a "typical" signal (planner specifies the computation; UI just renders the string).
    - Warning banner: "This applies to signals received AFTER you confirm. In-flight staged sequences are unaffected."
 5. **Click `Confirm change`.** `hx-post="/settings/{account}/confirm"` with the same CSRF header. Server persists change, writes audit row, returns full-page swap = tab re-rendered with fresh audit row at top + modal removed.
-6. **Click `Cancel`.** Modal removed; form retains edited values (user may try again).
-7. **Click `Revert` on audit row.** Same modal flow as a forward edit, pre-populated with the reverse diff. Confirm posts to `/settings/{account}/revert?audit_id={id}`. Success → audit row appended (the revert itself is audited).
+6. **Click `Discard changes`.** Modal removed; form retains edited values (user may try again).
+7. **Click `Revert change` on audit row.** Same modal flow as a forward edit, pre-populated with the reverse diff. Confirm posts to `/settings/{account}/revert?audit_id={id}`. Success → audit row appended (the revert itself is audited).
 
 ### Pending-stages panel flow (STAGE-08, D-32..D-36)
 
@@ -194,8 +196,8 @@ Components instantiated by Phase 6 from the Basecoat + compat-shim surface. Exec
 |----------|-------------|
 | Focus order | Tab navigation follows DOM: tab-list → active form fields → Save → audit-log revert buttons |
 | Focus ring | Basecoat default `ring-2 ring-indigo-400 ring-offset-2 ring-offset-dark-900` on all inputs/buttons — must remain visible (do not remove outlines) |
-| Modal focus trap | Basecoat dialog primitive traps focus between Confirm and Cancel; `Esc` = Cancel |
-| Escape routes | Every modal closeable via `Esc`, backdrop click, or Cancel button — all three are equivalent |
+| Modal focus trap | Basecoat dialog primitive traps focus between Confirm and Discard changes; `Esc` = Discard changes |
+| Escape routes | Every modal closeable via `Esc`, backdrop click, or Discard-changes button — all three are equivalent |
 | Color-only state | Never rely on color alone: direction badges include "BUY"/"SELL" text, stage progress includes numeric "3 / 5", status pills include text label ("Kill-switch drain") |
 | Live region | Pending-stages table wrapped in `<div role="region" aria-live="polite" aria-label="Pending staged entry sequences">` so SR users hear count changes |
 | Form error announce | Server 422 renders inject `<p role="alert" class="text-xs text-red-400">` next to offending field |
@@ -230,10 +232,10 @@ Operator-facing strings are functional and literal — no marketing voice, no me
 | Modal dry-run heading | `Effect on a typical signal` |
 | Modal warning banner | `This applies to signals received AFTER you confirm. In-flight staged sequences are unaffected.` |
 | Modal confirm CTA | `Confirm change` |
-| Modal cancel CTA | `Cancel` |
+| Modal discard CTA | `Discard changes` |
 | Audit-log section heading | `Change history` |
 | Audit-log empty | `No changes recorded for this account.` |
-| Audit-log row — revert button | `Revert` |
+| Audit-log row — revert button | `Revert change` |
 | Revert modal heading | `Revert change — {account_name}` |
 | Revert modal body | `This will restore {field} to {old_value}. The revert itself is recorded as a new audit entry.` |
 | Validation — out of range | `{field} must be between {min} and {max}.` |
@@ -298,6 +300,7 @@ Locked rules for this phase:
 8. **"Sequence"** is the canonical noun for the grouping of stages sharing a `signal_id`. Never "chain", "group", "ladder".
 9. **Account names are verbatim** from `accounts.json` — no title-casing, no prefixing.
 10. **Time values are monospace** (`font-mono`) for elapsed and price cells to stabilize tabular rhythm.
+11. **CTAs are specific verb + noun** — no bare `Cancel`, `Submit`, `OK`, `Revert`. Use `Discard changes`, `Save settings`, `Confirm change`, `Revert change`.
 
 ---
 
