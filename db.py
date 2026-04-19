@@ -669,6 +669,35 @@ async def update_account_setting(
             )
 
 
+async def get_settings_audit(account_name: str, limit: int = 50) -> list[dict]:
+    """Return audit rows for one account, newest first (Phase 6 SET-03).
+
+    Rows contain: id, account_name, field, old_value, new_value, actor, timestamp.
+    """
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, account_name, field, old_value, new_value, actor, timestamp
+                 FROM settings_audit
+                WHERE account_name=$1
+                ORDER BY id DESC
+                LIMIT $2""",
+            account_name, int(limit),
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_settings_audit_row(audit_id: int) -> dict | None:
+    """Fetch one audit row by id (Phase 6 SET-03 revert path)."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, account_name, field, old_value, new_value, actor, timestamp
+                 FROM settings_audit
+                WHERE id=$1""",
+            int(audit_id),
+        )
+        return dict(row) if row else None
+
+
 async def get_orphan_accounts(seeded_names: list[str]) -> list[str]:
     """Return accounts in DB not present in accounts.json (D-25 warning list)."""
     async with _pool.acquire() as conn:

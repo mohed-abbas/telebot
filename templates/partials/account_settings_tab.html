@@ -1,0 +1,53 @@
+<form hx-post="/settings/{{ a.name }}"
+      hx-target="#modal-root"
+      hx-swap="innerHTML"
+      hx-headers='{"hx-request": "true"}'
+      class="space-y-4">
+    <div>
+        <label class="label block text-sm font-semibold" for="risk_mode-{{ a.name }}">Risk mode</label>
+        <select name="risk_mode" id="risk_mode-{{ a.name }}" class="input">
+            <option value="percent" {% if s.risk_mode == "percent" %}selected{% endif %}>percent</option>
+            <option value="fixed_lot" {% if s.risk_mode == "fixed_lot" %}selected{% endif %}>fixed_lot</option>
+        </select>
+        <p class="text-xs text-slate-500 mt-1">"percent" sizes each order as % of equity; "fixed_lot" uses a fixed lot size.</p>
+        {% if errors and errors.risk_mode %}<p class="text-xs text-red-400" role="alert">{{ errors.risk_mode }}</p>{% endif %}
+    </div>
+
+    <div>
+        <label class="label block text-sm font-semibold" for="risk_value-{{ a.name }}">Risk value</label>
+        <input type="number" step="0.01" name="risk_value" id="risk_value-{{ a.name }}"
+               value="{{ s.risk_value }}" class="input"
+               min="0.01" max="5.0" />
+        <p class="text-xs text-slate-500 mt-1">Percent mode: 0 &lt; value &#8804; 5.0. Fixed-lot mode: 0 &lt; value &#8804; max_lot_size.</p>
+        {% if errors and errors.risk_value %}<p class="text-xs text-red-400" role="alert">{{ errors.risk_value }}</p>{% endif %}
+    </div>
+
+    <div>
+        <label class="label block text-sm font-semibold" for="max_stages-{{ a.name }}">Max stages per signal</label>
+        <input type="number" name="max_stages" id="max_stages-{{ a.name }}"
+               value="{{ s.max_stages }}" class="input" min="1" max="10" />
+        <p class="text-xs text-slate-500 mt-1">Total positions opened per correlated signal sequence. Range: 1&#8211;10.</p>
+        {% if errors and errors.max_stages %}<p class="text-xs text-red-400" role="alert">{{ errors.max_stages }}</p>{% endif %}
+    </div>
+
+    <div>
+        <label class="label block text-sm font-semibold" for="default_sl_pips-{{ a.name }}">Default SL (pips) for text-only signals</label>
+        <input type="number" name="default_sl_pips" id="default_sl_pips-{{ a.name }}"
+               value="{{ s.default_sl_pips }}" class="input" min="1" max="500" />
+        <p class="text-xs text-slate-500 mt-1">Required non-zero SL applied to every text-only "now" signal. Range: 1&#8211;500.</p>
+        {% if errors and errors.default_sl_pips %}<p class="text-xs text-red-400" role="alert">{{ errors.default_sl_pips }}</p>{% endif %}
+    </div>
+
+    <div>
+        <label class="label block text-sm font-semibold" for="max_daily_trades-{{ a.name }}">Max daily trades</label>
+        <input type="number" name="max_daily_trades" id="max_daily_trades-{{ a.name }}"
+               value="{{ s.max_daily_trades }}" class="input" min="1" max="100" />
+        <p class="text-xs text-slate-500 mt-1">One signal counts as one trade regardless of stage count. Range: 1&#8211;100.</p>
+        {% if errors and errors.max_daily_trades %}<p class="text-xs text-red-400" role="alert">{{ errors.max_daily_trades }}</p>{% endif %}
+    </div>
+
+    <button type="submit" class="btn btn-primary">Save settings</button>
+</form>
+
+<h3 class="text-lg font-semibold mt-6 mb-4">Change history</h3>
+{% include "partials/settings_audit_timeline.html" %}
