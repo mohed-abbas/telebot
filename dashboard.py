@@ -291,12 +291,22 @@ async def root(request: Request, user: str = Depends(_verify_auth)):
 @app.get("/overview", response_class=HTMLResponse)
 async def overview(request: Request, user: str = Depends(_verify_auth)):
     accounts_data = await _get_accounts_overview()
+    # D-32: initial server-render of the pending-stages top-5 card (SSE then
+    # takes over). If positions lookup fails, fall back to empty list — the
+    # partial's empty-state renders correctly and SSE populates on first tick.
+    try:
+        positions = await _get_all_positions()
+        raw_stages = await db.get_pending_stages(limit=5)
+        stages = [_enrich_stage_for_ui(s, positions) for s in raw_stages]
+    except Exception:  # pragma: no cover — defensive for overview render
+        stages = []
     return templates.TemplateResponse("overview.html", {
         "request": request,
         "accounts": accounts_data,
         "trading_enabled": _settings.trading_enabled if _settings else False,
         "dry_run": _settings.trading_dry_run if _settings else True,
         "trading_paused": _executor._trading_paused if _executor else False,
+        "stages": stages,
         "page": "overview",
     })
 
@@ -328,6 +338,142 @@ async def signals_page(request: Request, user: str = Depends(_verify_auth)):
         "request": request,
         "signals": signals,
         "page": "signals",
+    })
+
+
+# ─── STAGE-08: pending-stages observability (D-32..D-36) ──────────────────
+
+
+_RESOLVED_STATUS_LABELS: dict[str, str] = {
+    "cancelled_by_kill_switch": "Kill-switch drain",
+    "cancelled_stage1_closed": "Stage 1 exited",
+    "abandoned_reconnect": "Abandoned (reconnect)",
+    "failed": "Failed",
+    "capped": "Capped",
+    "filled": "Filled",
+}
+
+
+def _enrich_stage_for_ui(stage: dict, positions: list[dict]) -> dict:
+    """D-34: transform a staged_entries row into the UI display shape.
+
+    `positions` is the list produced by `_get_all_positions()` (keys:
+    `account`, `symbol`, `direction`, `open_price`, `profit`). No live-price
+    field is carried today — `current_price` stays None and the template
+    renders an em-dash. Live-price wiring is deferred (UI-SPEC TODO phase 7).
+    """
+    snapshot = stage.get("snapshot_settings") or {}
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except (TypeError, ValueError):
+            snapshot = {}
+    total = snapshot.get("max_stages", stage["stage_number"])
+
+    # Live-price lookup against the open-positions list (same broker).
+    # _get_all_positions returns keys `account` + `symbol` (no `account_name`
+    # and no `price_current`/`current_price`). Match on both, accept future
+    # price keys if a later plan adds them.
+    current_price = None
+    for p in positions:
+        if (
+            p.get("symbol") == stage["symbol"]
+            and p.get("account") == stage["account_name"]
+        ):
+            current_price = (
+                p.get("price_current")
+                or p.get("current_price")
+                or None
+            )
+            break
+
+    # Distance-to-next-band sub-line.
+    if current_price is not None:
+        band_low = stage["band_low"]
+        band_high = stage["band_high"]
+        direction = stage["direction"]
+        if direction == "buy":
+            # trigger edge is band_high; positive = still above the band
+            distance_pips = (current_price - band_high) * 100
+        else:
+            distance_pips = (band_low - current_price) * 100
+        if current_price >= stage["band_low"] and current_price <= stage["band_high"]:
+            distance_str = "inside band"
+        elif distance_pips >= 0:
+            sign = "+" if direction == "buy" else "−"
+            distance_str = f"{sign}{distance_pips:.1f} pips to next band"
+        else:
+            # Already past the band (crossed but not yet filled this tick).
+            sign = "−" if direction == "buy" else "+"
+            distance_str = f"{sign}{abs(distance_pips):.1f} pips to next band"
+    else:
+        distance_str = "—"
+
+    # Elapsed mm:ss or hh:mm:ss.
+    created_at = stage["created_at"]
+    now = datetime.now(timezone.utc)
+    elapsed_seconds = max(0, int((now - created_at).total_seconds()))
+    if elapsed_seconds < 3600:
+        elapsed_str = f"{elapsed_seconds // 60:02d}:{elapsed_seconds % 60:02d}"
+    else:
+        h = elapsed_seconds // 3600
+        m = (elapsed_seconds % 3600) // 60
+        s = elapsed_seconds % 60
+        elapsed_str = f"{h:02d}:{m:02d}:{s:02d}"
+
+    return {
+        "account_name": stage["account_name"],
+        "symbol": stage["symbol"],
+        "direction": stage["direction"],
+        # v1.1 approximation: show this stage's number as `filled` (= next-to-fire).
+        # Precise "3 / 5" requires a grouped COUNT per signal_id; deferred to Phase 7.
+        "filled": stage["stage_number"],
+        "total": total,
+        "band_low": stage["band_low"],
+        "band_high": stage["band_high"],
+        "current_price": current_price,
+        "distance_str": distance_str,
+        "elapsed": elapsed_str,
+        "status": stage["status"],
+    }
+
+
+def _label_resolved_stage(r: dict) -> dict:
+    """D-36: add a human-facing `status_label` to a resolved-stage row."""
+    return {**r, "status_label": _RESOLVED_STATUS_LABELS.get(r["status"], r["status"])}
+
+
+@app.get("/staged", response_class=HTMLResponse)
+async def staged_page(request: Request, user: str = Depends(_verify_auth)):
+    """D-32: full-page view of all active sequences + collapsed 'Recently resolved'."""
+    positions = await _get_all_positions()
+    raw_active = await db.get_pending_stages()  # no limit — all rows
+    active = [_enrich_stage_for_ui(s, positions) for s in raw_active]
+    resolved = await db.get_recently_resolved_stages(limit=50)
+    resolved_labeled = [_label_resolved_stage(r) for r in resolved]
+    return templates.TemplateResponse("staged.html", {
+        "request": request,
+        "active": active,
+        "resolved": resolved_labeled,
+        "trading_enabled": _settings.trading_enabled if _settings else False,
+        "dry_run": _settings.trading_dry_run if _settings else True,
+        "page": "staged",
+    })
+
+
+@app.get("/partials/pending_stages", response_class=HTMLResponse)
+async def pending_stages_partial(
+    request: Request,
+    all: int = 0,
+    user: str = Depends(_verify_auth),
+):
+    """HTMX polling fallback when SSE drops (5s cadence on /staged)."""
+    positions = await _get_all_positions()
+    raw = await db.get_pending_stages(limit=None if all else 5)
+    stages = [_enrich_stage_for_ui(s, positions) for s in raw]
+    return templates.TemplateResponse("partials/pending_stages.html", {
+        "request": request,
+        "stages": stages,
     })
 
 
@@ -841,7 +987,15 @@ async def trading_status(user: str = Depends(_verify_auth)):
 
 @app.get("/stream")
 async def sse_stream(request: Request, user: str = Depends(_verify_auth)):
-    """Server-Sent Events stream for real-time updates."""
+    """Server-Sent Events stream for real-time updates.
+
+    Emits two events per tick at 2s cadence:
+      • a named `event: pending_stages` carrying the rendered partial HTML so
+        HTMX (`sse-swap="pending_stages"`) can swap it directly (D-34)
+      • the default `data:` event with the full JSON payload (existing
+        consumers keep working; adds `pending_stages` key for clients that
+        prefer raw data)
+    """
     async def event_generator():
         while True:
             if await request.is_disconnected():
@@ -849,9 +1003,31 @@ async def sse_stream(request: Request, user: str = Depends(_verify_auth)):
             try:
                 positions = await _get_all_positions()
                 accounts = await _get_accounts_overview()
+                # D-34: include pending-stages payload. Top 5 most-recent
+                # active sequences for the overview-panel partial.
+                raw_stages = await db.get_pending_stages(limit=5)
+                pending_stages = [
+                    _enrich_stage_for_ui(s, positions) for s in raw_stages
+                ]
+
+                # Named SSE event — pre-rendered HTML partial for sse-swap.
+                stages_html = templates.get_template(
+                    "partials/pending_stages.html"
+                ).render(stages=pending_stages)
+                # SSE `data:` lines cannot contain raw newlines — collapse to
+                # a single line before emit.
+                stages_html_oneline = stages_html.replace("\n", "")
+                yield (
+                    "event: pending_stages\n"
+                    f"data: {stages_html_oneline}\n\n"
+                )
+
+                # Default payload (JSON) — preserves backwards compat and
+                # adds the pending_stages array for any raw-data consumer.
                 data = json.dumps({
                     "positions": positions,
                     "accounts": accounts,
+                    "pending_stages": pending_stages,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
                 yield f"data: {data}\n\n"

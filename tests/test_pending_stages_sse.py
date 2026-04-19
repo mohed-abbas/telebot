@@ -190,60 +190,86 @@ def _row(signal_id, account_name, *, stage_number=1, mt5_comment="telebot-x-s1",
     }
 
 
-async def _collect_sse_events(resp, *, max_lines: int = 40):
-    """Collect first N lines from an SSE stream; stop when both a `data:` and
-    a named `event:` line have been seen (or cap reached)."""
-    collected: list[str] = []
-    saw_data = False
-    saw_event = False
-    async for line in resp.aiter_lines():
-        collected.append(line)
-        if line.startswith("data: "):
-            saw_data = True
-        if line.startswith("event: "):
-            saw_event = True
-        if saw_data and saw_event:
+async def _drive_sse_once(dashboard_mod, client):
+    """Drive one tick of the SSE generator directly.
+
+    httpx.ASGITransport does not stream — it collects the entire response
+    before returning, which hangs forever on an infinite SSE generator. We
+    invoke `sse_stream` as a coroutine, then pull the first few chunks from
+    the returned StreamingResponse's body iterator. This exercises the real
+    production generator (including `_get_all_positions`, `db.get_pending_stages`,
+    template render, and header wiring) without a live HTTP round-trip.
+    """
+    # Build a minimal Request-compatible shim so `_verify_auth` + the generator
+    # can run. The generator calls `request.is_disconnected()` — we want False
+    # for one tick, then True so the loop exits.
+    disconnected_calls = {"n": 0}
+
+    class _Req:
+        session = {"user": "admin"}
+        headers: dict = {}
+        url = None
+
+        async def is_disconnected(self):
+            disconnected_calls["n"] += 1
+            # First probe in the while-loop: allow one iteration; second probe
+            # after asyncio.sleep(2) would trigger exit — but we never reach
+            # it because we break out after collecting chunks.
+            return disconnected_calls["n"] > 1
+
+    resp = await dashboard_mod.sse_stream(_Req(), user="admin")
+    # Collect chunks up to ~3 yields (named event + default data + sentinel).
+    chunks: list[str] = []
+    it = resp.body_iterator
+    async for raw in it:
+        text = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
+        chunks.append(text)
+        if len(chunks) >= 3:
             break
-        if len(collected) >= max_lines:
-            break
-    return collected
+    # Make sure the generator is closed so asyncio.sleep is not left pending.
+    try:
+        await it.aclose()
+    except Exception:  # pragma: no cover
+        pass
+    return resp, chunks
 
 
 # ─── SSE shape + header ──────────────────────────────────────────────────
 
 
-async def test_sse_payload_includes_pending_stages_key(authenticated_client):
+async def test_sse_payload_includes_pending_stages_key(wired_dashboard, authenticated_client):
     """D-34: /stream JSON payload carries a `pending_stages` list."""
-    async with authenticated_client.stream("GET", "/stream") as resp:
-        assert resp.status_code == 200
-        async for line in resp.aiter_lines():
-            if line.startswith("data: "):
-                payload = json.loads(line[len("data: "):])
-                assert "pending_stages" in payload
-                assert isinstance(payload["pending_stages"], list)
-                return
-    pytest.fail("SSE stream produced no data: line")
-
-
-async def test_sse_emits_named_pending_stages_event(authenticated_client):
-    """Task 2 Step 6: SSE stream emits a named `event: pending_stages` line."""
-    async with authenticated_client.stream("GET", "/stream") as resp:
-        assert resp.status_code == 200
-        lines = await _collect_sse_events(resp)
-    assert any(line.startswith("event: pending_stages") for line in lines), (
-        f"no 'event: pending_stages' line in first {len(lines)} SSE lines: {lines[:10]}"
+    resp, chunks = await _drive_sse_once(wired_dashboard, authenticated_client)
+    # Find the `data: {...json...}` chunk (the default event).
+    body = "".join(chunks)
+    lines = body.split("\n")
+    data_line = next(
+        (ln for ln in lines if ln.startswith("data: ") and ln.lstrip("data: ").startswith("{")),
+        None,
     )
+    assert data_line is not None, f"no JSON data: line in SSE output: {chunks}"
+    payload = json.loads(data_line[len("data: "):])
+    assert "pending_stages" in payload
+    assert isinstance(payload["pending_stages"], list)
 
 
-async def test_sse_accel_buffering_header_set(authenticated_client):
+async def test_sse_emits_named_pending_stages_event(wired_dashboard, authenticated_client):
+    """Task 2 Step 6: SSE stream emits a named `event: pending_stages` line."""
+    resp, chunks = await _drive_sse_once(wired_dashboard, authenticated_client)
+    body = "".join(chunks)
+    assert "event: pending_stages" in body, f"no named event in SSE body: {body[:400]}"
+
+
+async def test_sse_accel_buffering_header_set(wired_dashboard, authenticated_client):
     """Pitfall 18: X-Accel-Buffering: no must be preserved on SSE."""
-    async with authenticated_client.stream("GET", "/stream") as resp:
-        assert resp.headers.get("x-accel-buffering") == "no"
+    resp, _ = await _drive_sse_once(wired_dashboard, authenticated_client)
+    # Headers on StreamingResponse are a MutableHeaders mapping — case-insensitive.
+    assert resp.headers.get("x-accel-buffering") == "no"
 
 
-async def test_sse_content_type_event_stream(authenticated_client):
-    async with authenticated_client.stream("GET", "/stream") as resp:
-        assert "text/event-stream" in resp.headers.get("content-type", "")
+async def test_sse_content_type_event_stream(wired_dashboard, authenticated_client):
+    resp, _ = await _drive_sse_once(wired_dashboard, authenticated_client)
+    assert "text/event-stream" in resp.media_type
 
 
 # ─── /staged page ────────────────────────────────────────────────────────

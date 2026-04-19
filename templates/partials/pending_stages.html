@@ -1,0 +1,60 @@
+<div class="card overflow-x-auto"
+     role="region"
+     aria-live="polite"
+     aria-label="Pending staged entry sequences">
+  <table>
+    <thead>
+      <tr>
+        <th>Account</th>
+        <th>Symbol</th>
+        <th>Direction</th>
+        <th>Stages</th>
+        <th>Target band</th>
+        <th>Current price</th>
+        <th>Elapsed</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in stages %}
+      <tr>
+        <td class="text-sm font-semibold">{{ s.account_name }}</td>
+        <td class="font-mono text-sm">{{ s.symbol }}</td>
+        <td>
+          {% if s.direction == "buy" %}
+            <span class="badge-buy">BUY</span>
+          {% else %}
+            <span class="badge-sell">SELL</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="font-mono text-sm">{{ s.filled }} / {{ s.total }}</span>
+        </td>
+        <td class="font-mono text-sm">
+          {{ "%.2f"|format(s.band_low) }} &#8211; {{ "%.2f"|format(s.band_high) }}
+        </td>
+        <td class="font-mono text-sm" data-price-cell>
+          {% if s.current_price is not none %}
+            {{ "%.2f"|format(s.current_price) }}
+          {% else %}
+            &mdash;
+          {% endif %}
+          <div class="text-xs text-slate-500">{{ s.distance_str }}</div>
+        </td>
+        <td>
+          <span class="font-mono text-xs text-slate-400">{{ s.elapsed }}</span>
+        </td>
+      </tr>
+      {% endfor %}
+      {% if not stages %}
+      <tr>
+        <td colspan="7">
+          <div class="empty-state p-8 text-center">
+            <div class="text-lg font-semibold text-slate-400">No pending stages</div>
+            <p class="text-sm text-slate-500 mt-1">All signals resolved. New staged sequences will appear here automatically.</p>
+          </div>
+        </td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
