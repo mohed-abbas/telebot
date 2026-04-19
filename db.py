@@ -33,6 +33,18 @@ def _validate_field(field: str) -> str:
     return field
 
 
+_ACCOUNT_SETTINGS_FIELDS: frozenset[str] = frozenset({
+    "risk_mode", "risk_value", "max_stages", "default_sl_pips", "max_daily_trades",
+})
+
+
+def _validate_account_settings_field(field: str) -> str:
+    """Validate a field name against the account_settings whitelist. Raises ValueError if invalid."""
+    if field not in _ACCOUNT_SETTINGS_FIELDS:
+        raise ValueError(f"Invalid account_settings field: {field!r}")
+    return field
+
+
 def _utc_today() -> date:
     """Get today's date in UTC (not local timezone)."""
     return datetime.now(timezone.utc).date()
@@ -133,6 +145,67 @@ async def _create_tables() -> None:
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_pending_orders_status
             ON pending_orders(status)
+        """)
+        # ── accounts (D-23) ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                name                    TEXT        PRIMARY KEY,
+                server                  TEXT        NOT NULL,
+                login                   BIGINT      NOT NULL,
+                password_env            TEXT        NOT NULL DEFAULT '',
+                risk_percent            DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                max_lot_size            DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                max_daily_loss_percent  DOUBLE PRECISION NOT NULL DEFAULT 3.0,
+                max_open_trades         INTEGER     NOT NULL DEFAULT 3,
+                enabled                 BOOLEAN     NOT NULL DEFAULT TRUE,
+                mt5_host                TEXT        NOT NULL DEFAULT '',
+                mt5_port                INTEGER     NOT NULL DEFAULT 0,
+                created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS account_settings (
+                account_name        TEXT        PRIMARY KEY REFERENCES accounts(name) ON DELETE CASCADE,
+                risk_mode           TEXT        NOT NULL DEFAULT 'percent'
+                                                CHECK (risk_mode IN ('percent', 'fixed_lot')),
+                risk_value          NUMERIC(10,4) NOT NULL DEFAULT 1.0
+                                                CHECK (risk_value > 0 AND risk_value <= 100),
+                max_stages          INTEGER     NOT NULL DEFAULT 1
+                                                CHECK (max_stages >= 1 AND max_stages <= 10),
+                default_sl_pips     INTEGER     NOT NULL DEFAULT 100
+                                                CHECK (default_sl_pips > 0 AND default_sl_pips <= 10000),
+                max_daily_trades    INTEGER     NOT NULL DEFAULT 30
+                                                CHECK (max_daily_trades >= 1 AND max_daily_trades <= 1000),
+                updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS settings_audit (
+                id              SERIAL      PRIMARY KEY,
+                timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                account_name    TEXT        NOT NULL,
+                field           TEXT        NOT NULL,
+                old_value       TEXT,
+                new_value       TEXT        NOT NULL,
+                actor           TEXT        NOT NULL DEFAULT 'admin'
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_settings_audit_account_ts
+                ON settings_audit(account_name, timestamp DESC)
+        """)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS failed_login_attempts (
+                id              SERIAL      PRIMARY KEY,
+                ip_addr         TEXT        NOT NULL,
+                attempted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                user_agent      TEXT        NOT NULL DEFAULT ''
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_failed_login_ip_ts
+                ON failed_login_attempts(ip_addr, attempted_at)
         """)
 
 
@@ -465,3 +538,138 @@ async def archive_old_trades(archive_dir: str, months: int = 3) -> dict:
 
     logger.info("Archived %d trades to %s", count, filepath)
     return {"archived_count": count, "file_path": str(filepath)}
+
+
+# ── accounts + settings (Phase 5) ────────────────────────────────────
+
+
+async def upsert_account_if_missing(
+    name: str, server: str, login: int, password_env: str,
+    risk_percent: float, max_lot_size: float, max_daily_loss_percent: float,
+    max_open_trades: int, enabled: bool, mt5_host: str, mt5_port: int,
+) -> bool:
+    """Idempotent INSERT ... ON CONFLICT DO NOTHING. Returns True iff a new row was inserted (D-24)."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO accounts (name, server, login, password_env,
+                   risk_percent, max_lot_size, max_daily_loss_percent,
+                   max_open_trades, enabled, mt5_host, mt5_port)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+               ON CONFLICT (name) DO NOTHING
+               RETURNING name""",
+            name, server, login, password_env,
+            risk_percent, max_lot_size, max_daily_loss_percent,
+            max_open_trades, enabled, mt5_host, mt5_port,
+        )
+        return row is not None
+
+
+async def upsert_account_settings_if_missing(
+    account_name: str, risk_mode: str = "percent", risk_value: float = 1.0,
+    max_stages: int = 1, default_sl_pips: int = 100, max_daily_trades: int = 30,
+) -> bool:
+    """Idempotent INSERT of account_settings row (D-26). Returns True on new insert."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """INSERT INTO account_settings (account_name, risk_mode, risk_value,
+                   max_stages, default_sl_pips, max_daily_trades)
+               VALUES ($1,$2,$3,$4,$5,$6)
+               ON CONFLICT (account_name) DO NOTHING
+               RETURNING account_name""",
+            account_name, risk_mode, risk_value, max_stages, default_sl_pips, max_daily_trades,
+        )
+        return row is not None
+
+
+async def get_account_settings(account_name: str) -> dict | None:
+    """Return effective settings (account_settings ⋈ accounts) for one account, or None."""
+    async with _pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT s.account_name,
+                      s.risk_mode, s.risk_value::float AS risk_value,
+                      s.max_stages, s.default_sl_pips, s.max_daily_trades,
+                      a.max_open_trades, a.max_lot_size
+                 FROM account_settings s
+                 JOIN accounts a ON a.name = s.account_name
+                WHERE s.account_name = $1""",
+            account_name,
+        )
+        return dict(row) if row else None
+
+
+async def get_all_accounts() -> list[dict]:
+    """Return all account names (alphabetical)."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch("SELECT name FROM accounts ORDER BY name")
+        return [dict(r) for r in rows]
+
+
+async def update_account_setting(
+    account_name: str, field: str, new_value, actor: str = "admin",
+) -> None:
+    """Write-through with audit row, same transaction (D-29).
+
+    Whitelists `field` BEFORE any SQL interpolation to block SQL injection.
+    Audit row is inserted BEFORE the UPDATE so `old_value` is the value prior
+    to the mutation.
+    """
+    field = _validate_account_settings_field(field)  # whitelist before SQL
+    async with _pool.acquire() as conn:
+        async with conn.transaction():
+            old_value = await conn.fetchval(
+                f"SELECT {field}::TEXT FROM account_settings WHERE account_name=$1",
+                account_name,
+            )
+            await conn.execute(
+                """INSERT INTO settings_audit
+                   (account_name, field, old_value, new_value, actor)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                account_name, field, old_value, str(new_value), actor,
+            )
+            await conn.execute(
+                f"UPDATE account_settings SET {field}=$1, updated_at=NOW() "
+                f"WHERE account_name=$2",
+                new_value, account_name,
+            )
+
+
+async def get_orphan_accounts(seeded_names: list[str]) -> list[str]:
+    """Return accounts in DB not present in accounts.json (D-25 warning list)."""
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT name FROM accounts WHERE name <> ALL($1::text[])",
+            seeded_names,
+        )
+        return [r["name"] for r in rows]
+
+
+# ── failed_login_attempts (consumed by Plan 04) ──────────────────────
+
+
+async def get_failed_login_count(ip_addr: str, minutes: int = 15) -> int:
+    """Count failed login attempts from an IP within the last N minutes."""
+    async with _pool.acquire() as conn:
+        return await conn.fetchval(
+            """SELECT COUNT(*)::int FROM failed_login_attempts
+                WHERE ip_addr = $1
+                  AND attempted_at > NOW() - make_interval(mins => $2)""",
+            ip_addr, minutes,
+        )
+
+
+async def log_failed_login(ip_addr: str, user_agent: str = "") -> None:
+    """Insert a failed login attempt row (D-17)."""
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO failed_login_attempts (ip_addr, user_agent) VALUES ($1, $2)",
+            ip_addr, user_agent,
+        )
+
+
+async def clear_failed_logins(ip_addr: str) -> None:
+    """Clear failed login attempts for an IP (called on successful login)."""
+    async with _pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM failed_login_attempts WHERE ip_addr = $1",
+            ip_addr,
+        )

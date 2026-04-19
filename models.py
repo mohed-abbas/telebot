@@ -71,6 +71,26 @@ class AccountConfig:
     mt5_port: int = 0   # per-account MT5 bridge port (overrides global)
 
 
+@dataclass(frozen=True, slots=True)
+class AccountSettings:
+    """Frozen per-account runtime settings — DB source of truth (Phase 5, D-27/D-32).
+
+    Returned by SettingsStore.effective(). Used by TradeManager for risk/lot
+    calculations and by Phase 6 staged entries as a cheap-to-copy snapshot
+    via dataclasses.replace().
+    """
+
+    account_name: str
+    risk_mode: str        # "percent" | "fixed_lot"
+    risk_value: float     # percent of equity OR fixed lot size
+    max_stages: int
+    default_sl_pips: int
+    max_daily_trades: int
+    # Carried from accounts table (v1.0) for convenience
+    max_open_trades: int
+    max_lot_size: float
+
+
 @dataclass
 class GlobalConfig:
     """Global trading configuration."""

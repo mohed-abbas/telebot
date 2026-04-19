@@ -33,6 +33,29 @@ from risk_calculator import (
 logger = logging.getLogger(__name__)
 
 
+# ── Effective-settings lookup (Phase 5, D-27) ───────────────────────
+
+def _effective(tm, acct):
+    """Return (risk_percent, max_lot_size, max_open_trades) for this account.
+
+    Prefers SettingsStore.effective() when attached (DB source of truth, D-24).
+    Falls back to AccountConfig when SettingsStore is None OR when the cache
+    has no entry for this account (v1.0 unit tests, dry-run demos).
+
+    When risk_mode == 'fixed_lot', risk_value carries the lot size — not a
+    percent — so risk_percent still comes from AccountConfig in that mode.
+    """
+    store = getattr(tm, "settings_store", None)
+    if store is not None:
+        try:
+            s = store.effective(acct.name)
+            risk_percent = s.risk_value if s.risk_mode == "percent" else acct.risk_percent
+            return risk_percent, s.max_lot_size, s.max_open_trades
+        except KeyError:
+            pass  # missing cache entry → fall through to JSON defaults
+    return acct.risk_percent, acct.max_lot_size, acct.max_open_trades
+
+
 # ── Zone logic (EXEC-01) ────────────────────────────────────────────
 
 def is_price_in_buy_zone(current_price: float, zone_low: float, zone_high: float) -> bool:
@@ -107,6 +130,9 @@ class TradeManager:
         self.connectors = connectors  # account_name → connector
         self.accounts = {a.name: a for a in accounts}
         self.cfg = global_config
+        # Phase 5 (D-27): optional SettingsStore; bot.py attaches after construction.
+        # Falls back to AccountConfig values when None (v1.0 unit tests, dry-run demos).
+        self.settings_store = None  # type: ignore[assignment]
 
     async def handle_signal(self, signal: SignalAction) -> list[dict]:
         """Process a parsed signal. Returns list of execution results for notification."""
@@ -177,10 +203,11 @@ class TradeManager:
             logger.warning("%s: %s", name, reason)
             return {"account": name, "status": "skipped", "reason": reason}
 
-        # ── Check max open trades ───────────────────────────────────────
+        # ── Check max open trades (Phase 5: via SettingsStore when attached) ─
         positions = await connector.get_positions(signal.symbol)
-        if len(positions) >= acct.max_open_trades:
-            reason = f"Max open trades ({acct.max_open_trades}) reached for {signal.symbol}"
+        _, _, max_open = _effective(self, acct)
+        if len(positions) >= max_open:
+            reason = f"Max open trades ({max_open}) reached for {signal.symbol}"
             return {"account": name, "status": "skipped", "reason": reason}
 
         # ── Check duplicate (same direction already open) ───────────────
@@ -221,11 +248,13 @@ class TradeManager:
 
         entry_for_calc = current_price if use_market else limit_price
         sl_distance = calculate_sl_distance(entry_for_calc, signal.sl)
+        # Phase 5: effective risk/lot caps come from SettingsStore when attached.
+        risk_pct, max_lot, _ = _effective(self, acct)
         lot_size = calculate_lot_size(
             account_balance=acct_info.balance,
-            risk_percent=acct.risk_percent,
+            risk_percent=risk_pct,
             sl_distance=sl_distance,
-            max_lot_size=acct.max_lot_size,
+            max_lot_size=max_lot,
             jitter_percent=self.cfg.lot_jitter_percent,
             symbol=signal.symbol,
         )

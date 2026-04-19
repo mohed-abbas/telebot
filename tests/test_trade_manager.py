@@ -140,3 +140,85 @@ class TestModifySL:
         assert len(results) == 1
         assert results[0]["status"] == "sl_modified"
         assert results[0]["new_sl"] == 4980.0  # entry price
+
+
+# ── Phase 5 (D-24, D-27): SettingsStore replaces AccountConfig for risk reads ──
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_lot_sized_against_settings_store_value_not_accountconfig(
+    db_pool, seeded_account, global_config, connector,
+):
+    """When SettingsStore has risk_value=5.0, it overrides
+    AccountConfig.risk_percent=1.0 in trade_manager's hot path (D-24 + D-27).
+    """
+    import db
+    from settings_store import SettingsStore
+    from trade_manager import TradeManager, _effective
+    from models import AccountConfig
+
+    await db.update_account_setting(seeded_account, "risk_value", 5.0)
+
+    store = SettingsStore(db_pool=db_pool)
+    await store.load_all()
+
+    acct = AccountConfig(
+        name=seeded_account, server="T", login=1, password_env="",
+        risk_percent=1.0,  # deliberately different from DB's 5.0
+        max_lot_size=1.0, max_daily_loss_percent=3.0, max_open_trades=3, enabled=True,
+    )
+    tm = TradeManager({seeded_account: connector}, [acct], global_config)
+    tm.settings_store = store
+
+    risk_pct, max_lot, max_open = _effective(tm, acct)
+    assert risk_pct == 5.0, "DB risk_value must override AccountConfig.risk_percent"
+    assert max_lot == 1.0
+    assert max_open == 3
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_fallback_when_no_settings_store(global_config, connector):
+    """v1.0 harness compatibility: TradeManager without SettingsStore still reads
+    from AccountConfig (unit tests, dry-run demos must keep working)."""
+    from trade_manager import TradeManager, _effective
+    from models import AccountConfig
+    acct = AccountConfig(
+        name="legacy", server="T", login=1, password_env="",
+        risk_percent=2.0, max_lot_size=0.5, max_daily_loss_percent=3.0,
+        max_open_trades=2, enabled=True,
+    )
+    tm = TradeManager({"legacy": connector}, [acct], global_config)
+    # settings_store stays None (the default)
+    risk_pct, max_lot, max_open = _effective(tm, acct)
+    assert (risk_pct, max_lot, max_open) == (2.0, 0.5, 2)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_fixed_lot_mode_uses_accountconfig_risk_percent(
+    db_pool, seeded_account, global_config, connector,
+):
+    """When risk_mode == 'fixed_lot', risk_value carries the lot size, not a
+    percent — fall back to AccountConfig.risk_percent for the risk-percent
+    signal so downstream calculate_lot_size keeps its existing semantics.
+    """
+    import db
+    from settings_store import SettingsStore
+    from trade_manager import TradeManager, _effective
+    from models import AccountConfig
+
+    await db.update_account_setting(seeded_account, "risk_mode", "fixed_lot")
+    await db.update_account_setting(seeded_account, "risk_value", 0.5)
+
+    store = SettingsStore(db_pool=db_pool)
+    await store.load_all()
+
+    acct = AccountConfig(
+        name=seeded_account, server="T", login=1, password_env="",
+        risk_percent=1.0, max_lot_size=1.0, max_daily_loss_percent=3.0,
+        max_open_trades=3, enabled=True,
+    )
+    tm = TradeManager({seeded_account: connector}, [acct], global_config)
+    tm.settings_store = store
+
+    risk_pct, _, _ = _effective(tm, acct)
+    assert risk_pct == 1.0, "fixed_lot mode falls back to AccountConfig.risk_percent"

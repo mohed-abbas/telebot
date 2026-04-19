@@ -56,12 +56,25 @@ async def clean_tables():
     try:
         async with db._pool.acquire() as conn:
             await conn.execute(
-                "TRUNCATE signals, trades, daily_stats, pending_orders "
+                "TRUNCATE signals, trades, daily_stats, pending_orders, "
+                "settings_audit, account_settings, accounts, failed_login_attempts "
                 "RESTART IDENTITY CASCADE"
             )
     except Exception:
         pass  # DB not available, skip cleanup
     yield
+
+
+@pytest_asyncio.fixture
+async def seeded_account(db_pool):
+    """Seeds one test account + default settings; rolled back by clean_tables."""
+    await db.upsert_account_if_missing(
+        name="test-acct", server="Test", login=99999, password_env="",
+        risk_percent=1.0, max_lot_size=1.0, max_daily_loss_percent=3.0,
+        max_open_trades=3, enabled=True, mt5_host="", mt5_port=0,
+    )
+    await db.upsert_account_settings_if_missing(account_name="test-acct")
+    return "test-acct"
 
 
 @pytest.fixture

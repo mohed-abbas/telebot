@@ -55,6 +55,7 @@ async def _setup_trading(http: httpx.AsyncClient):
     from trade_manager import TradeManager
     from executor import Executor
     from notifier import Notifier
+    from settings_store import SettingsStore
 
     # Initialize database
     await db.init_db(settings.database_url)
@@ -67,6 +68,49 @@ async def _setup_trading(http: httpx.AsyncClient):
     if not accts_raw:
         logger.warning("No accounts configured — trading disabled")
         return None, None
+
+    # ── Seed accounts + settings from accounts.json (D-24/D-25/D-26) ────
+    # Idempotent: INSERT ... ON CONFLICT DO NOTHING. DB wins over JSON.
+    seeded_names: list[str] = []
+    for raw in accts_raw:
+        created = await db.upsert_account_if_missing(
+            name=raw["name"],
+            server=raw["server"],
+            login=raw["login"],
+            password_env=raw.get("password_env", ""),
+            risk_percent=raw.get("risk_percent", 1.0),
+            max_lot_size=raw.get("max_lot_size", 1.0),
+            max_daily_loss_percent=raw.get("max_daily_loss_percent", 3.0),
+            max_open_trades=raw.get("max_open_trades", 3),
+            enabled=raw.get("enabled", True),
+            mt5_host=raw.get("mt5_host", ""),
+            mt5_port=raw.get("mt5_port", 0),
+        )
+        if created:
+            await db.upsert_account_settings_if_missing(
+                account_name=raw["name"],
+                risk_mode="percent",
+                risk_value=raw.get("risk_percent", 1.0),
+                max_stages=1,
+                default_sl_pips=100,
+                max_daily_trades=30,
+            )
+            logger.info("Seeded account from JSON: %s", raw["name"])
+        else:
+            # Ensure settings row exists even if accounts row pre-existed
+            # (e.g. from a partial earlier boot where accounts inserted but
+            # account_settings insert failed).
+            await db.upsert_account_settings_if_missing(account_name=raw["name"])
+        seeded_names.append(raw["name"])
+
+    # D-25: log orphans (DB rows whose name is absent from accounts.json).
+    # Never delete — accounts row may still carry open positions/audit history.
+    orphans = await db.get_orphan_accounts(seeded_names)
+    for orphan_name in orphans:
+        logger.warning(
+            "Account '%s' exists in DB but not in accounts.json — kept alive (D-25)",
+            orphan_name,
+        )
 
     global_config = GlobalConfig(
         default_target_tp=global_raw.get("default_target_tp", 2),
@@ -130,6 +174,14 @@ async def _setup_trading(http: httpx.AsyncClient):
         raw.pop("_password", None)
 
     tm = TradeManager(connectors, accounts, global_config)
+
+    # ── Wire SettingsStore (Phase 5, D-27) ─────────────────────────────
+    # Cache of effective settings keyed by account name. TradeManager
+    # reads risk/lot parameters through this cache instead of AccountConfig.
+    settings_store = SettingsStore(db_pool=db._pool)
+    await settings_store.load_all()
+    tm.settings_store = settings_store
+
     notifier = Notifier(
         http=http,
         executions_webhook=settings.discord_webhook_executions or None,
