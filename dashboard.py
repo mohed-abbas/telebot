@@ -9,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets as _secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -112,6 +115,48 @@ async def _verify_csrf(request: Request):
             raise HTTPException(status_code=403, detail="Forbidden")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# AUTHENTICATION: /login, /logout (Phase 5 Plan 04)
+# ═══════════════════════════════════════════════════════════════════════
+
+CSRF_COOKIE = "telebot_login_csrf"
+CSRF_COOKIE_MAX_AGE = 15 * 60  # 15 minutes (form validity window)
+_password_hasher = PasswordHasher()  # RFC 9106 defaults
+
+
+def _client_ip(request: Request) -> str:
+    """Prefer X-Real-IP (set by nginx line 36 of telebot.conf); fallback to conn peer."""
+    xri = request.headers.get("x-real-ip", "").strip()
+    if xri:
+        return xri
+    return request.client.host if request.client else "unknown"
+
+
+def _render_login(
+    request: Request,
+    csrf_token: str,
+    next_path: str = "/overview",
+    error: str | None = None,
+    status_code: int = 200,
+):
+    """Render login.html with a fresh CSRF cookie (path=/login — T-5-10)."""
+    resp = templates.TemplateResponse("login.html", {
+        "request": request,
+        "csrf_token": csrf_token,
+        "next_path": next_path,
+        "error": error,
+    }, status_code=status_code)
+    resp.set_cookie(
+        CSRF_COOKIE, csrf_token,
+        max_age=CSRF_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=app_settings.session_cookie_secure,
+        path="/login",
+    )
+    return resp
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """ASGI lifespan: manages startup/shutdown lifecycle."""
@@ -141,6 +186,96 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 async def health():
     """Health check for container orchestration — no auth required."""
     return {"status": "ok"}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# AUTH ROUTES (/login + /logout)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request):
+    """Render the login form with a fresh CSRF token. Skip the form if already authenticated."""
+    if request.session.get("user"):
+        return RedirectResponse(
+            url=request.query_params.get("next", "/overview"),
+            status_code=303,
+        )
+    csrf_token = _secrets.token_urlsafe(32)
+    next_path = request.query_params.get("next", "/overview")
+    return _render_login(request, csrf_token, next_path=next_path)
+
+
+@app.post("/login", response_class=HTMLResponse)
+async def login_submit(
+    request: Request,
+    password: str = Form(...),
+    csrf_token: str = Form(...),
+    next_path: str = Form("/overview"),
+):
+    """Validate CSRF → check rate-limit → argon2 verify → set session."""
+    # 1. Double-submit cookie CSRF (AUTH-04, D-14)
+    cookie_token = request.cookies.get(CSRF_COOKIE, "")
+    if not cookie_token or not _secrets.compare_digest(cookie_token, csrf_token):
+        fresh = _secrets.token_urlsafe(32)
+        return _render_login(
+            request, fresh, next_path=next_path,
+            error="Session expired — please try again.",
+            status_code=400,
+        )
+
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent", "")
+
+    # 2. App-level rate limit (AUTH-05, D-17) — before argon2 CPU cost
+    fail_count = await db.get_failed_login_count(ip, minutes=15)
+    if fail_count >= 5:
+        fresh = _secrets.token_urlsafe(32)
+        return _render_login(
+            request, fresh, next_path=next_path,
+            error="Too many failed attempts. Try again in 15 minutes.",
+            status_code=429,
+        )
+
+    # 3. argon2 verify (constant-time, D-13)
+    ok = False
+    try:
+        _password_hasher.verify(app_settings.dashboard_pass_hash, password)
+        ok = True
+    except VerifyMismatchError:
+        ok = False
+    except (InvalidHashError, VerificationError):
+        logger.error(
+            "Stored DASHBOARD_PASS_HASH is malformed — regenerate via scripts/hash_password.py"
+        )
+        ok = False
+
+    if not ok:
+        await db.log_failed_login(ip, user_agent=ua)
+        fresh = _secrets.token_urlsafe(32)
+        return _render_login(
+            request, fresh, next_path=next_path,
+            error="Invalid credentials.",
+            status_code=401,
+        )
+
+    # 4. Success: set session, clear counter, redirect
+    request.session["user"] = "admin"  # D-30 actor default
+    await db.clear_failed_logins(ip)
+
+    response = RedirectResponse(url=next_path, status_code=303)
+    response.delete_cookie(CSRF_COOKIE, path="/login")
+    if request.headers.get("hx-request"):
+        response.headers["HX-Redirect"] = next_path
+    return response
+
+
+@app.post("/logout")
+@app.get("/logout")
+async def logout(request: Request):
+    """AUTH-06: clear session, redirect to /login. Accepts GET for plain-link logout."""
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -171,11 +171,12 @@ MT5_PORT=18812
 ACCOUNTS_CONFIG=accounts.json
 DB_PATH=data/telebot.db
 
-# ── Dashboard ──
+# ── Dashboard (Phase 5 auth — styled /login + argon2 + sessions) ──
 DASHBOARD_ENABLED=true
 DASHBOARD_PORT=8080
-DASHBOARD_USER=admin
-DASHBOARD_PASS=YOUR_STRONG_PASSWORD_HERE    # CHANGE THIS!
+DASHBOARD_PASS_HASH=$argon2id$v=19$m=65536,t=3,p=4$...    # Generate via scripts/hash_password.py
+SESSION_SECRET=...                                         # Generate via: openssl rand -base64 48
+SESSION_COOKIE_SECURE=true                                 # set to false only for local HTTP dev
 
 # ── MT5 Passwords ──
 MT5_PASS_1=your_mt5_password
@@ -184,6 +185,40 @@ MT5_PASS_1=your_mt5_password
 ```
 
 **IMPORTANT: Start with `TRADING_DRY_RUN=true` and `MT5_BACKEND=dry_run` first!**
+
+---
+
+## Phase 5 auth migration (v1.1)
+
+The dashboard replaces HTTPBasic with a styled login form backed by argon2 + Starlette sessions.
+Hard cutover — the bot refuses to start if plaintext `DASHBOARD_PASS` is still set.
+
+**On the VPS (or any machine with the new image pulled):**
+
+```bash
+# 1. Generate the argon2 hash (interactive — type password twice):
+docker run --rm -it <image-tag> python scripts/hash_password.py
+# Copy the `DASHBOARD_PASS_HASH=$argon2id$...` line it prints.
+
+# 2. Edit /home/murx/apps/telebot/.env:
+#    - REMOVE: DASHBOARD_USER=...   (silently ignored if left; remove anyway)
+#    - REMOVE: DASHBOARD_PASS=...   (bot refuses to start if present)
+#    - ADD:    DASHBOARD_PASS_HASH=$argon2id$v=19$m=65536,t=3,p=4$...
+#    - ADD:    SESSION_SECRET=$(openssl rand -base64 48)
+#    - ADD:    SESSION_COOKIE_SECURE=true     # prod only; leave false for local HTTP
+
+# 3. Install the nginx rate-limit snippet (optional but recommended):
+cp nginx/limit_req_zones.conf /home/murx/shared/nginx/conf.d/limit_req_zones.conf
+cp nginx/telebot.conf          /home/murx/shared/nginx/conf.d/telebot.conf
+docker exec shared-nginx nginx -t && docker exec shared-nginx nginx -s reload
+
+# 4. Redeploy:
+docker compose up -d telebot
+docker logs -f telebot | head -30   # should NOT show FATAL; should show
+                                    # "SettingsStore loaded N account(s)" and dashboard startup
+```
+
+Visit `https://dashboard.YOURDOMAIN.com/login` — enter the plaintext password you chose in step 1.
 
 ---
 
@@ -211,7 +246,8 @@ docker logs -f telebot
 
 Open in browser: `http://YOUR_VPS_IP:8080`
 
-Login with your `DASHBOARD_USER` / `DASHBOARD_PASS`.
+Visit `/login` and enter the plaintext password matching `DASHBOARD_PASS_HASH`
+(see the Phase 5 auth migration section below for hash generation).
 
 You should see:
 - Overview page with account cards (showing simulated $10,000 balance in dry-run)
@@ -488,7 +524,9 @@ curl -X POST YOUR_WEBHOOK_URL -H "Content-Type: application/json" -d '{"content"
 - [ ] `accounts.json` configured with MT5 account details
 - [ ] 3 Discord channels created with webhooks
 - [ ] Firewall configured (SSH + dashboard port only)
-- [ ] Dashboard password changed from default
+- [ ] `DASHBOARD_PASS_HASH` generated via `scripts/hash_password.py` and set in `.env`
+- [ ] `SESSION_SECRET` generated (`openssl rand -base64 48`) and set in `.env`
+- [ ] Legacy `DASHBOARD_PASS=` removed from `.env` (bot refuses to start otherwise)
 - [ ] `TRADING_DRY_RUN=true` — dry-run mode first
 - [ ] Bot running and parsing signals correctly (3-5 days)
 - [ ] Dashboard accessible and showing data
