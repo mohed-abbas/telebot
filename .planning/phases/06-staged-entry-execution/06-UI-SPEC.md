@@ -1,10 +1,11 @@
 ---
 phase: 6
 slug: staged-entry-execution
-status: draft
+status: approved
 shadcn_initialized: false
 preset: not applicable (non-React stack)
 created: 2026-04-19
+reviewed_at: 2026-04-19
 ---
 
 # Phase 6 — UI Design Contract
