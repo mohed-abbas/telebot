@@ -1,0 +1,102 @@
+{# Desktop table #}
+<div class="hidden md:block">
+    <div class="rounded-lg border bg-card overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b bg-muted/50">
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Time</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Account</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Source</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Symbol</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Direction</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Entry</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">SL</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">TP</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Lots</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">P&L</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in trades %}
+                <tr class="border-b hover:bg-muted/30">
+                    <td class="px-4 py-3 text-muted-foreground text-xs">
+                        {{ t.timestamp.strftime('%Y-%m-%d %H:%M') if t.timestamp else '-' }}
+                    </td>
+                    <td class="px-4 py-3">{{ t.account_name }}</td>
+                    <td class="px-4 py-3 text-xs">{{ t.source_name }}</td>
+                    <td class="px-4 py-3 font-mono">{{ t.symbol }}</td>
+                    <td class="px-4 py-3">
+                        {% if t.direction == 'buy' %}
+                            <span class="badge bg-green-500/20 text-green-400">BUY</span>
+                        {% else %}
+                            <span class="badge bg-red-500/20 text-red-400">SELL</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono">{{ "%.2f"|format(t.entry_price) if t.entry_price else '-' }}</td>
+                    <td class="px-4 py-3 font-mono">{{ "%.2f"|format(t.sl) if t.sl else '-' }}</td>
+                    <td class="px-4 py-3 font-mono">{{ "%.2f"|format(t.tp) if t.tp else '-' }}</td>
+                    <td class="px-4 py-3 font-mono">{{ "%.2f"|format(t.lot_size) if t.lot_size else '-' }}</td>
+                    <td class="px-4 py-3">
+                        {% if t.status == 'opened' %}
+                            <span class="text-green-400">{{ t.status }}</span>
+                        {% elif t.status == 'closed' %}
+                            <span class="text-muted-foreground">{{ t.status }}</span>
+                        {% elif t.status == 'failed' %}
+                            <span class="text-red-400">{{ t.status }}</span>
+                        {% else %}
+                            <span class="text-amber-400">{{ t.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono {% if t.pnl and t.pnl >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                        {% if t.pnl %}{{ "%+.2f"|format(t.pnl) }}{% else %}-{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not trades %}
+                <tr>
+                    <td colspan="11" class="text-center py-8">
+                        <p class="font-medium text-muted-foreground">No trades match filters</p>
+                        <p class="text-sm text-muted-foreground mt-1">Try adjusting the filters above, or clear all filters to see all trades.</p>
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# Mobile cards #}
+<div class="md:hidden space-y-3">
+    {% for t in trades %}
+    <div class="rounded-lg border bg-card p-4">
+        <div class="flex justify-between items-start mb-2">
+            <div>
+                <span class="font-semibold">{{ t.symbol }}</span>
+                <span class="ml-2">
+                    {% if t.direction == 'buy' %}
+                        <span class="badge bg-green-500/20 text-green-400">BUY</span>
+                    {% else %}
+                        <span class="badge bg-red-500/20 text-red-400">SELL</span>
+                    {% endif %}
+                </span>
+            </div>
+            <span class="font-mono {% if t.pnl and t.pnl >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                {% if t.pnl %}{{ "%+.2f"|format(t.pnl) }}{% else %}-{% endif %}
+            </span>
+        </div>
+        <div class="grid grid-cols-2 gap-1 text-sm text-muted-foreground">
+            <div>{{ t.timestamp.strftime('%m-%d %H:%M') if t.timestamp else '-' }}</div>
+            <div>{{ t.account_name }}</div>
+            <div>Source: {{ t.source_name }}</div>
+            <div>Entry: <span class="font-mono text-foreground">{{ "%.2f"|format(t.entry_price) if t.entry_price else '-' }}</span></div>
+        </div>
+    </div>
+    {% endfor %}
+    {% if not trades %}
+    <div class="rounded-lg border bg-card p-8 text-center">
+        <p class="font-medium text-muted-foreground">No trades match filters</p>
+        <p class="text-sm text-muted-foreground mt-1">Try adjusting the filters above, or clear all filters to see all trades.</p>
+    </div>
+    {% endif %}
+</div>

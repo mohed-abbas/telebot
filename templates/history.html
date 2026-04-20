@@ -1,65 +1,74 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-6">
-    <h2 class="text-2xl font-bold">Trade History</h2>
-    <p class="text-slate-500 text-sm mt-1">Last 100 executed trades</p>
+    <h2 class="text-2xl font-semibold">Trade History</h2>
+    <p class="text-muted-foreground text-sm mt-1">Filter and analyze executed trades</p>
 </div>
 
-<div class="card overflow-x-auto">
-    <table>
-        <thead>
-            <tr>
-                <th>Time</th>
-                <th>Account</th>
-                <th>Symbol</th>
-                <th>Direction</th>
-                <th>Entry</th>
-                <th>SL</th>
-                <th>TP</th>
-                <th>Lots</th>
-                <th>Ticket</th>
-                <th>Status</th>
-                <th>P&L</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for t in trades %}
-            <tr>
-                <td class="text-slate-400 text-xs">{{ t.timestamp.strftime('%Y-%m-%d %H:%M:%S') if t.timestamp else '-' }}</td>
-                <td>{{ t.account_name }}</td>
-                <td class="font-mono">{{ t.symbol }}</td>
-                <td>
-                    {% if t.direction == 'buy' %}
-                        <span class="badge-buy">BUY</span>
-                    {% else %}
-                        <span class="badge-sell">SELL</span>
-                    {% endif %}
-                </td>
-                <td class="font-mono">{{ "%.2f"|format(t.entry_price) if t.entry_price else '-' }}</td>
-                <td class="font-mono">{{ "%.2f"|format(t.sl) if t.sl else '-' }}</td>
-                <td class="font-mono">{{ "%.2f"|format(t.tp) if t.tp else '-' }}</td>
-                <td class="font-mono">{{ "%.2f"|format(t.lot_size) if t.lot_size else '-' }}</td>
-                <td class="text-slate-400">#{{ t.ticket }}</td>
-                <td>
-                    {% if t.status == 'opened' %}
-                        <span class="text-green-400">{{ t.status }}</span>
-                    {% elif t.status == 'closed' %}
-                        <span class="text-slate-400">{{ t.status }}</span>
-                    {% elif t.status == 'failed' %}
-                        <span class="text-red-400">{{ t.status }}</span>
-                    {% else %}
-                        <span class="text-yellow-400">{{ t.status }}</span>
-                    {% endif %}
-                </td>
-                <td class="font-mono {% if t.pnl and t.pnl >= 0 %}profit{% else %}loss{% endif %}">
-                    {% if t.pnl %}{{ "%+.2f"|format(t.pnl) }}{% else %}-{% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-            {% if not trades %}
-            <tr><td colspan="11" class="text-center text-slate-500 py-8">No trades yet</td></tr>
-            {% endif %}
-        </tbody>
-    </table>
+{# Filter bar (D-10: inline, always visible) #}
+<form id="history-filters"
+      hx-get="/history"
+      hx-target="#history-table"
+      hx-push-url="true"
+      hx-trigger="change from:select, change delay:500ms from:input[type=date]"
+      class="rounded-lg border bg-card p-4 mb-6">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {# Account filter #}
+        <div class="field">
+            <label for="filter-account" class="text-xs text-muted-foreground">Account</label>
+            <select id="filter-account" name="account" class="field-input">
+                <option value="">All accounts</option>
+                {% for a in filter_options.accounts %}
+                <option value="{{ a }}" {% if filters.account == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        {# Source filter #}
+        <div class="field">
+            <label for="filter-source" class="text-xs text-muted-foreground">Source</label>
+            <select id="filter-source" name="source" class="field-input">
+                <option value="">All sources</option>
+                {% for s in filter_options.sources %}
+                <option value="{{ s }}" {% if filters.source == s %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        {# Symbol filter #}
+        <div class="field">
+            <label for="filter-symbol" class="text-xs text-muted-foreground">Symbol</label>
+            <select id="filter-symbol" name="symbol" class="field-input">
+                <option value="">All symbols</option>
+                {% for sym in filter_options.symbols %}
+                <option value="{{ sym }}" {% if filters.symbol == sym %}selected{% endif %}>{{ sym }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        {# Date range #}
+        <div class="field">
+            <label for="filter-from" class="text-xs text-muted-foreground">From</label>
+            <input type="date" id="filter-from" name="from_date" value="{{ filters.from_date }}" class="field-input">
+        </div>
+        <div class="field">
+            <label for="filter-to" class="text-xs text-muted-foreground">To</label>
+            <input type="date" id="filter-to" name="to_date" value="{{ filters.to_date }}" class="field-input">
+        </div>
+    </div>
+    <div class="mt-3 flex items-center gap-3">
+        <button type="submit" class="btn btn-primary btn-sm">Apply Filters</button>
+        <a href="/history" class="btn btn-ghost btn-sm">Clear All</a>
+        {% if filters.account or filters.source or filters.symbol or filters.from_date or filters.to_date %}
+        <span class="text-xs text-muted-foreground">
+            Showing filtered results
+        </span>
+        {% endif %}
+    </div>
+</form>
+
+{# Trade history table #}
+<div id="history-table">
+    {% include "partials/history_table.html" %}
 </div>
 {% endblock %}
