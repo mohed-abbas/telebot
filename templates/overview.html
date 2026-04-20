@@ -1,23 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-6">
-    <h2 class="text-2xl font-bold">Overview</h2>
-    <p class="text-slate-500 text-sm mt-1">Account summaries — auto-refreshes every 3s</p>
+    <h2 class="text-2xl font-semibold">Overview</h2>
+    <p class="text-muted-foreground text-sm mt-1">Account summaries — auto-refreshes every 3s</p>
 </div>
 
 <!-- TRADING PAUSED banner (REL-03) -->
 {% if trading_paused %}
-<div class="bg-red-900/50 border border-red-500 rounded-lg p-4 mb-6 flex items-center justify-between"
+<div class="rounded-lg border border-destructive/50 bg-destructive/10 p-4 mb-6 flex items-center justify-between"
      hx-get="/api/trading-status" hx-trigger="every 5s" hx-swap="none">
     <div>
         <span class="text-red-400 font-bold text-lg">TRADING PAUSED</span>
-        <span class="text-slate-400 ml-2 text-sm">Kill switch active — no signals will be processed</span>
+        <span class="text-muted-foreground ml-2 text-sm">Kill switch active — no signals will be processed</span>
     </div>
     <button
         hx-post="/api/resume-trading"
         hx-swap="none"
         hx-on::after-request="location.reload()"
-        class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded text-sm transition-colors">
+        class="btn btn-primary">
         Resume Trading
     </button>
 </div>
@@ -30,7 +30,7 @@
         hx-get="/api/emergency-preview"
         hx-target="#kill-switch-area"
         hx-swap="innerHTML"
-        class="bg-red-900/30 hover:bg-red-900/50 border border-red-500/30 text-red-400 py-2 px-4 rounded text-sm transition-colors">
+        class="btn btn-destructive">
         Emergency Kill Switch
     </button>
     {% endif %}
@@ -41,16 +41,16 @@
 </div>
 
 <div class="mt-8">
-    <h3 class="text-lg font-semibold mb-4">Open Positions</h3>
+    <h3 class="text-lg font-semibold text-foreground mb-4">Open Positions</h3>
     <div id="positions-table" hx-get="/partials/positions" hx-trigger="every 3s" hx-swap="innerHTML">
         {% include "partials/positions_table.html" %}
     </div>
 </div>
 
 <div class="mt-8">
-    <h3 class="text-lg font-semibold mb-4">
+    <h3 class="text-lg font-semibold text-foreground mb-4">
         Pending Stages
-        <span class="text-xs text-slate-500">(showing top 5)</span>
+        <span class="text-xs text-muted-foreground">(showing top 5)</span>
     </h3>
     <div id="pending-stages-overview"
          hx-ext="sse"
