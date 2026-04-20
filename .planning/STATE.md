@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — Improved trade executions and UI
-status: executing
-last_updated: "2026-04-19T22:15:48.304Z"
-last_activity: 2026-04-19 -- Phase 06 execution started
+status: under_review
+last_updated: "2026-04-20T14:00:00Z"
+last_activity: 2026-04-20 -- Phase 06 execution + verification complete; awaiting VPS UAT after Phase 07
 progress:
   total_phases: 3
   completed_phases: 1
@@ -24,10 +24,18 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 
 ## Current Position
 
-Phase: 06 (staged-entry-execution) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 06
-Last activity: 2026-04-19 -- Phase 06 execution started
+Phase: 06 (staged-entry-execution) — UNDER REVIEW
+Plan: 5 of 5 complete
+Status: All 5 plans shipped, 6/6 must-haves verified at code layer, CR-01 fixed. VPS UAT deferred until after Phase 07 (dashboard redesign) so operator can evaluate real-money trade execution once settings UX is polished.
+Last activity: 2026-04-20 -- Phase 06 execution + verification complete; awaiting VPS UAT after Phase 07
+
+## Pending UAT
+
+- `.planning/phases/06-staged-entry-execution/06-HUMAN-UAT.md` — 6 live-infra tests (text-only signal, correlated follow-up, kill-switch drain, reconnect reconcile, SSE price flash, settings form UX) — run on VPS with MT5 demo + real Telegram channel after Phase 07 ships.
+
+## Seeds Planted
+
+- SEED-001 — settings UX polish (toasts, inline help, copywriting) — surfaces at Phase 07 discuss-phase.
 
 ## v1.1 Milestone Map
 

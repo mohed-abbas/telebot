@@ -23,7 +23,7 @@
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 5: Foundation — UI substrate, auth, and settings data model** - Replace Play-CDN Tailwind with standalone-CLI build, vendor Basecoat UI, ship a styled login form backed by argon2 + sessions, and land the `account_settings` data layer with audit log. No staged-entry execution yet — just the prerequisites.
-- [ ] **Phase 6: Staged entry execution** - Text-only signal parser, two-signal correlation, staged execution engine with kill-switch drain and reconnect reconciliation, plus a dashboard pending-stages panel. Isolated to keep this live-money phase testable.
+- [~] **Phase 6: Staged entry execution** — UNDER REVIEW (code complete 2026-04-20; awaiting VPS UAT with MT5 demo after Phase 7 ships)
 - [ ] **Phase 7: Dashboard redesign** - Full restyle of every dashboard view on Basecoat components, mobile-responsive layout, positions drilldown, per-source analytics deep-dive, and trade-history filters.
 
 ## Phase Details
