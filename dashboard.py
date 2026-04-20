@@ -822,15 +822,53 @@ async def settings_revert(
 
 
 @app.get("/analytics", response_class=HTMLResponse)
-async def analytics_page(request: Request, user: str = Depends(_verify_auth)):
-    summary = await db.get_analytics_summary()
-    by_symbol = await db.get_analytics_by_symbol()
+async def analytics_page(
+    request: Request,
+    range: str = "all",
+    source: str = "",
+    user: str = Depends(_verify_auth),
+):
+    """Analytics page with time range and source filters (DASH-04)."""
+    # Parse range to days
+    range_map = {"7d": 7, "30d": 30, "90d": 90, "all": None}
+    range_days = range_map.get(range, None)
+
+    # Get analytics data
+    analytics = await db.get_analytics_with_filters(
+        range_days=range_days,
+        source_name=source,
+    )
+
+    # Get available sources for dropdown/filter
+    sources = await db.get_analytics_sources()
+
+    # Check if HTMX partial request
+    if request.headers.get("hx-request"):
+        return templates.TemplateResponse("partials/analytics_table.html", {
+            "request": request,
+            "summary": analytics["summary"],
+            "by_source": analytics["by_source"],
+            "avg_stages": analytics["avg_stages"],
+            "extremes": analytics["extremes"],
+            "current_range": range,
+            "current_source": source,
+            "sources": sources,
+        })
+
+    # Full page render
     return templates.TemplateResponse("analytics.html", {
         "request": request,
-        "summary": summary,
-        "by_symbol": by_symbol,
         "page": "analytics",
         "page_title": "Analytics",
+        "summary": analytics["summary"],
+        "by_source": analytics["by_source"],
+        "avg_stages": analytics["avg_stages"],
+        "extremes": analytics["extremes"],
+        "current_range": range,
+        "current_source": source,
+        "sources": sources,
+        "trading_enabled": _executor and _executor.is_accepting_signals() if _executor else False,
+        "dry_run": _settings.trading_dry_run if _settings else False,
     })
 
 
