@@ -1,60 +1,53 @@
-<div class="card overflow-x-auto"
-     role="region"
-     aria-live="polite"
-     aria-label="Pending staged entry sequences">
-  <table>
-    <thead>
-      <tr>
-        <th>Account</th>
-        <th>Symbol</th>
-        <th>Direction</th>
-        <th>Stages</th>
-        <th>Target band</th>
-        <th>Current price</th>
-        <th>Elapsed</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for s in stages %}
-      <tr>
-        <td class="text-sm font-semibold">{{ s.account_name }}</td>
-        <td class="font-mono text-sm">{{ s.symbol }}</td>
-        <td>
-          {% if s.direction == "buy" %}
-            <span class="badge-buy">BUY</span>
-          {% else %}
-            <span class="badge-sell">SELL</span>
-          {% endif %}
-        </td>
-        <td>
-          <span class="font-mono text-sm">{{ s.filled }} / {{ s.total }}</span>
-        </td>
-        <td class="font-mono text-sm">
-          {{ "%.2f"|format(s.band_low) }} &#8211; {{ "%.2f"|format(s.band_high) }}
-        </td>
-        <td class="font-mono text-sm" data-price-cell>
-          {% if s.current_price is not none %}
-            {{ "%.2f"|format(s.current_price) }}
-          {% else %}
-            &mdash;
-          {% endif %}
-          <div class="text-xs text-slate-500">{{ s.distance_str }}</div>
-        </td>
-        <td>
-          <span class="font-mono text-xs text-slate-400">{{ s.elapsed }}</span>
-        </td>
-      </tr>
-      {% endfor %}
-      {% if not stages %}
-      <tr>
-        <td colspan="7">
-          <div class="empty-state p-8 text-center">
-            <div class="text-lg font-semibold text-slate-400">No pending stages</div>
-            <p class="text-sm text-slate-500 mt-1">All signals resolved. New staged sequences will appear here automatically.</p>
-          </div>
-        </td>
-      </tr>
-      {% endif %}
-    </tbody>
-  </table>
+{# Pending stages partial (STAGE-08, D-32..D-36) #}
+{% if stages %}
+<div class="space-y-3">
+    {% for s in stages %}
+    <div class="rounded-lg border bg-card p-4">
+        <div class="flex justify-between items-start mb-3">
+            <div>
+                <span class="font-mono font-semibold">{{ s.symbol }}</span>
+                {% if s.direction == "buy" %}
+                    <span class="badge bg-green-500/20 text-green-400 ml-2">BUY</span>
+                {% else %}
+                    <span class="badge bg-red-500/20 text-red-400 ml-2">SELL</span>
+                {% endif %}
+            </div>
+            <span class="text-xs text-muted-foreground">{{ s.account_name }}</span>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div>
+                <span class="text-xs text-muted-foreground block">Stages</span>
+                <span class="font-mono">{{ s.filled_count }}/{{ s.total_stages }}</span>
+            </div>
+            <div>
+                <span class="text-xs text-muted-foreground block">Target Band</span>
+                <span class="font-mono text-xs">{{ "%.2f"|format(s.band_low) }} - {{ "%.2f"|format(s.band_high) }}</span>
+            </div>
+            <div>
+                <span class="text-xs text-muted-foreground block">Current Price</span>
+                <span class="font-mono" data-price-cell>{{ "%.2f"|format(s.current_price) if s.current_price else '-' }}</span>
+            </div>
+            <div>
+                <span class="text-xs text-muted-foreground block">Elapsed</span>
+                <span class="text-muted-foreground">{{ s.elapsed }}</span>
+            </div>
+        </div>
+
+        {% if s.distance_to_band %}
+        <div class="mt-3 text-xs">
+            <span class="text-muted-foreground">Distance to band:</span>
+            <span class="font-mono {% if s.distance_to_band < 0 %}text-green-400{% else %}text-amber-400{% endif %}">
+                {{ "%+.1f"|format(s.distance_to_band) }} pips
+            </span>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
 </div>
+{% else %}
+<div class="rounded-lg border bg-card p-8 text-center">
+    <p class="font-medium text-muted-foreground">No pending stages</p>
+    <p class="text-sm text-muted-foreground mt-1">All staged entries have been filled or cancelled. Check the Trade History for recent activity.</p>
+</div>
+{% endif %}
