@@ -308,6 +308,7 @@ async def overview(request: Request, user: str = Depends(_verify_auth)):
         "trading_paused": _executor._trading_paused if _executor else False,
         "stages": stages,
         "page": "overview",
+        "page_title": "Overview",
     })
 
 
@@ -318,6 +319,7 @@ async def positions_page(request: Request, user: str = Depends(_verify_auth)):
         "request": request,
         "positions": positions,
         "page": "positions",
+        "page_title": "Open Positions",
     })
 
 
@@ -328,6 +330,7 @@ async def history_page(request: Request, user: str = Depends(_verify_auth)):
         "request": request,
         "trades": trades,
         "page": "history",
+        "page_title": "Trade History",
     })
 
 
@@ -338,6 +341,7 @@ async def signals_page(request: Request, user: str = Depends(_verify_auth)):
         "request": request,
         "signals": signals,
         "page": "signals",
+        "page_title": "Signal Log",
     })
 
 
@@ -458,6 +462,7 @@ async def staged_page(request: Request, user: str = Depends(_verify_auth)):
         "trading_enabled": _settings.trading_enabled if _settings else False,
         "dry_run": _settings.trading_dry_run if _settings else True,
         "page": "staged",
+        "page_title": "Pending Stages",
     })
 
 
@@ -496,6 +501,7 @@ async def settings_page(request: Request, user: str = Depends(_verify_auth)):
         "trading_enabled": _settings.trading_enabled if _settings else False,
         "dry_run": _settings.trading_dry_run if _settings else True,
         "page": "settings",
+        "page_title": "Settings",
     })
 
 
@@ -782,6 +788,7 @@ async def analytics_page(request: Request, user: str = Depends(_verify_auth)):
         "summary": summary,
         "by_symbol": by_symbol,
         "page": "analytics",
+        "page_title": "Analytics",
     })
 
 
