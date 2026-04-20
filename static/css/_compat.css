@@ -1,44 +1,24 @@
-/* Compat shim — preserves v1.0 dashboard look exactly (D-02).
-   Classes enumerated from templates/base.html:22-40.
-   Phase 7 will peel these away class-by-class as pages adopt Basecoat primitives. */
+/* Phase 7 compat shim — REMOVED
 
-@layer components {
-  .profit { @apply text-green-400; }
-  .loss   { @apply text-red-400; }
+   This file previously provided v1.0 compatibility classes while Phase 7 migrated
+   the dashboard to Basecoat components. All pages have been restyled:
 
-  .card {
-    @apply bg-dark-800 border border-dark-700 rounded-xl;
-  }
+   - Plan 01: Mobile nav + sidebar
+   - Plan 02: Overview + positions table
+   - Plan 03: Positions drilldown
+   - Plan 04: Trade history filters
+   - Plan 05: Analytics time/source filters
+   - Plan 06: Settings toasts + help text
+   - Plan 07: Signals + staged pages
+   - Plan 08: Compat shim removal (this cleanup)
 
-  .btn {
-    @apply px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer transition-opacity;
-  }
-  .btn:hover { @apply opacity-[0.85]; }
-  .btn-red   { @apply bg-red-900 text-red-300; }
-  .btn-blue  { @apply bg-blue-900 text-blue-300; }
-  .btn-green { @apply bg-emerald-900 text-emerald-300; }
+   All compat classes migrated to Basecoat equivalents:
+   - .card -> Basecoat .card
+   - .btn, .btn-red, .btn-blue, .btn-green -> .btn-primary, .btn-destructive, .btn-secondary
+   - .badge-buy, .badge-sell -> Tailwind utilities (bg-green-500/20 text-green-400, etc.)
+   - .nav-active -> .sidebar-link.active
+   - .profit, .loss -> text-green-400, text-red-400 (inline)
+   - Table styles -> Tailwind utilities (inline)
 
-  .badge-buy           { @apply bg-emerald-900 text-emerald-300 px-2 py-0.5 rounded text-xs; }
-  .badge-sell          { @apply bg-red-900 text-red-300 px-2 py-0.5 rounded text-xs; }
-  .badge-connected     { @apply bg-emerald-900 text-emerald-300; }
-  .badge-disconnected  { @apply bg-red-900 text-red-300; }
-
-  .nav-active {
-    @apply bg-dark-700;
-    border-left: 3px solid #818cf8;
-  }
-
-  table { @apply w-full; }
-  thead th {
-    @apply text-left px-3 py-3 text-slate-400 font-semibold text-xs uppercase;
-    border-bottom: 1px solid #252542;
-  }
-  tbody td {
-    @apply px-3 py-3 text-sm;
-    border-bottom: 1px solid #1e1e35;
-  }
-
-  input[type="number"] {
-    @apply bg-dark-700 border border-slate-700 text-slate-200 px-2 py-1 rounded w-20 text-xs;
-  }
-}
+   File retained for historical reference. Safe to delete.
+*/
