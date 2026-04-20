@@ -1,0 +1,106 @@
+{# DASH-03: Position drilldown panel (D-05) #}
+<div class="bg-muted/30 rounded-lg p-4 mt-2 space-y-4">
+    {# Fill History #}
+    <div>
+        <h4 class="text-sm font-semibold mb-2">Fill History</h4>
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <thead>
+                    <tr class="border-b">
+                        <th class="px-2 py-1.5 text-left text-muted-foreground">Stage</th>
+                        <th class="px-2 py-1.5 text-left text-muted-foreground">Time</th>
+                        <th class="px-2 py-1.5 text-left text-muted-foreground">Lots</th>
+                        <th class="px-2 py-1.5 text-left text-muted-foreground">Band</th>
+                        <th class="px-2 py-1.5 text-left text-muted-foreground">SL at Fill</th>
+                        <th class="px-2 py-1.5 text-left text-muted-foreground">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for fill in fill_history %}
+                    <tr class="border-b border-muted">
+                        <td class="px-2 py-1.5 font-mono">{{ fill.stage_number }}</td>
+                        <td class="px-2 py-1.5 text-muted-foreground">
+                            {{ fill.filled_at.strftime('%H:%M:%S') if fill.filled_at else '-' }}
+                        </td>
+                        <td class="px-2 py-1.5 font-mono">{{ "%.2f"|format(fill.lot_size) }}</td>
+                        <td class="px-2 py-1.5 font-mono">
+                            {% if fill.band_low and fill.band_high %}
+                                {{ "%.2f"|format(fill.band_low) }}-{{ "%.2f"|format(fill.band_high) }}
+                            {% else %}
+                                Market
+                            {% endif %}
+                        </td>
+                        <td class="px-2 py-1.5 font-mono">
+                            {{ "%.1f"|format(fill.sl_at_fill) if fill.sl_at_fill else '-' }}
+                        </td>
+                        <td class="px-2 py-1.5">
+                            {% if fill.status == 'filled' %}
+                                <span class="text-green-400">filled</span>
+                            {% else %}
+                                <span class="text-muted-foreground">{{ fill.status }}</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    {# Current P/L (live via SSE) #}
+    <div class="flex items-center gap-4">
+        <div>
+            <span class="text-xs text-muted-foreground">Current P/L</span>
+            <div data-price-cell
+                 hx-get="/partials/position_pnl/{{ position.account_name }}/{{ position.ticket }}"
+                 hx-trigger="sse:positions"
+                 hx-swap="innerHTML"
+                 class="text-lg font-semibold {% if position.pnl and position.pnl >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                {{ "%+.2f"|format(position.pnl) if position.pnl else '0.00' }}
+            </div>
+        </div>
+        <div>
+            <span class="text-xs text-muted-foreground">Entry</span>
+            <div class="font-mono">{{ "%.2f"|format(position.entry_price) }}</div>
+        </div>
+        <div>
+            <span class="text-xs text-muted-foreground">SL</span>
+            <div class="font-mono">{{ "%.2f"|format(position.sl) if position.sl else '-' }}</div>
+        </div>
+        <div>
+            <span class="text-xs text-muted-foreground">TP</span>
+            <div class="font-mono">{{ "%.2f"|format(position.tp) if position.tp else '-' }}</div>
+        </div>
+    </div>
+
+    {# Signal Attribution #}
+    {% if signal %}
+    <div class="border-t border-muted pt-3">
+        <h4 class="text-sm font-semibold mb-2">Signal Source</h4>
+        <div class="text-xs space-y-1">
+            <div>
+                <span class="text-muted-foreground">Source:</span>
+                <span class="font-medium">{{ signal.source_name or 'Unknown' }}</span>
+            </div>
+            <div>
+                <span class="text-muted-foreground">Time:</span>
+                <span>{{ signal.timestamp.strftime('%Y-%m-%d %H:%M:%S') if signal.timestamp else '-' }}</span>
+            </div>
+            <div>
+                <span class="text-muted-foreground">Type:</span>
+                <span class="capitalize">{{ signal.signal_type|replace('_', ' ') }}</span>
+            </div>
+            <details class="mt-2">
+                <summary class="cursor-pointer text-muted-foreground hover:text-foreground">
+                    Raw signal text
+                </summary>
+                <pre class="mt-1 p-2 bg-muted rounded text-xs overflow-x-auto whitespace-pre-wrap">{{ signal.raw_text[:500] }}</pre>
+            </details>
+        </div>
+    </div>
+    {% else %}
+    <div class="border-t border-muted pt-3">
+        <p class="text-xs text-muted-foreground">No linked signal (manual or imported trade)</p>
+    </div>
+    {% endif %}
+</div>

@@ -806,6 +806,26 @@ async def positions_partial(request: Request, user: str = Depends(_verify_auth))
     })
 
 
+@app.get("/partials/position_drilldown/{account}/{ticket}", response_class=HTMLResponse)
+async def position_drilldown_partial(
+    request: Request,
+    account: str,
+    ticket: int,
+    user: str = Depends(_verify_auth),
+):
+    """DASH-03: Position drilldown panel content."""
+    drilldown = await db.get_position_drilldown(ticket, account)
+    if not drilldown:
+        return HTMLResponse("<p class='text-muted-foreground text-sm'>Position not found</p>")
+
+    return templates.TemplateResponse("partials/position_drilldown.html", {
+        "request": request,
+        "position": drilldown["position"],
+        "fill_history": drilldown["fill_history"],
+        "signal": drilldown["signal"],
+    })
+
+
 @app.get("/partials/overview", response_class=HTMLResponse)
 async def overview_partial(request: Request, user: str = Depends(_verify_auth)):
     accounts_data = await _get_accounts_overview()
