@@ -4,3 +4,11 @@
 @import "./_compat.css";
 /* Basecoat vendored — only /login uses the primitives in Phase 5 per D-03 */
 @import "../vendor/basecoat/basecoat.css";
+
+/* Phase 7: Sidebar link styles */
+.sidebar-link {
+  @apply block px-4 py-2.5 text-sm text-foreground hover:bg-accent rounded-md mx-2 transition-colors;
+}
+.sidebar-link.active {
+  @apply bg-accent text-accent-foreground font-medium;
+}

@@ -6,40 +6,59 @@
     <title>Telebot Dashboard</title>
     <link rel="stylesheet" href="{{ asset_url('app.css') }}">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <script defer src="/static/vendor/basecoat/basecoat.min.js"></script>
     <script defer src="/static/js/htmx_basecoat_bridge.js"></script>
 </head>
-<body class="min-h-screen flex">
-    <!-- Sidebar -->
-    <nav class="w-56 bg-dark-800 border-r border-dark-700 flex flex-col min-h-screen fixed">
-        <div class="p-4 border-b border-dark-700">
-            <h1 class="text-lg font-bold text-indigo-400">Telebot</h1>
-            <p class="text-xs text-slate-500 mt-1">Trading Dashboard</p>
-        </div>
-        <div class="flex-1 py-4">
-            <a href="/overview" class="block px-4 py-2.5 text-sm hover:bg-dark-700 {% if page == 'overview' %}nav-active{% endif %}">Overview</a>
-            <a href="/positions" class="block px-4 py-2.5 text-sm hover:bg-dark-700 {% if page == 'positions' %}nav-active{% endif %}">Positions</a>
-            <a href="/history" class="block px-4 py-2.5 text-sm hover:bg-dark-700 {% if page == 'history' %}nav-active{% endif %}">Trade History</a>
-            <a href="/signals" class="block px-4 py-2.5 text-sm hover:bg-dark-700 {% if page == 'signals' %}nav-active{% endif %}">Signal Log</a>
-            <a href="/analytics" class="block px-4 py-2.5 text-sm hover:bg-dark-700 {% if page == 'analytics' %}nav-active{% endif %}">Analytics</a>
-            <a href="/settings" class="block px-4 py-2.5 text-sm hover:bg-dark-700 {% if page == 'settings' %}nav-active{% endif %}">Settings</a>
-        </div>
-        <div class="px-4 pb-2">
-            <a href="/logout" class="block px-4 py-2.5 text-sm hover:bg-dark-700 text-slate-400">Sign out</a>
-        </div>
-        <div class="p-4 border-t border-dark-700 text-xs text-slate-600">
-            <div id="status-dot" class="inline-block w-2 h-2 rounded-full {% if trading_enabled %}bg-green-500{% else %}bg-red-500{% endif %} mr-1"></div>
-            {% if trading_enabled %}
-                {% if dry_run %}DRY-RUN{% else %}LIVE{% endif %}
-            {% else %}
-                DISABLED
-            {% endif %}
-        </div>
-    </nav>
+<body class="min-h-screen bg-background text-foreground">
+    <!-- Mobile Header (D-02: sticky, visible below md) -->
+    <header class="md:hidden fixed top-0 left-0 right-0 bg-sidebar border-b border-sidebar-border h-12 flex items-center px-4 z-30">
+        <button class="btn-icon-ghost -ml-2" onclick="document.dispatchEvent(new CustomEvent('basecoat:sidebar'))">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+        </button>
+        <span class="ml-3 font-semibold text-sm">{{ page_title|default('Dashboard') }}</span>
+    </header>
+
+    <!-- Sidebar (D-01: drawer on mobile, D-03: fixed 224px on desktop) -->
+    <aside class="sidebar" id="main-sidebar" aria-hidden="true">
+        <nav aria-label="Main navigation">
+            <section class="scrollbar">
+                <div class="p-4 border-b border-sidebar-border">
+                    <h1 class="text-lg font-bold text-primary">Telebot</h1>
+                    <p class="text-xs text-muted-foreground mt-1">Trading Dashboard</p>
+                </div>
+                <div role="group" class="py-2">
+                    <ul>
+                        <li><a href="/overview" class="sidebar-link {% if page == 'overview' %}active{% endif %}">Overview</a></li>
+                        <li><a href="/positions" class="sidebar-link {% if page == 'positions' %}active{% endif %}">Positions</a></li>
+                        <li><a href="/history" class="sidebar-link {% if page == 'history' %}active{% endif %}">Trade History</a></li>
+                        <li><a href="/signals" class="sidebar-link {% if page == 'signals' %}active{% endif %}">Signal Log</a></li>
+                        <li><a href="/analytics" class="sidebar-link {% if page == 'analytics' %}active{% endif %}">Analytics</a></li>
+                        <li><a href="/staged" class="sidebar-link {% if page == 'staged' %}active{% endif %}">Pending Stages</a></li>
+                        <li><a href="/settings" class="sidebar-link {% if page == 'settings' %}active{% endif %}">Settings</a></li>
+                    </ul>
+                </div>
+            </section>
+            <footer class="border-t border-sidebar-border p-4">
+                <a href="/logout" class="sidebar-link text-muted-foreground">Sign out</a>
+                <div class="mt-4 text-xs text-muted-foreground flex items-center">
+                    <span id="status-dot" class="w-2 h-2 rounded-full {% if trading_enabled %}bg-green-500{% else %}bg-red-500{% endif %} mr-2"></span>
+                    {% if trading_enabled %}
+                        {% if dry_run %}DRY-RUN{% else %}LIVE{% endif %}
+                    {% else %}
+                        DISABLED
+                    {% endif %}
+                </div>
+            </footer>
+        </nav>
+    </aside>
 
     <!-- Main content -->
-    <main class="ml-56 flex-1 p-6">
+    <main class="md:ml-56 pt-12 md:pt-0 p-4 md:p-6 min-h-screen">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Toaster container (for Phase 7 SEED-001) -->
+    <div id="toaster" class="toaster" hx-preserve="true"></div>
 </body>
 </html>
