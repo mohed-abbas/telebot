@@ -1,7 +1,8 @@
 ---
 phase: 7
 slug: dashboard-redesign
-status: draft
+status: approved
+reviewed_at: 2026-04-20
 shadcn_initialized: false
 preset: none
 created: 2026-04-20
