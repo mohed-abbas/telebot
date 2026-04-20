@@ -76,7 +76,16 @@ Plans:
   3. Operator can click a position row and see fill history (initial fill + each staged fill), current P/L, and per-stage SL/TP without leaving the positions view
   4. Analytics page supports per-source deep-dive (win rate, profit factor, avg stages filled) and a time-range filter (7d / 30d / all)
   5. Trade history view supports simultaneous filters by account, source, symbol, and date range
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+- [ ] 07-01-PLAN.md — Source tracking + mobile nav: source_name column on signals, log_signal() update, bot.py pass group_name, Basecoat sidebar drawer, sticky mobile header, page_title context (DASH-02)
+- [ ] 07-02-PLAN.md — Overview + positions restyle: Basecoat cards, btn-destructive kill switch, responsive table-to-card on mobile (DASH-01)
+- [ ] 07-03-PLAN.md — Positions drilldown: get_position_drilldown() query, accordion rows, fill history panel, signal attribution, live P/L (DASH-03)
+- [ ] 07-04-PLAN.md — Trade history filters: get_filtered_trades() query, inline filter bar, URL param persistence, responsive layout (DASH-05)
+- [ ] 07-05-PLAN.md — Analytics time/source filters: get_analytics_with_filters() query, pill tabs for time range, clickable source rows, per-source metrics (DASH-04)
+- [ ] 07-06-PLAN.md — Settings UX polish: toast notifications via OOB swap, inline help text, operator-legible labels (DASH-01, SEED-001)
+- [ ] 07-07-PLAN.md — Signals + staged pages restyle: responsive table-to-card, empty states, Basecoat components (DASH-01)
+- [ ] 07-08-PLAN.md — Compat shim removal + verification: remove _compat.css, rebuild CSS, human verify all pages (DASH-01, DASH-02)
 **UI hint**: yes
 
 ## Progress
@@ -86,6 +95,6 @@ v1.1 phases execute in numeric order: 5 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 5. Foundation — UI, auth, settings data | 2/4 | In progress | - |
-| 6. Staged entry execution | 0/? | Not started | - |
-| 7. Dashboard redesign | 0/? | Not started | - |
+| 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
+| 6. Staged entry execution | 0/5 | Not started | - |
+| 7. Dashboard redesign | 0/8 | Not started | - |
