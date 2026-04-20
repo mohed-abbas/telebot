@@ -1,0 +1,124 @@
+{# Summary cards #}
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    <div class="rounded-lg border bg-card p-4">
+        <p class="text-xs text-muted-foreground uppercase tracking-wide">Total Trades</p>
+        <p class="text-2xl font-semibold mt-1">{{ summary.total_trades }}</p>
+        <p class="text-sm text-muted-foreground mt-1">
+            <span class="text-green-400">{{ summary.wins }} W</span>
+            <span class="mx-1">/</span>
+            <span class="text-red-400">{{ summary.losses }} L</span>
+        </p>
+    </div>
+
+    <div class="rounded-lg border bg-card p-4">
+        <p class="text-xs text-muted-foreground uppercase tracking-wide">Win Rate</p>
+        {% if summary.win_rate is not none %}
+        <p class="text-2xl font-semibold mt-1 {% if summary.win_rate >= 50 %}text-green-400{% else %}text-red-400{% endif %}">
+            {{ "%.1f"|format(summary.win_rate) }}%
+        </p>
+        {% else %}
+        <p class="text-2xl font-semibold mt-1 text-muted-foreground">N/A</p>
+        {% endif %}
+    </div>
+
+    <div class="rounded-lg border bg-card p-4">
+        <p class="text-xs text-muted-foreground uppercase tracking-wide">Profit Factor</p>
+        {% if summary.profit_factor is not none %}
+        <p class="text-2xl font-semibold mt-1 {% if summary.profit_factor > 1.0 %}text-green-400{% else %}text-red-400{% endif %}">
+            {{ "%.2f"|format(summary.profit_factor) }}
+        </p>
+        {% else %}
+        <p class="text-2xl font-semibold mt-1 text-muted-foreground">N/A</p>
+        {% endif %}
+    </div>
+
+    <div class="rounded-lg border bg-card p-4">
+        <p class="text-xs text-muted-foreground uppercase tracking-wide">Net P&L</p>
+        <p class="text-2xl font-semibold mt-1 {% if summary.net_pnl > 0 %}text-green-400{% elif summary.net_pnl < 0 %}text-red-400{% endif %}">
+            {{ "%+.2f"|format(summary.net_pnl) }}
+        </p>
+    </div>
+</div>
+
+{# P&L breakdown #}
+<div class="rounded-lg border bg-card p-4 mb-8">
+    <h3 class="text-lg font-semibold mb-4">Profit & Loss</h3>
+    <div class="grid grid-cols-3 gap-4">
+        <div>
+            <p class="text-xs text-muted-foreground uppercase">Gross Profit</p>
+            <p class="text-xl font-semibold text-green-400">{{ "%.2f"|format(summary.gross_profit) }}</p>
+        </div>
+        <div>
+            <p class="text-xs text-muted-foreground uppercase">Gross Loss</p>
+            <p class="text-xl font-semibold text-red-400">{{ "%.2f"|format(summary.gross_loss) }}</p>
+        </div>
+        <div>
+            <p class="text-xs text-muted-foreground uppercase">Best / Worst Trade</p>
+            <p class="text-sm">
+                <span class="text-green-400">{{ "%+.2f"|format(extremes.best_trade) if extremes.best_trade else 'N/A' }}</span>
+                /
+                <span class="text-red-400">{{ "%+.2f"|format(extremes.worst_trade) if extremes.worst_trade else 'N/A' }}</span>
+            </p>
+        </div>
+    </div>
+</div>
+
+{# Avg stages (when source filtered) #}
+{% if avg_stages %}
+<div class="rounded-lg border bg-card p-4 mb-8">
+    <p class="text-xs text-muted-foreground uppercase">Avg Stages Filled ({{ current_source }})</p>
+    <p class="text-2xl font-semibold">{{ "%.1f"|format(avg_stages) }}</p>
+</div>
+{% endif %}
+
+{# By source table (D-08: clickable rows) #}
+<div class="rounded-lg border bg-card p-4">
+    <h3 class="text-lg font-semibold mb-4">Performance by Source</h3>
+    {% if by_source %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b bg-muted/50">
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Source</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Trades</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">W/L</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Win Rate</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">PF</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Net P&L</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Best/Worst</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in by_source %}
+                <tr class="border-b hover:bg-muted/30 cursor-pointer {% if current_source == row.source_name %}bg-primary/10{% endif %}"
+                    hx-get="/analytics?range={{ current_range }}&source={{ row.source_name }}"
+                    hx-target="#analytics-content"
+                    hx-push-url="true">
+                    <td class="px-4 py-3 font-medium">{{ row.source_name }}</td>
+                    <td class="px-4 py-3">{{ row.total_trades }}</td>
+                    <td class="px-4 py-3">
+                        <span class="text-green-400">{{ row.wins }}</span>/<span class="text-red-400">{{ row.losses }}</span>
+                    </td>
+                    <td class="px-4 py-3 {% if row.win_rate and row.win_rate >= 50 %}text-green-400{% elif row.win_rate %}text-red-400{% endif %}">
+                        {{ "%.1f"|format(row.win_rate) if row.win_rate else '0.0' }}%
+                    </td>
+                    <td class="px-4 py-3 {% if row.profit_factor and row.profit_factor > 1 %}text-green-400{% elif row.profit_factor %}text-red-400{% endif %}">
+                        {{ "%.2f"|format(row.profit_factor) if row.profit_factor else 'N/A' }}
+                    </td>
+                    <td class="px-4 py-3 font-mono {% if row.net_pnl > 0 %}text-green-400{% elif row.net_pnl < 0 %}text-red-400{% endif %}">
+                        {{ "%+.2f"|format(row.net_pnl) }}
+                    </td>
+                    <td class="px-4 py-3 text-xs">
+                        <span class="text-green-400">{{ "%+.2f"|format(row.best_trade) if row.best_trade else '-' }}</span>
+                        /
+                        <span class="text-red-400">{{ "%+.2f"|format(row.worst_trade) if row.worst_trade else '-' }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p class="text-muted-foreground text-sm">No closed trades in this time range.</p>
+    {% endif %}
+</div>

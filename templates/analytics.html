@@ -1,109 +1,45 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-6">
-    <h2 class="text-2xl font-bold">Analytics</h2>
-    <p class="text-slate-500 text-sm mt-1">Signal accuracy and trading performance</p>
+    <h2 class="text-2xl font-semibold">Analytics</h2>
+    <p class="text-muted-foreground text-sm mt-1">Signal accuracy and trading performance</p>
 </div>
 
-<!-- Summary cards -->
-<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-    <!-- Total Trades -->
-    <div class="card p-5">
-        <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Total Trades</p>
-        <p class="text-3xl font-bold">{{ summary.total_trades }}</p>
-        <p class="text-sm text-slate-400 mt-1">
-            <span class="profit">{{ summary.wins }} W</span>
-            <span class="mx-1">/</span>
-            <span class="loss">{{ summary.losses }} L</span>
-        </p>
-    </div>
-
-    <!-- Win Rate -->
-    <div class="card p-5">
-        <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Win Rate</p>
-        {% if summary.win_rate is not none %}
-        <p class="text-3xl font-bold {% if summary.win_rate >= 50 %}profit{% else %}loss{% endif %}">
-            {{ "%.1f"|format(summary.win_rate) }}%
-        </p>
-        {% else %}
-        <p class="text-3xl font-bold text-slate-500">N/A</p>
-        {% endif %}
-    </div>
-
-    <!-- Profit Factor -->
-    <div class="card p-5">
-        <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Profit Factor</p>
-        {% if summary.profit_factor is not none %}
-        <p class="text-3xl font-bold {% if summary.profit_factor > 1.0 %}profit{% else %}loss{% endif %}">
-            {{ "%.2f"|format(summary.profit_factor) }}
-        </p>
-        {% else %}
-        <p class="text-3xl font-bold text-slate-500">N/A</p>
-        {% endif %}
-    </div>
-</div>
-
-<!-- P&L summary -->
-<div class="card p-5 mb-8">
-    <h3 class="text-lg font-semibold mb-4">Profit & Loss</h3>
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div>
-            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Net P&L</p>
-            <p class="text-2xl font-bold {% if summary.net_pnl > 0 %}profit{% elif summary.net_pnl < 0 %}loss{% endif %}">
-                {{ "%.2f"|format(summary.net_pnl) }}
-            </p>
-        </div>
-        <div>
-            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Gross Profit</p>
-            <p class="text-2xl font-bold profit">{{ "%.2f"|format(summary.gross_profit) }}</p>
-        </div>
-        <div>
-            <p class="text-xs text-slate-500 uppercase tracking-wide mb-1">Gross Loss</p>
-            <p class="text-2xl font-bold loss">{{ "%.2f"|format(summary.gross_loss) }}</p>
+{# Time range tabs (D-07: horizontal pill tabs) #}
+<div class="mb-6">
+    <div class="tabs" id="time-tabs">
+        <div role="tablist" class="inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground">
+            {% for r in ['7d', '30d', '90d', 'all'] %}
+            <button role="tab"
+                    aria-selected="{{ 'true' if current_range == r else 'false' }}"
+                    class="inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium transition-all focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50 {% if current_range == r %}bg-background text-foreground shadow{% endif %}"
+                    hx-get="/analytics?range={{ r }}{% if current_source %}&source={{ current_source }}{% endif %}"
+                    hx-target="#analytics-content"
+                    hx-push-url="true">
+                {{ r.upper() if r != 'all' else 'All' }}
+            </button>
+            {% endfor %}
         </div>
     </div>
-</div>
 
-<!-- Per-symbol breakdown table -->
-<div class="card p-5">
-    <h3 class="text-lg font-semibold mb-4">Performance by Symbol</h3>
-    {% if by_symbol %}
-    <div class="overflow-x-auto">
-        <table>
-            <thead>
-                <tr>
-                    <th>Symbol</th>
-                    <th>Trades</th>
-                    <th>Wins</th>
-                    <th>Losses</th>
-                    <th>Win Rate (%)</th>
-                    <th>Profit Factor</th>
-                    <th>Net P&L</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in by_symbol %}
-                <tr>
-                    <td class="font-medium">{{ row.symbol }}</td>
-                    <td>{{ row.total_trades }}</td>
-                    <td class="profit">{{ row.wins }}</td>
-                    <td class="loss">{{ row.losses }}</td>
-                    <td class="{% if row.win_rate is not none and row.win_rate >= 50 %}profit{% elif row.win_rate is not none %}loss{% endif %}">
-                        {{ "%.1f"|format(row.win_rate) if row.win_rate is not none else "0.0" }}%
-                    </td>
-                    <td>
-                        {{ "%.2f"|format(row.profit_factor) if row.profit_factor is not none else "N/A" }}
-                    </td>
-                    <td class="{% if row.net_pnl > 0 %}profit{% elif row.net_pnl < 0 %}loss{% endif %}">
-                        {{ "%.2f"|format(row.net_pnl) }}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    {# Source filter (D-08: clickable rows filter, or dropdown for mobile) #}
+    {% if current_source %}
+    <div class="mt-3 flex items-center gap-2">
+        <span class="text-sm text-muted-foreground">Filtered by source:</span>
+        <span class="badge bg-primary/20 text-primary">{{ current_source }}</span>
+        <a href="/analytics?range={{ current_range }}"
+           hx-get="/analytics?range={{ current_range }}"
+           hx-target="#analytics-content"
+           hx-push-url="true"
+           class="text-sm text-muted-foreground hover:text-foreground">
+            Clear filter
+        </a>
     </div>
-    {% else %}
-    <p class="text-slate-500 text-sm">No closed trades yet.</p>
     {% endif %}
+</div>
+
+{# Analytics content (swapped by HTMX) #}
+<div id="analytics-content">
+    {% include "partials/analytics_table.html" %}
 </div>
 {% endblock %}
