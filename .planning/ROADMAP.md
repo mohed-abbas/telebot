@@ -78,7 +78,7 @@ Plans:
   5. Trade history view supports simultaneous filters by account, source, symbol, and date range
 **Plans**: 8 plans
 Plans:
-- [ ] 07-01-PLAN.md — Source tracking + mobile nav: source_name column on signals, log_signal() update, bot.py pass group_name, Basecoat sidebar drawer, sticky mobile header, page_title context (DASH-02)
+- [x] 07-01-PLAN.md — Source tracking + mobile nav: source_name column on signals, log_signal() update, bot.py pass group_name, Basecoat sidebar drawer, sticky mobile header, page_title context (DASH-02)
 - [ ] 07-02-PLAN.md — Overview + positions restyle: Basecoat cards, btn-destructive kill switch, responsive table-to-card on mobile (DASH-01)
 - [ ] 07-03-PLAN.md — Positions drilldown: get_position_drilldown() query, accordion rows, fill history panel, signal attribution, live P/L (DASH-03)
 - [ ] 07-04-PLAN.md — Trade history filters: get_filtered_trades() query, inline filter bar, URL param persistence, responsive layout (DASH-05)
@@ -96,5 +96,5 @@ v1.1 phases execute in numeric order: 5 -> 6 -> 7
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
-| 6. Staged entry execution | 0/5 | Not started | - |
-| 7. Dashboard redesign | 0/8 | Not started | - |
+| 6. Staged entry execution | 5/5 | Under review | - |
+| 7. Dashboard redesign | 1/8 | In progress | - |
