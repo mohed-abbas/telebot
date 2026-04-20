@@ -324,13 +324,55 @@ async def positions_page(request: Request, user: str = Depends(_verify_auth)):
 
 
 @app.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request, user: str = Depends(_verify_auth)):
-    trades = await db.get_recent_trades(100)
+async def history_page(
+    request: Request,
+    account: str = "",
+    source: str = "",
+    symbol: str = "",
+    from_date: str = "",
+    to_date: str = "",
+    user: str = Depends(_verify_auth),
+):
+    """Trade history page with optional filters (DASH-05)."""
+    # Get filter options for dropdowns
+    filter_options = await db.get_trade_filter_options()
+
+    # Get filtered trades
+    trades = await db.get_filtered_trades(
+        account=account,
+        source=source,
+        symbol=symbol,
+        from_date=from_date,
+        to_date=to_date,
+    )
+
+    # Current filter state for template
+    filters = {
+        "account": account,
+        "source": source,
+        "symbol": symbol,
+        "from_date": from_date,
+        "to_date": to_date,
+    }
+
+    # Check if this is an HTMX request (partial swap)
+    if request.headers.get("hx-request"):
+        return templates.TemplateResponse("partials/history_table.html", {
+            "request": request,
+            "trades": trades,
+            "filters": filters,
+        })
+
+    # Full page render
     return templates.TemplateResponse("history.html", {
         "request": request,
-        "trades": trades,
         "page": "history",
         "page_title": "Trade History",
+        "trades": trades,
+        "filters": filters,
+        "filter_options": filter_options,
+        "trading_enabled": _executor and _executor.is_accepting_signals() if _executor else False,
+        "dry_run": _settings.trading_dry_run if _settings else False,
     })
 
 
