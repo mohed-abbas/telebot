@@ -50,7 +50,7 @@
 - [x] **DASH-02**: Layout is mobile-responsive (usable on a phone for on-the-go monitoring) with a slide-over nav for small screens
 - [x] **DASH-03**: Positions view supports an inline drilldown per position showing fill history (initial fill + each staged fill), current P/L, and per-stage SL/TP
 - [ ] **DASH-04**: Analytics view supports per-source deep-dive (win rate, profit factor, avg stages filled) and a time-range filter (7d, 30d, all)
-- [ ] **DASH-05**: Trade history view supports filters by account, source, symbol, and date range
+- [x] **DASH-05**: Trade history view supports filters by account, source, symbol, and date range
 
 ### Authentication
 
@@ -113,7 +113,7 @@
 | DASH-02 | Phase 7 | Complete (07-01) |
 | DASH-03 | Phase 7 | Complete (07-03) |
 | DASH-04 | Phase 7 | Pending |
-| DASH-05 | Phase 7 | Pending |
+| DASH-05 | Phase 7 | Complete (07-04) |
 | AUTH-01 | Phase 5 | Pending |
 | AUTH-02 | Phase 5 | Pending |
 | AUTH-03 | Phase 5 | Pending |
