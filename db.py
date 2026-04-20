@@ -94,6 +94,10 @@ async def _create_tables() -> None:
                 details TEXT
             )
         """)
+        # Phase 7: add source_name column for per-source analytics (DASH-04 prerequisite)
+        await conn.execute("""
+            ALTER TABLE signals ADD COLUMN IF NOT EXISTS source_name TEXT
+        """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS trades (
                 id SERIAL PRIMARY KEY,
@@ -259,13 +263,14 @@ async def log_signal(
     sl: float = 0.0,
     tp: float = 0.0,
     details: str = "",
+    source_name: str = "",
 ) -> int:
     """Log a parsed signal. Returns the signal ID."""
     return await _pool.fetchval(
         """INSERT INTO signals
            (timestamp, raw_text, signal_type, symbol, direction,
-            entry_zone_low, entry_zone_high, sl, tp, action_taken, details)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            entry_zone_low, entry_zone_high, sl, tp, action_taken, details, source_name)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            RETURNING id""",
         datetime.now(timezone.utc),
         raw_text,
@@ -278,6 +283,7 @@ async def log_signal(
         tp,
         action_taken,
         details,
+        source_name,
     )
 
 

@@ -384,7 +384,7 @@ async def main() -> None:
                                 )
                     else:
                         try:
-                            results = await executor.execute_signal(signal)
+                            results = await executor.execute_signal(signal, source_name=group_name)
                             if notifier:
                                 await notifier.notify_execution(signal, results)
                         except Exception as exc:

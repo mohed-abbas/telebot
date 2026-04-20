@@ -84,7 +84,7 @@ class Executor:
                 except asyncio.CancelledError:
                     pass
 
-    async def execute_signal(self, signal: SignalAction) -> list[dict]:
+    async def execute_signal(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """Execute a signal across all accounts with staggered delays.
 
         Shuffles account order and adds random delays between each account
@@ -122,13 +122,13 @@ class Executor:
                 all_results.append({"account": acct_name, "status": "skipped", "reason": "reconnecting"})
                 continue
 
-            results = await self._execute_single_account(signal, acct_name)
+            results = await self._execute_single_account(signal, acct_name, source_name=source_name)
             all_results.extend(results)
 
         return all_results
 
     async def _execute_single_account(
-        self, signal: SignalAction, target_account: str,
+        self, signal: SignalAction, target_account: str, source_name: str = "",
     ) -> list[dict]:
         """Execute signal on a single target account.
 
@@ -143,7 +143,7 @@ class Executor:
         )
         temp_tm.settings_store = getattr(self.tm, "settings_store", None)
         temp_tm.correlator = getattr(self.tm, "correlator", None)
-        return await temp_tm.handle_signal(signal)
+        return await temp_tm.handle_signal(signal, source_name=source_name)
 
     # ── Heartbeat & Reconnect ────────────────────────────────────────
 

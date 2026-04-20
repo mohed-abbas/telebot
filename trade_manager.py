@@ -226,10 +226,10 @@ class TradeManager:
         # Falls back to AccountConfig values when None (v1.0 unit tests, dry-run demos).
         self.settings_store = None  # type: ignore[assignment]
 
-    async def handle_signal(self, signal: SignalAction) -> list[dict]:
+    async def handle_signal(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """Process a parsed signal. Returns list of execution results for notification."""
         if signal.type == SignalType.OPEN_TEXT_ONLY:
-            return await self._handle_text_only_open(signal)
+            return await self._handle_text_only_open(signal, source_name=source_name)
         if signal.type == SignalType.OPEN:
             # Phase 6 D-05 — try to correlate to a recent orphan first.
             paired_signal_id = None
@@ -239,22 +239,22 @@ class TradeManager:
                     symbol=signal.symbol, direction=signal.direction.value,
                 )
             if paired_signal_id is not None:
-                return await self._handle_correlated_followup(signal, paired_signal_id)
+                return await self._handle_correlated_followup(signal, paired_signal_id, source_name=source_name)
             # v1.0 fallback — standalone OPEN, unchanged.
-            return await self._handle_open(signal)
+            return await self._handle_open(signal, source_name=source_name)
         elif signal.type == SignalType.CLOSE:
-            return await self._handle_close(signal)
+            return await self._handle_close(signal, source_name=source_name)
         elif signal.type == SignalType.CLOSE_PARTIAL:
-            return await self._handle_close_partial(signal)
+            return await self._handle_close_partial(signal, source_name=source_name)
         elif signal.type == SignalType.MODIFY_SL:
-            return await self._handle_modify_sl(signal)
+            return await self._handle_modify_sl(signal, source_name=source_name)
         elif signal.type == SignalType.MODIFY_TP:
-            return await self._handle_modify_tp(signal)
+            return await self._handle_modify_tp(signal, source_name=source_name)
         return []
 
     # ── Phase 6: TEXT-ONLY OPEN (STAGE-02) ───────────────────────────
 
-    async def _handle_text_only_open(self, signal: SignalAction) -> list[dict]:
+    async def _handle_text_only_open(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """OPEN_TEXT_ONLY: fire stage 1 at market with default SL; register orphan.
 
         Per account:
@@ -272,6 +272,7 @@ class TradeManager:
             action_taken="staged",
             symbol=signal.symbol,
             direction=signal.direction.value if signal.direction else "",
+            source_name=source_name,
         )
 
         correlator = getattr(self, "correlator", None)
@@ -359,7 +360,7 @@ class TradeManager:
     # ── Phase 6: CORRELATED FOLLOW-UP (STAGE-04) ──────────────────────
 
     async def _handle_correlated_followup(
-        self, signal: SignalAction, paired_signal_id: int,
+        self, signal: SignalAction, paired_signal_id: int, source_name: str = "",
     ) -> list[dict]:
         """Follow-up OPEN paired with a text-only orphan.
 
@@ -465,7 +466,7 @@ class TradeManager:
 
     # ── OPEN ────────────────────────────────────────────────────────────
 
-    async def _handle_open(self, signal: SignalAction) -> list[dict]:
+    async def _handle_open(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """Handle a new trade signal with zone-based execution."""
         results = []
 
@@ -480,6 +481,7 @@ class TradeManager:
             entry_zone_high=signal.entry_zone[1] if signal.entry_zone else 0,
             sl=signal.sl or 0,
             tp=signal.target_tp or 0,
+            source_name=source_name,
         )
 
         for acct_name, connector in self.connectors.items():
@@ -815,11 +817,12 @@ class TradeManager:
 
     # ── CLOSE ───────────────────────────────────────────────────────────
 
-    async def _handle_close(self, signal: SignalAction) -> list[dict]:
+    async def _handle_close(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         results = []
         await db.log_signal(
             raw_text=signal.raw_text, signal_type="close",
             action_taken="processing", symbol=signal.symbol,
+            source_name=source_name,
         )
 
         for acct_name, connector in self.connectors.items():
@@ -846,7 +849,7 @@ class TradeManager:
 
     # ── CLOSE PARTIAL ───────────────────────────────────────────────────
 
-    async def _handle_close_partial(self, signal: SignalAction) -> list[dict]:
+    async def _handle_close_partial(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         results = []
         close_fraction = (signal.close_percent or 50.0) / 100.0
 
@@ -854,6 +857,7 @@ class TradeManager:
             raw_text=signal.raw_text, signal_type="close_partial",
             action_taken="processing", symbol=signal.symbol,
             details=f"close {signal.close_percent}%",
+            source_name=source_name,
         )
 
         for acct_name, connector in self.connectors.items():
@@ -884,12 +888,13 @@ class TradeManager:
 
     # ── MODIFY SL ───────────────────────────────────────────────────────
 
-    async def _handle_modify_sl(self, signal: SignalAction) -> list[dict]:
+    async def _handle_modify_sl(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         results = []
         await db.log_signal(
             raw_text=signal.raw_text, signal_type="modify_sl",
             action_taken="processing", symbol=signal.symbol,
             details=f"new_sl={signal.new_sl}",
+            source_name=source_name,
         )
 
         for acct_name, connector in self.connectors.items():
@@ -929,12 +934,13 @@ class TradeManager:
 
     # ── MODIFY TP ───────────────────────────────────────────────────────
 
-    async def _handle_modify_tp(self, signal: SignalAction) -> list[dict]:
+    async def _handle_modify_tp(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         results = []
         await db.log_signal(
             raw_text=signal.raw_text, signal_type="modify_tp",
             action_taken="processing", symbol=signal.symbol,
             details=f"new_tp={signal.new_tp}",
+            source_name=source_name,
         )
 
         for acct_name, connector in self.connectors.items():
