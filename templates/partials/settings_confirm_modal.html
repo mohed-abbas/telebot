@@ -48,6 +48,7 @@
             {% for field, val in pending_values.items() %}
                 <input type="hidden" name="{{ field }}" value="{{ val }}" />
             {% endfor %}
+            {% if is_revert %}<input type="hidden" name="_is_revert" value="1" />{% endif %}
             <button type="button" class="btn"
                     onclick="document.getElementById('modal-root').innerHTML='';">
                 Discard changes

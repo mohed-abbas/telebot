@@ -1,0 +1,32 @@
+{# Toast notification component (SEED-001, D-13)
+
+   This template documents the toast structure. Actual toasts are rendered
+   via _render_toast_oob() in dashboard.py as OOB swaps into #toaster.
+
+   Usage: Toasts are automatically appended to #toaster (in base.html) when
+   settings are saved, validation fails, or changes are reverted.
+#}
+
+{% macro toast(category, title, message=None, duration=4000) %}
+<div class="toast" data-category="{{ category }}" data-duration="{{ duration }}"
+     role="alert" aria-live="polite">
+    <div class="toast-content">
+        {% if category == 'success' %}
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-400"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        {% elif category == 'error' %}
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-400"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg>
+        {% else %}
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-400"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>
+        {% endif %}
+        <section>
+            <h2 class="font-medium">{{ title }}</h2>
+            {% if message %}
+            <p class="text-sm text-muted-foreground">{{ message }}</p>
+            {% endif %}
+        </section>
+    </div>
+    <button type="button" class="toast-close" aria-label="Dismiss">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+    </button>
+</div>
+{% endmacro %}

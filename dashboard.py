@@ -565,6 +565,37 @@ _SETTINGS_HARD_CAPS_INT: dict[str, tuple[int, int]] = {
 }
 
 
+def _render_toast_oob(category: str, title: str, message: str = "") -> str:
+    """Render OOB toast HTML fragment for HTMX response (SEED-001, D-13).
+
+    Appended to HTML responses, this triggers a toast notification via
+    hx-swap-oob="beforeend:#toaster".
+    """
+    icons = {
+        "success": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-400"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+        "error": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-400"><circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/><line x1="9" x2="15" y1="9" y2="15"/></svg>',
+        "info": '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-400"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="16" y2="12"/><line x1="12" x2="12.01" y1="8" y2="8"/></svg>',
+    }
+    icon = icons.get(category, icons["info"])
+    msg_html = f'<p class="text-sm text-muted-foreground">{message}</p>' if message else ""
+    return f'''
+<div hx-swap-oob="beforeend:#toaster">
+    <div class="toast" data-category="{category}" data-duration="4000" role="alert" aria-live="polite">
+        <div class="toast-content">
+            {icon}
+            <section>
+                <h2 class="font-medium">{title}</h2>
+                {msg_html}
+            </section>
+        </div>
+        <button type="button" class="toast-close" aria-label="Dismiss" onclick="this.parentElement.remove()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+        </button>
+    </div>
+</div>
+'''
+
+
 def validate_settings_form(
     form: dict, max_lot_size: float,
 ) -> tuple[dict, list[_SettingsValidationError]]:
@@ -696,9 +727,15 @@ async def settings_validate(
     parsed, errors = validate_settings_form(form, max_lot_size=max_lot_size)
 
     if errors:
-        # Re-render the form partial with per-field red-400 messages
+        # Re-render the form partial with per-field red-400 messages + error toast (SEED-001)
         audit = await db.get_settings_audit(account_name, limit=50)
-        return templates.TemplateResponse(
+        error_summary = errors[0]  # Show first error in toast
+        toast_html = _render_toast_oob(
+            "error",
+            f"{error_summary.field}: validation failed",
+            error_summary.message,
+        )
+        response = templates.TemplateResponse(
             "partials/account_settings_tab.html",
             {
                 "request": request,
@@ -709,6 +746,8 @@ async def settings_validate(
             },
             status_code=422,
         )
+        response.body = response.body + toast_html.encode()
+        return response
 
     # Compute diff vs current effective settings
     diff: list[dict] = []
@@ -752,19 +791,37 @@ async def settings_confirm(
 
     max_lot_size = float(getattr(current, "max_lot_size", 1.0) or 1.0)
     form = dict(await request.form())
+    is_revert = form.pop("_is_revert", None) == "1"
     parsed, errors = validate_settings_form(form, max_lot_size=max_lot_size)
     if errors:
         raise HTTPException(status_code=422, detail="Re-validation failed")
 
+    # Track changed fields for toast message
+    changed_fields = []
     # Apply each changed field; SettingsStore.update writes settings + audit atomically.
     for field, new_val in parsed.items():
         current = store.effective(account_name)
         if str(getattr(current, field)) != str(new_val):
+            changed_fields.append((field, new_val))
             await store.update(account_name, field, new_val, actor=user)
 
     fresh = store.effective(account_name)
     audit = await db.get_settings_audit(account_name, limit=50)
-    return templates.TemplateResponse(
+    # SEED-001: Success toast on settings save/revert
+    if is_revert and changed_fields:
+        field_name, new_val = changed_fields[0]
+        toast_html = _render_toast_oob(
+            "info",
+            f"Reverted {field_name}",
+            f"Restored to {new_val}",
+        )
+    else:
+        toast_html = _render_toast_oob(
+            "success",
+            "Settings saved",
+            f"Changes to {account_name} applied successfully.",
+        )
+    response = templates.TemplateResponse(
         "partials/account_settings_tab.html",
         {
             "request": request,
@@ -774,6 +831,8 @@ async def settings_confirm(
             "audit": audit,
         },
     )
+    response.body = response.body + toast_html.encode()
+    return response
 
 
 @app.post("/settings/{account_name}/revert", response_class=HTMLResponse)
