@@ -17,7 +17,8 @@
             </thead>
             <tbody>
                 {% for p in positions %}
-                <tr class="border-b hover:bg-muted/30">
+                <tr class="border-b hover:bg-muted/30 cursor-pointer"
+                    onclick="this.nextElementSibling.querySelector('details').toggleAttribute('open')">
                     <td class="px-4 py-3 font-semibold">{{ p.account }}</td>
                     <td class="px-4 py-3 font-mono">{{ p.symbol }}</td>
                     <td class="px-4 py-3">
@@ -35,7 +36,7 @@
                         {{ "%+.2f"|format(p.profit) }}
                     </td>
                     <td class="px-4 py-3">
-                        <div class="flex items-center gap-2 flex-wrap">
+                        <div class="flex items-center gap-2 flex-wrap" onclick="event.stopPropagation()">
                             <!-- Close button -->
                             <button class="btn btn-destructive btn-sm"
                                     hx-post="/api/close/{{ p.account }}/{{ p.ticket }}"
@@ -72,6 +73,22 @@
                         <div id="result-{{ p.ticket }}" class="text-xs mt-1"></div>
                     </td>
                 </tr>
+                {# Drilldown row (D-06: multiple can be open) #}
+                <tr class="drilldown-row">
+                    <td colspan="9" class="p-0">
+                        <details hx-get="/partials/position_drilldown/{{ p.account }}/{{ p.ticket }}"
+                                 hx-trigger="toggle once"
+                                 hx-target="find .drilldown-content"
+                                 hx-swap="innerHTML">
+                            <summary class="hidden"></summary>
+                            <div class="drilldown-content px-4 pb-4">
+                                <div class="flex items-center justify-center py-4">
+                                    <span class="text-muted-foreground text-sm">Loading...</span>
+                                </div>
+                            </div>
+                        </details>
+                    </td>
+                </tr>
                 {% endfor %}
                 {% if not positions %}
                 <tr>
@@ -89,34 +106,46 @@
 <!-- Mobile card list (visible below md) -->
 <div class="md:hidden space-y-3">
     {% for p in positions %}
-    <div class="rounded-lg border bg-card p-4">
-        <div class="flex justify-between items-start mb-3">
-            <div>
-                <span class="font-semibold">{{ p.symbol }}</span>
-                <span class="ml-2">
-                    {% if p.direction == 'buy' %}
-                        <span class="badge bg-green-500/20 text-green-400">BUY</span>
-                    {% else %}
-                        <span class="badge bg-red-500/20 text-red-400">SELL</span>
-                    {% endif %}
+    <div class="rounded-lg border bg-card">
+        {# Card header - clickable #}
+        <div class="p-4 cursor-pointer" onclick="this.parentElement.querySelector('details').toggleAttribute('open')">
+            <div class="flex justify-between items-start mb-3">
+                <div>
+                    <span class="font-semibold">{{ p.symbol }}</span>
+                    <span class="ml-2">
+                        {% if p.direction == 'buy' %}
+                            <span class="badge bg-green-500/20 text-green-400">BUY</span>
+                        {% else %}
+                            <span class="badge bg-red-500/20 text-red-400">SELL</span>
+                        {% endif %}
+                    </span>
+                </div>
+                <span class="font-mono text-lg {% if p.profit >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
+                    {{ "%+.2f"|format(p.profit) }}
                 </span>
             </div>
-            <span class="font-mono text-lg {% if p.profit >= 0 %}text-green-400{% else %}text-red-400{% endif %}">
-                {{ "%+.2f"|format(p.profit) }}
-            </span>
+            <div class="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
+                <div>Account: <span class="text-foreground">{{ p.account }}</span></div>
+                <div>Volume: <span class="font-mono text-foreground">{{ "%.2f"|format(p.volume) }}</span></div>
+                <div>Entry: <span class="font-mono text-foreground">{{ "%.2f"|format(p.open_price) }}</span></div>
+                <div>SL: <span class="font-mono text-foreground">{{ "%.2f"|format(p.sl) if p.sl else '-' }}</span></div>
+            </div>
         </div>
-        <div class="grid grid-cols-2 gap-2 text-sm text-muted-foreground">
-            <div>Account: <span class="text-foreground">{{ p.account }}</span></div>
-            <div>Volume: <span class="font-mono text-foreground">{{ "%.2f"|format(p.volume) }}</span></div>
-            <div>Entry: <span class="font-mono text-foreground">{{ "%.2f"|format(p.open_price) }}</span></div>
-            <div>SL: <span class="font-mono text-foreground">{{ "%.2f"|format(p.sl) if p.sl else '-' }}</span></div>
-        </div>
-        <div class="mt-3 flex flex-wrap gap-2">
-            <button class="btn btn-destructive btn-sm"
-                    hx-post="/api/close/{{ p.account }}/{{ p.ticket }}"
-                    hx-confirm="Close #{{ p.ticket }}?"
-                    hx-target="#result-mobile-{{ p.ticket }}"
-                    hx-swap="innerHTML">Close</button>
+        {# Drilldown panel #}
+        <details hx-get="/partials/position_drilldown/{{ p.account }}/{{ p.ticket }}"
+                 hx-trigger="toggle once"
+                 hx-target="find .drilldown-content"
+                 hx-swap="innerHTML">
+            <summary class="hidden"></summary>
+            <div class="drilldown-content border-t">
+                <div class="flex items-center justify-center py-4">
+                    <span class="text-muted-foreground text-sm">Loading...</span>
+                </div>
+            </div>
+        </details>
+        {# Actions #}
+        <div class="border-t p-3 flex flex-wrap gap-2">
+            <button class="btn btn-destructive btn-sm" hx-post="/api/close/{{ p.account }}/{{ p.ticket }}" hx-confirm="Close #{{ p.ticket }}?">Close</button>
             <form hx-post="/api/close-partial/{{ p.account }}/{{ p.ticket }}"
                   hx-target="#result-mobile-{{ p.ticket }}" hx-swap="innerHTML"
                   class="flex items-center gap-1">
@@ -124,7 +153,7 @@
                 <button type="submit" class="btn btn-secondary btn-sm">%</button>
             </form>
         </div>
-        <div id="result-mobile-{{ p.ticket }}" class="text-xs mt-1"></div>
+        <div id="result-mobile-{{ p.ticket }}" class="text-xs px-3 pb-2"></div>
     </div>
     {% endfor %}
     {% if not positions %}
