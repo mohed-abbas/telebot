@@ -4,7 +4,7 @@ milestone: v1.1
 milestone_name: — Improved trade executions and UI
 status: under_review
 last_updated: "2026-04-20T14:00:00Z"
-last_activity: 2026-04-20 -- Phase 07 context gathered; ready for planning
+last_activity: 2026-04-20 -- Phase 07 UI-SPEC approved; ready for planning
 progress:
   total_phases: 3
   completed_phases: 1
