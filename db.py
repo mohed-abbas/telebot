@@ -461,6 +461,101 @@ async def get_recent_trades(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_trade_filter_options() -> dict:
+    """Get distinct values for trade history filter dropdowns (DASH-05)."""
+    accounts = await _pool.fetch(
+        "SELECT DISTINCT account_name FROM trades ORDER BY account_name"
+    )
+    symbols = await _pool.fetch(
+        "SELECT DISTINCT symbol FROM trades WHERE symbol IS NOT NULL AND symbol != '' ORDER BY symbol"
+    )
+    # Get source names via join to signals
+    sources = await _pool.fetch(
+        """SELECT DISTINCT s.source_name
+           FROM trades t
+           JOIN signals s ON t.signal_id = s.id
+           WHERE s.source_name IS NOT NULL AND s.source_name != ''
+           ORDER BY s.source_name"""
+    )
+    return {
+        "accounts": [r["account_name"] for r in accounts],
+        "symbols": [r["symbol"] for r in symbols],
+        "sources": [r["source_name"] for r in sources],
+    }
+
+
+async def get_filtered_trades(
+    account: str = "",
+    source: str = "",
+    symbol: str = "",
+    from_date: str = "",
+    to_date: str = "",
+    limit: int = 100,
+) -> list[dict]:
+    """Get trades with optional filters (DASH-05, D-11 AND logic).
+
+    Args:
+        account: Filter by account_name (exact match)
+        source: Filter by signal source_name (exact match)
+        symbol: Filter by symbol (exact match)
+        from_date: Filter trades on or after this date (YYYY-MM-DD)
+        to_date: Filter trades on or before this date (YYYY-MM-DD)
+        limit: Max rows to return
+
+    Returns:
+        List of trade dicts with source_name joined from signals
+    """
+    # Build WHERE clauses dynamically (D-11: AND logic)
+    conditions = []
+    params = []
+    param_idx = 1
+
+    if account:
+        conditions.append(f"t.account_name = ${param_idx}")
+        params.append(account)
+        param_idx += 1
+
+    if symbol:
+        conditions.append(f"t.symbol = ${param_idx}")
+        params.append(symbol)
+        param_idx += 1
+
+    if source:
+        conditions.append(f"s.source_name = ${param_idx}")
+        params.append(source)
+        param_idx += 1
+
+    if from_date:
+        conditions.append(f"t.timestamp >= ${param_idx}::date")
+        params.append(from_date)
+        param_idx += 1
+
+    if to_date:
+        conditions.append(f"t.timestamp < (${param_idx}::date + INTERVAL '1 day')")
+        params.append(to_date)
+        param_idx += 1
+
+    where_clause = " AND ".join(conditions) if conditions else "TRUE"
+
+    # Add limit param
+    params.append(limit)
+    limit_param = f"${param_idx}"
+
+    query = f"""
+        SELECT t.id, t.signal_id, t.timestamp, t.account_name, t.symbol,
+               t.direction, t.entry_price, t.sl, t.tp, t.lot_size, t.ticket,
+               t.status, t.pnl, COALESCE(s.source_name, 'Unknown') AS source_name
+        FROM trades t
+        LEFT JOIN signals s ON t.signal_id = s.id
+        WHERE {where_clause}
+        ORDER BY t.timestamp DESC
+        LIMIT {limit_param}
+    """
+
+    rows = await _pool.fetch(query, *params)
+    return [dict(r) for r in rows]
+
+
 async def get_recent_signals(limit: int = 50) -> list[dict]:
     """Get recent signals for dashboard display."""
     rows = await _pool.fetch(
