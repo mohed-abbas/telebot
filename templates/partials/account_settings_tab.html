@@ -1,53 +1,101 @@
+{# Per-account settings form (SET-03, SEED-001: D-14, D-15) #}
 <form hx-post="/settings/{{ a.name }}"
       hx-target="#modal-root"
       hx-swap="innerHTML"
       hx-headers='{"hx-request": "true"}'
-      class="space-y-4">
-    <div>
-        <label class="label block text-sm font-semibold" for="risk_mode-{{ a.name }}">Risk mode</label>
-        <select name="risk_mode" id="risk_mode-{{ a.name }}" class="input">
-            <option value="percent" {% if s.risk_mode == "percent" %}selected{% endif %}>percent</option>
-            <option value="fixed_lot" {% if s.risk_mode == "fixed_lot" %}selected{% endif %}>fixed_lot</option>
+      id="settings-form-{{ a.name }}"
+      class="space-y-6">
+
+    {# Risk Calculation (risk_mode) - D-15 operator-legible label #}
+    <div class="field">
+        <label class="text-sm font-medium" for="risk_mode-{{ a.name }}">Risk calculation</label>
+        <select name="risk_mode" id="risk_mode-{{ a.name }}" class="field-input mt-1.5">
+            <option value="percent" {% if s.risk_mode == "percent" %}selected{% endif %}>Percent of balance</option>
+            <option value="fixed_lot" {% if s.risk_mode == "fixed_lot" %}selected{% endif %}>Fixed lot size</option>
         </select>
-        <p class="text-xs text-slate-500 mt-1">"percent" sizes each order as % of equity; "fixed_lot" uses a fixed lot size.</p>
-        {% if errors and errors.risk_mode %}<p class="text-xs text-red-400" role="alert">{{ errors.risk_mode }}</p>{% endif %}
+        <p class="text-xs text-muted-foreground mt-1.5">
+            How lot size is determined: "Percent of balance" calculates from equity; "Fixed lot" uses exact lot size.
+        </p>
+        {% if errors and errors.risk_mode %}<p class="text-xs text-red-400 mt-1" role="alert">{{ errors.risk_mode }}</p>{% endif %}
     </div>
 
-    <div>
-        <label class="label block text-sm font-semibold" for="risk_value-{{ a.name }}">Risk value</label>
+    {# Per-trade Risk (risk_value) - D-14 inline help with context-sensitive range #}
+    <div class="field">
+        <label class="text-sm font-medium" for="risk_value-{{ a.name }}">Per-trade risk</label>
         <input type="number" step="0.01" name="risk_value" id="risk_value-{{ a.name }}"
-               value="{{ s.risk_value }}" class="input"
+               value="{{ '%.2f'|format(s.risk_value) }}" class="field-input mt-1.5"
                min="0.01" max="5.0" />
-        <p class="text-xs text-slate-500 mt-1">Percent mode: 0 &lt; value &#8804; 5.0. Fixed-lot mode: 0 &lt; value &#8804; max_lot_size.</p>
-        {% if errors and errors.risk_value %}<p class="text-xs text-red-400" role="alert">{{ errors.risk_value }}</p>{% endif %}
+        <p class="text-xs text-muted-foreground mt-1.5">
+            {% if s.risk_mode == 'percent' %}
+            Percent of account balance risked per trade. <span class="font-medium">Typical range: 0.5% - 3%</span>
+            {% else %}
+            Exact lot size per trade (e.g., 0.04, 0.1, 0.5). <span class="font-medium">Max: {{ s.max_lot_size|default(1.0) }}</span>
+            {% endif %}
+        </p>
+        {% if errors and errors.risk_value %}<p class="text-xs text-red-400 mt-1" role="alert">{{ errors.risk_value }}</p>{% endif %}
     </div>
 
-    <div>
-        <label class="label block text-sm font-semibold" for="max_stages-{{ a.name }}">Max stages per signal</label>
+    {# Maximum Entries (max_stages) - D-14 inline help with risk warning #}
+    <div class="field">
+        <label class="text-sm font-medium" for="max_stages-{{ a.name }}">Maximum entries per signal</label>
         <input type="number" name="max_stages" id="max_stages-{{ a.name }}"
-               value="{{ s.max_stages }}" class="input" min="1" max="10" />
-        <p class="text-xs text-slate-500 mt-1">Total positions opened per correlated signal sequence. Range: 1&#8211;10.</p>
-        {% if errors and errors.max_stages %}<p class="text-xs text-red-400" role="alert">{{ errors.max_stages }}</p>{% endif %}
+               value="{{ s.max_stages }}" class="field-input mt-1.5" min="1" max="10" />
+        <p class="text-xs text-muted-foreground mt-1.5">
+            How many positions to open for a staged signal. Higher = more exposure.
+            <span class="font-medium">Range: 1-10.</span>
+        </p>
+        {% if s.risk_mode == 'percent' and s.risk_value and s.max_stages > 1 %}
+        <p class="text-xs text-amber-400 mt-1.5">
+            Warning: {{ s.max_stages }} stages at {{ '%.1f'|format(s.risk_value) }}% can put {{ '%.1f'|format(s.risk_value * s.max_stages) }}% at risk per signal.
+        </p>
+        {% endif %}
+        {% if errors and errors.max_stages %}<p class="text-xs text-red-400 mt-1" role="alert">{{ errors.max_stages }}</p>{% endif %}
     </div>
 
-    <div>
-        <label class="label block text-sm font-semibold" for="default_sl_pips-{{ a.name }}">Default SL (pips) for text-only signals</label>
+    {# Default Stop-Loss (default_sl_pips) #}
+    <div class="field">
+        <label class="text-sm font-medium" for="default_sl_pips-{{ a.name }}">Default stop-loss (pips)</label>
         <input type="number" name="default_sl_pips" id="default_sl_pips-{{ a.name }}"
-               value="{{ s.default_sl_pips }}" class="input" min="1" max="500" />
-        <p class="text-xs text-slate-500 mt-1">Required non-zero SL applied to every text-only "now" signal. Range: 1&#8211;500.</p>
-        {% if errors and errors.default_sl_pips %}<p class="text-xs text-red-400" role="alert">{{ errors.default_sl_pips }}</p>{% endif %}
+               value="{{ s.default_sl_pips }}" class="field-input mt-1.5" min="1" max="500" />
+        <p class="text-xs text-muted-foreground mt-1.5">
+            Stop-loss for text-only signals before zone info arrives.
+            <span class="font-medium">Range: 10-500 pips.</span>
+        </p>
+        {% if errors and errors.default_sl_pips %}<p class="text-xs text-red-400 mt-1" role="alert">{{ errors.default_sl_pips }}</p>{% endif %}
     </div>
 
-    <div>
-        <label class="label block text-sm font-semibold" for="max_daily_trades-{{ a.name }}">Max daily trades</label>
+    {# Daily Trade Limit (max_daily_trades) #}
+    <div class="field">
+        <label class="text-sm font-medium" for="max_daily_trades-{{ a.name }}">Daily trade limit</label>
         <input type="number" name="max_daily_trades" id="max_daily_trades-{{ a.name }}"
-               value="{{ s.max_daily_trades }}" class="input" min="1" max="100" />
-        <p class="text-xs text-slate-500 mt-1">One signal counts as one trade regardless of stage count. Range: 1&#8211;100.</p>
-        {% if errors and errors.max_daily_trades %}<p class="text-xs text-red-400" role="alert">{{ errors.max_daily_trades }}</p>{% endif %}
+               value="{{ s.max_daily_trades }}" class="field-input mt-1.5" min="1" max="100" />
+        <p class="text-xs text-muted-foreground mt-1.5">
+            Maximum new signals processed per day. Resets at midnight UTC.
+            <span class="font-medium">Range: 1-100.</span>
+        </p>
+        {% if errors and errors.max_daily_trades %}<p class="text-xs text-red-400 mt-1" role="alert">{{ errors.max_daily_trades }}</p>{% endif %}
     </div>
 
-    <button type="submit" class="btn btn-primary">Save settings</button>
+    {# Apply notice (D-15 copywriting) #}
+    <p class="text-xs text-muted-foreground border-l-2 border-muted pl-3 py-1">
+        Changes apply to the next signal received. In-flight staged sequences use the settings from when they started.
+    </p>
+
+    {# Actions #}
+    <div class="flex gap-3 pt-2">
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+    </div>
 </form>
 
-<h3 class="text-lg font-semibold mt-6 mb-4">Change history</h3>
-{% include "partials/settings_audit_timeline.html" %}
+{# Audit timeline #}
+{% if audit %}
+<div class="mt-8 border-t border-border pt-6">
+    <h4 class="text-sm font-semibold mb-4">Recent Changes</h4>
+    {% include "partials/settings_audit_timeline.html" %}
+</div>
+{% else %}
+<div class="mt-8 border-t border-border pt-6">
+    <h4 class="text-sm font-semibold mb-4">Recent Changes</h4>
+    <p class="text-sm text-muted-foreground">No changes recorded yet.</p>
+</div>
+{% endif %}
