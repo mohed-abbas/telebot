@@ -1,81 +1,132 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="mb-6">
-    <h2 class="text-2xl font-bold">Signal Log</h2>
-    <p class="text-slate-500 text-sm mt-1">Last 100 signals received from Telegram</p>
+    <h2 class="text-2xl font-semibold">Signal Log</h2>
+    <p class="text-muted-foreground text-sm mt-1">Last 100 signals received from Telegram</p>
 </div>
 
-<div class="card overflow-x-auto">
-    <table>
-        <thead>
-            <tr>
-                <th>Time</th>
-                <th>Type</th>
-                <th>Symbol</th>
-                <th>Direction</th>
-                <th>Zone</th>
-                <th>SL</th>
-                <th>TP</th>
-                <th>Action</th>
-                <th>Details</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for s in signals %}
-            <tr>
-                <td class="text-slate-400 text-xs">{{ s.timestamp.strftime('%Y-%m-%d %H:%M:%S') if s.timestamp else '-' }}</td>
-                <td>
-                    {% if s.signal_type == 'open' %}
-                        <span class="text-indigo-400">OPEN</span>
-                    {% elif s.signal_type == 'close' %}
-                        <span class="text-red-400">CLOSE</span>
-                    {% elif s.signal_type == 'close_partial' %}
-                        <span class="text-orange-400">PARTIAL</span>
-                    {% elif s.signal_type == 'modify_sl' %}
-                        <span class="text-yellow-400">MOD SL</span>
-                    {% elif s.signal_type == 'modify_tp' %}
-                        <span class="text-yellow-400">MOD TP</span>
-                    {% else %}
-                        <span class="text-slate-400">{{ s.signal_type }}</span>
-                    {% endif %}
-                </td>
-                <td class="font-mono">{{ s.symbol or '-' }}</td>
-                <td>
-                    {% if s.direction == 'buy' %}
-                        <span class="badge-buy">BUY</span>
-                    {% elif s.direction == 'sell' %}
-                        <span class="badge-sell">SELL</span>
-                    {% else %}
-                        -
-                    {% endif %}
-                </td>
-                <td class="font-mono text-xs">
-                    {% if s.entry_zone_low and s.entry_zone_high %}
-                        {{ "%.2f"|format(s.entry_zone_low) }}-{{ "%.2f"|format(s.entry_zone_high) }}
-                    {% else %}
-                        -
-                    {% endif %}
-                </td>
-                <td class="font-mono">{{ "%.2f"|format(s.sl) if s.sl else '-' }}</td>
-                <td class="font-mono">{{ "%.2f"|format(s.tp) if s.tp else '-' }}</td>
-                <td>
-                    {% if s.action_taken == 'executed' %}
-                        <span class="text-green-400">{{ s.action_taken }}</span>
-                    {% elif s.action_taken == 'skipped' %}
-                        <span class="text-yellow-400">{{ s.action_taken }}</span>
-                    {% elif s.action_taken == 'failed' %}
-                        <span class="text-red-400">{{ s.action_taken }}</span>
-                    {% else %}
-                        <span class="text-slate-400">{{ s.action_taken }}</span>
-                    {% endif %}
-                </td>
-                <td class="text-xs text-slate-500 max-w-xs truncate">{{ s.details or s.raw_text[:80] }}</td>
-            </tr>
-            {% endfor %}
-            {% if not signals %}
-            <tr><td colspan="9" class="text-center text-slate-500 py-8">No signals yet</td></tr>
+{# Desktop table #}
+<div class="hidden md:block">
+    <div class="rounded-lg border bg-card overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b bg-muted/50">
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Time</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Type</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Symbol</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Direction</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Zone</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">SL</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">TP</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Action</th>
+                    <th class="px-4 py-3 text-left font-medium text-muted-foreground">Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in signals %}
+                <tr class="border-b hover:bg-muted/30">
+                    <td class="px-4 py-3 text-muted-foreground text-xs">
+                        {{ s.timestamp.strftime('%Y-%m-%d %H:%M:%S') if s.timestamp else '-' }}
+                    </td>
+                    <td class="px-4 py-3">
+                        {% if s.signal_type == 'open' %}
+                            <span class="text-primary">OPEN</span>
+                        {% elif s.signal_type == 'open_text_only' %}
+                            <span class="text-primary">OPEN (NOW)</span>
+                        {% elif s.signal_type == 'close' %}
+                            <span class="text-red-400">CLOSE</span>
+                        {% elif s.signal_type == 'close_partial' %}
+                            <span class="text-amber-400">PARTIAL</span>
+                        {% elif s.signal_type == 'modify_sl' %}
+                            <span class="text-amber-400">MOD SL</span>
+                        {% elif s.signal_type == 'modify_tp' %}
+                            <span class="text-amber-400">MOD TP</span>
+                        {% else %}
+                            <span class="text-muted-foreground">{{ s.signal_type }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono">{{ s.symbol or '-' }}</td>
+                    <td class="px-4 py-3">
+                        {% if s.direction == 'buy' %}
+                            <span class="badge bg-green-500/20 text-green-400">BUY</span>
+                        {% elif s.direction == 'sell' %}
+                            <span class="badge bg-red-500/20 text-red-400">SELL</span>
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs">
+                        {% if s.entry_zone_low and s.entry_zone_high %}
+                            {{ "%.2f"|format(s.entry_zone_low) }}-{{ "%.2f"|format(s.entry_zone_high) }}
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 font-mono">{{ "%.2f"|format(s.sl) if s.sl else '-' }}</td>
+                    <td class="px-4 py-3 font-mono">{{ "%.2f"|format(s.tp) if s.tp else '-' }}</td>
+                    <td class="px-4 py-3">
+                        {% if s.action_taken == 'executed' or s.action_taken == 'staged' %}
+                            <span class="text-green-400">{{ s.action_taken }}</span>
+                        {% elif s.action_taken == 'skipped' %}
+                            <span class="text-amber-400">{{ s.action_taken }}</span>
+                        {% elif s.action_taken == 'failed' %}
+                            <span class="text-red-400">{{ s.action_taken }}</span>
+                        {% else %}
+                            <span class="text-muted-foreground">{{ s.action_taken }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-xs text-muted-foreground max-w-xs truncate">
+                        {{ s.details or (s.raw_text[:80] if s.raw_text else '') }}
+                    </td>
+                </tr>
+                {% endfor %}
+                {% if not signals %}
+                <tr>
+                    <td colspan="9" class="text-center py-8">
+                        <p class="font-medium text-muted-foreground">No signals yet</p>
+                        <p class="text-sm text-muted-foreground mt-1">Signals will appear here when received from Telegram.</p>
+                    </td>
+                </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+{# Mobile cards #}
+<div class="md:hidden space-y-3">
+    {% for s in signals %}
+    <div class="rounded-lg border bg-card p-4">
+        <div class="flex justify-between items-start mb-2">
+            <div>
+                <span class="font-mono font-medium">{{ s.symbol or 'N/A' }}</span>
+                {% if s.direction == 'buy' %}
+                    <span class="badge bg-green-500/20 text-green-400 ml-2">BUY</span>
+                {% elif s.direction == 'sell' %}
+                    <span class="badge bg-red-500/20 text-red-400 ml-2">SELL</span>
+                {% endif %}
+            </div>
+            <span class="text-xs {% if s.action_taken == 'executed' or s.action_taken == 'staged' %}text-green-400{% elif s.action_taken == 'failed' %}text-red-400{% else %}text-muted-foreground{% endif %}">
+                {{ s.action_taken }}
+            </span>
+        </div>
+        <div class="text-xs text-muted-foreground space-y-1">
+            <div>{{ s.timestamp.strftime('%m-%d %H:%M:%S') if s.timestamp else '-' }}</div>
+            <div>
+                Type:
+                {% if s.signal_type == 'open_text_only' %}OPEN (NOW){% else %}{{ s.signal_type|upper }}{% endif %}
+            </div>
+            {% if s.entry_zone_low and s.entry_zone_high %}
+            <div>Zone: {{ "%.2f"|format(s.entry_zone_low) }}-{{ "%.2f"|format(s.entry_zone_high) }}</div>
             {% endif %}
-        </tbody>
-    </table>
+        </div>
+    </div>
+    {% endfor %}
+    {% if not signals %}
+    <div class="rounded-lg border bg-card p-8 text-center">
+        <p class="font-medium text-muted-foreground">No signals yet</p>
+        <p class="text-sm text-muted-foreground mt-1">Signals will appear here when received from Telegram.</p>
+    </div>
+    {% endif %}
 </div>
 {% endblock %}
