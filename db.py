@@ -631,6 +631,157 @@ async def get_analytics_summary() -> dict:
     }
 
 
+async def get_analytics_with_filters(
+    range_days: int | None = None,
+    source_name: str = "",
+) -> dict:
+    """Get analytics data with time range and source filters (DASH-04, D-07, D-08, D-09).
+
+    Args:
+        range_days: Filter to trades within last N days (None = all time)
+        source_name: Filter to specific signal source (empty = all sources)
+
+    Returns:
+        Dict with summary, by_source, avg_stages, and extremes
+    """
+    # Build WHERE clause
+    conditions = ["t.status = 'closed'", "t.pnl IS NOT NULL"]
+    params = []
+    param_idx = 1
+
+    if range_days:
+        conditions.append(f"t.timestamp >= NOW() - INTERVAL '{int(range_days)} days'")
+
+    if source_name:
+        conditions.append(f"s.source_name = ${param_idx}")
+        params.append(source_name)
+        param_idx += 1
+
+    where_clause = " AND ".join(conditions)
+
+    # Overall summary
+    summary_query = f"""
+        SELECT
+            COUNT(*) AS total_trades,
+            COUNT(*) FILTER (WHERE t.pnl > 0) AS wins,
+            COUNT(*) FILTER (WHERE t.pnl <= 0) AS losses,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE t.pnl > 0) / NULLIF(COUNT(*), 0), 1) AS win_rate,
+            COALESCE(SUM(t.pnl) FILTER (WHERE t.pnl > 0), 0) AS gross_profit,
+            COALESCE(ABS(SUM(t.pnl) FILTER (WHERE t.pnl <= 0)), 0) AS gross_loss,
+            COALESCE(SUM(t.pnl), 0) AS net_pnl
+        FROM trades t
+        LEFT JOIN signals s ON t.signal_id = s.id
+        WHERE {where_clause}
+    """
+    summary_row = await _pool.fetchrow(summary_query, *params)
+
+    # Calculate profit factor
+    gross_profit = float(summary_row["gross_profit"] or 0)
+    gross_loss = float(summary_row["gross_loss"] or 0)
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
+
+    summary = {
+        "total_trades": summary_row["total_trades"],
+        "wins": summary_row["wins"],
+        "losses": summary_row["losses"],
+        "win_rate": float(summary_row["win_rate"]) if summary_row["win_rate"] else None,
+        "profit_factor": round(profit_factor, 2) if profit_factor else None,
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "net_pnl": float(summary_row["net_pnl"] or 0),
+    }
+
+    # By source breakdown (D-08, D-09)
+    by_source_query = f"""
+        SELECT
+            COALESCE(s.source_name, 'Unknown') AS source_name,
+            COUNT(*) AS total_trades,
+            COUNT(*) FILTER (WHERE t.pnl > 0) AS wins,
+            COUNT(*) FILTER (WHERE t.pnl <= 0) AS losses,
+            ROUND(100.0 * COUNT(*) FILTER (WHERE t.pnl > 0) / NULLIF(COUNT(*), 0), 1) AS win_rate,
+            COALESCE(SUM(t.pnl) FILTER (WHERE t.pnl > 0), 0) AS gross_profit,
+            COALESCE(ABS(SUM(t.pnl) FILTER (WHERE t.pnl <= 0)), 0) AS gross_loss,
+            COALESCE(SUM(t.pnl), 0) AS net_pnl,
+            MAX(t.pnl) AS best_trade,
+            MIN(t.pnl) AS worst_trade
+        FROM trades t
+        LEFT JOIN signals s ON t.signal_id = s.id
+        WHERE {where_clause}
+        GROUP BY COALESCE(s.source_name, 'Unknown')
+        ORDER BY COUNT(*) DESC
+    """
+    by_source_rows = await _pool.fetch(by_source_query, *params)
+
+    by_source = []
+    for row in by_source_rows:
+        gp = float(row["gross_profit"] or 0)
+        gl = float(row["gross_loss"] or 0)
+        pf = gp / gl if gl > 0 else None
+        by_source.append({
+            "source_name": row["source_name"],
+            "total_trades": row["total_trades"],
+            "wins": row["wins"],
+            "losses": row["losses"],
+            "win_rate": float(row["win_rate"]) if row["win_rate"] else None,
+            "profit_factor": round(pf, 2) if pf else None,
+            "net_pnl": float(row["net_pnl"] or 0),
+            "best_trade": float(row["best_trade"]) if row["best_trade"] else None,
+            "worst_trade": float(row["worst_trade"]) if row["worst_trade"] else None,
+        })
+
+    # Avg stages filled (from staged_entries, if applicable)
+    # Only meaningful when source is filtered
+    avg_stages = None
+    if source_name:
+        stages_query = f"""
+            SELECT AVG(stage_count)::float AS avg_stages
+            FROM (
+                SELECT se.signal_id, COUNT(*) AS stage_count
+                FROM staged_entries se
+                JOIN signals s ON se.signal_id = s.id
+                WHERE se.status = 'filled'
+                  AND s.source_name = $1
+                  {'AND se.created_at >= NOW() - INTERVAL \'' + str(int(range_days)) + ' days\'' if range_days else ''}
+                GROUP BY se.signal_id
+            ) sub
+        """
+        stages_row = await _pool.fetchrow(stages_query, source_name)
+        avg_stages = round(stages_row["avg_stages"], 1) if stages_row and stages_row["avg_stages"] else None
+
+    # Best/worst trade overall (extremes)
+    extremes_query = f"""
+        SELECT
+            MAX(t.pnl) AS best_trade,
+            MIN(t.pnl) AS worst_trade
+        FROM trades t
+        LEFT JOIN signals s ON t.signal_id = s.id
+        WHERE {where_clause}
+    """
+    extremes_row = await _pool.fetchrow(extremes_query, *params)
+
+    return {
+        "summary": summary,
+        "by_source": by_source,
+        "avg_stages": avg_stages,
+        "extremes": {
+            "best_trade": float(extremes_row["best_trade"]) if extremes_row["best_trade"] else None,
+            "worst_trade": float(extremes_row["worst_trade"]) if extremes_row["worst_trade"] else None,
+        },
+    }
+
+
+async def get_analytics_sources() -> list[str]:
+    """Get distinct source names for analytics source filter dropdown."""
+    rows = await _pool.fetch(
+        """SELECT DISTINCT COALESCE(s.source_name, 'Unknown') AS source_name
+           FROM trades t
+           LEFT JOIN signals s ON t.signal_id = s.id
+           WHERE t.status = 'closed'
+           ORDER BY source_name"""
+    )
+    return [r["source_name"] for r in rows]
+
+
 # ── Archival (DB-03) ────────────────────────────────────────────────
 
 
