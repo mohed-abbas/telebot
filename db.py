@@ -888,3 +888,73 @@ async def get_stage_by_comment(mt5_comment: str) -> dict | None:
         mt5_comment,
     )
     return dict(row) if row else None
+
+
+async def get_position_drilldown(ticket: int, account_name: str) -> dict | None:
+    """Get position details for drilldown panel (DASH-03, D-05).
+
+    Returns dict with:
+      - position: basic position info (from trades)
+      - fill_history: list of staged fills (from staged_entries)
+      - signal: originating signal info (from signals)
+    """
+    # Get the trade record
+    trade = await _pool.fetchrow(
+        """SELECT t.id, t.signal_id, t.timestamp, t.account_name, t.symbol,
+                  t.direction, t.entry_price, t.sl, t.tp, t.lot_size, t.ticket,
+                  t.status, t.pnl
+           FROM trades t
+           WHERE t.ticket = $1 AND t.account_name = $2""",
+        ticket, account_name,
+    )
+    if not trade:
+        return None
+
+    result = {"position": dict(trade), "fill_history": [], "signal": None}
+
+    # Get staged entries for this ticket (if any)
+    stages = await _pool.fetch(
+        """SELECT se.stage_number, se.band_low, se.band_high, se.target_lot,
+                  se.snapshot_settings, se.status, se.filled_at
+           FROM staged_entries se
+           WHERE se.mt5_ticket = $1 AND se.account_name = $2
+           ORDER BY se.stage_number""",
+        ticket, account_name,
+    )
+
+    for stage in stages:
+        settings = stage["snapshot_settings"] or {}
+        result["fill_history"].append({
+            "stage_number": stage["stage_number"],
+            "filled_at": stage["filled_at"],
+            "lot_size": stage["target_lot"],
+            "band_low": stage["band_low"],
+            "band_high": stage["band_high"],
+            "sl_at_fill": settings.get("default_sl_pips"),
+            "status": stage["status"],
+        })
+
+    # If no staged entries, this is a single-stage trade - show the trade itself as stage 1
+    if not result["fill_history"]:
+        result["fill_history"].append({
+            "stage_number": 1,
+            "filled_at": trade["timestamp"],
+            "lot_size": trade["lot_size"],
+            "band_low": None,
+            "band_high": None,
+            "sl_at_fill": trade["sl"],
+            "status": "filled",
+        })
+
+    # Get originating signal
+    if trade["signal_id"]:
+        signal = await _pool.fetchrow(
+            """SELECT s.id, s.timestamp, s.raw_text, s.signal_type, s.source_name
+               FROM signals s
+               WHERE s.id = $1""",
+            trade["signal_id"],
+        )
+        if signal:
+            result["signal"] = dict(signal)
+
+    return result
