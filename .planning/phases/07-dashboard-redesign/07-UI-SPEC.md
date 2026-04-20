@@ -52,11 +52,11 @@ Exceptions:
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px (text-sm) | 400 (normal) | 1.5 |
-| Label | 12px (text-xs) | 500 (medium) | 1.4 |
+| Label | 12px (text-xs) | 400 (normal) | 1.4 |
 | Heading | 18px (text-lg) | 600 (semibold) | 1.2 |
-| Display | 24px (text-2xl) | 700 (bold) | 1.2 |
+| Display | 24px (text-2xl) | 600 (semibold) | 1.2 |
 
-**Rationale:** 14px body maintains data density for trading dashboards. 12px labels for table headers and form field labels. Heading/Display reserved for page titles and section headers only.
+**Rationale:** Two-weight system maximizes visual consistency while maintaining clear hierarchy. 400 (normal) for all body and label text; 600 (semibold) for all headings and display text. 14px body maintains data density for trading dashboards. 12px labels for table headers and form field labels.
 
 ---
 
