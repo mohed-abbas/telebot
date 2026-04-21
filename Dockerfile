@@ -26,7 +26,7 @@ RUN case "${TARGETARCH}" in \
 WORKDIR /build
 # Copy only what the content glob needs — layer cache invalidates on template/py changes
 COPY tailwind.config.js ./
-COPY static/css/input.css static/css/_compat.css ./static/css/
+COPY static/css/input.css ./static/css/
 COPY static/vendor/ ./static/vendor/
 COPY templates/ ./templates/
 COPY *.py ./

@@ -25,21 +25,13 @@ def test_tailwind_content_glob_includes_python():
     assert "./**/*.py" in cfg, "D-05 / Pitfall 10: content glob must include Python files"
     assert "darkMode" in cfg
 
-def test_input_css_imports_compat_and_basecoat():
+def test_input_css_imports_basecoat():
     src = (REPO / "static/css/input.css").read_text()
     assert '@import "tailwindcss"' in src, (
         "v4 entrypoint must use @import (Gap #1 / D-04-REVISED)"
     )
-    assert "_compat.css" in src
     assert "basecoat.css" in src
-
-def test_compat_shim_covers_real_v1_class_set():
-    """Enumerates the actual class set from base.html:22-40, not CONTEXT D-02's approximation."""
-    shim = (REPO / "static/css/_compat.css").read_text()
-    for cls in (".card", ".btn", ".btn-red", ".btn-blue", ".btn-green",
-                ".profit", ".loss", ".badge-buy", ".badge-sell",
-                ".badge-connected", ".badge-disconnected", ".nav-active"):
-        assert cls in shim, f"compat shim missing class: {cls}"
+    assert ".sidebar-link" in src, "Phase 7 sidebar link styles must be in input.css"
 
 def test_htmx_bridge_installed():
     js = (REPO / "static/js/htmx_basecoat_bridge.js").read_text()
@@ -98,11 +90,11 @@ def test_manifest_schema_when_present(tmp_path):
     assert m["app.css"].startswith("app.") and m["app.css"].endswith(".css")
 
 
-def test_compiled_css_contains_basecoat_and_compat_markers():
-    """Gap #1 regression guard — compiled app.<hash>.css MUST contain both
+def test_compiled_css_contains_basecoat_markers():
+    """Gap #1 regression guard — compiled app.<hash>.css MUST contain
     Basecoat primitives (proves `@import "../vendor/basecoat/basecoat.css"`
-    was resolved by Tailwind) AND compat-shim rules (proves
-    `@import "./_compat.css"` was resolved).
+    was resolved by Tailwind) AND Phase 7 custom styles (proves input.css
+    custom rules are included).
 
     Self-skips if `tailwindcss` CLI is not on PATH — the Docker css-build
     stage is the enforcing path in that case. The Gap #1 UAT failure manifests
@@ -132,9 +124,9 @@ def test_compiled_css_contains_basecoat_and_compat_markers():
         f"Basecoat primitive missing from compiled CSS (source: "
         f"static/vendor/basecoat/basecoat.css). {fix_hint}"
     )
-    assert ".nav-active" in compiled, (
-        f"Compat-shim rule missing from compiled CSS (source: "
-        f"static/css/_compat.css). {fix_hint}"
+    assert ".sidebar-link" in compiled, (
+        f"Phase 7 sidebar styles missing from compiled CSS (source: "
+        f"static/css/input.css). {fix_hint}"
     )
     assert ".btn-primary" in compiled, (
         f"Basecoat button primitive missing from compiled CSS (source: "
