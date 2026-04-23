@@ -10,7 +10,7 @@
     <button role="tab"
             type="button"
             class="px-4 py-2 text-sm font-semibold text-slate-400 hover:text-slate-200 data-[state=active]:text-indigo-400 data-[state=active]:border-b-2 data-[state=active]:border-indigo-400 -mb-px"
-            data-tab-target="tab-{{ a.name }}"
+            data-tab-target="tab-{{ a.name|slug }}"
             data-state="{% if loop.first %}active{% else %}inactive{% endif %}"
             onclick="(function(btn){var root=btn.closest('[role=tablist]').parentElement;root.querySelectorAll('[role=tab]').forEach(function(b){b.setAttribute('data-state','inactive');});root.querySelectorAll('[role=tabpanel]').forEach(function(p){p.setAttribute('data-state','inactive');p.classList.add('hidden');});btn.setAttribute('data-state','active');var panel=document.getElementById(btn.getAttribute('data-tab-target'));if(panel){panel.setAttribute('data-state','active');panel.classList.remove('hidden');}})(this);">
         {{ a.name }}
@@ -22,7 +22,7 @@
     {% set s = settings_by_account[a.name] %}
     {% set audit = audit_by_account[a.name] %}
     <div role="tabpanel"
-         id="tab-{{ a.name }}"
+         id="tab-{{ a.name|slug }}"
          data-state="{% if loop.first %}active{% else %}inactive{% endif %}"
          class="{% if not loop.first %}hidden{% endif %}">
         <div class="card p-6">

@@ -13,7 +13,7 @@
 <body class="min-h-screen bg-background text-foreground">
     <!-- Mobile Header (D-02: sticky, visible below md) -->
     <header class="md:hidden fixed top-0 left-0 right-0 bg-sidebar border-b border-sidebar-border h-12 flex items-center px-4 z-30">
-        <button class="btn-icon-ghost -ml-2" onclick="document.dispatchEvent(new CustomEvent('basecoat:sidebar'))">
+        <button class="btn-icon-ghost -ml-2" onclick="event.stopPropagation();(function(s){var open=s.getAttribute('aria-hidden')==='true';s.setAttribute('aria-hidden',!open);open?s.removeAttribute('inert'):s.setAttribute('inert','');})(document.getElementById('main-sidebar'))">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
         </button>
         <span class="ml-3 font-semibold text-sm">{{ page_title|default('Dashboard') }}</span>

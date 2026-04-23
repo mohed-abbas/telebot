@@ -271,6 +271,75 @@ async def test_confirm_writes_audit_row(authenticated_client, seeded_account):
     assert changed_fields == {"risk_value", "max_stages", "default_sl_pips", "max_daily_trades"}
 
 
+async def test_confirm_fixed_lot_mode_persists(authenticated_client, seeded_account):
+    """Verify switching to fixed_lot mode and setting a small lot size persists correctly."""
+    import db as db_mod
+
+    r = await authenticated_client.post(
+        f"/settings/{seeded_account}/confirm",
+        data={"risk_mode": "fixed_lot", "risk_value": "0.05",
+              "max_stages": "1", "default_sl_pips": "100", "max_daily_trades": "30"},
+        headers={"hx-request": "true"},
+    )
+    assert r.status_code == 200, r.text[:400]
+    assert 'id="modal-root"' in r.text, "Modal should be cleared via OOB swap"
+
+    settings = await db_mod.get_account_settings(seeded_account)
+    assert settings["risk_mode"] == "fixed_lot", "risk_mode should persist as fixed_lot"
+    assert float(settings["risk_value"]) == 0.05, "risk_value should persist as 0.05"
+
+    audit = await db_mod.get_settings_audit(seeded_account)
+    audit_fields = {row["field"] for row in audit}
+    assert "risk_mode" in audit_fields, "risk_mode change should be audited"
+    assert "risk_value" in audit_fields, "risk_value change should be audited"
+
+
+async def test_settings_renders_with_space_in_account_name(
+    authenticated_client, wired_dashboard, db_pool,
+):
+    """Regression: account names with spaces (e.g. "Vantage Demo-10k") must produce
+    CSS-selector-safe ids. Verifies the tab id, data-tab-target, and the confirm
+    modal's hx-target all use a slugified id — not the raw name.
+    """
+    import db as db_mod
+    import importlib
+
+    name = "Vantage Demo-10k"
+    await db_mod.upsert_account_if_missing(
+        name=name, server="S", login=20001, password_env="",
+        risk_percent=1.0, max_lot_size=1.0, max_daily_loss_percent=3.0,
+        max_open_trades=3, enabled=True, mt5_host="", mt5_port=0,
+    )
+    await db_mod.upsert_account_settings_if_missing(account_name=name)
+
+    # Rebuild the SettingsStore cache + add a connector stub so /settings sees the new account
+    store_mod = importlib.import_module("settings_store")
+    store = store_mod.SettingsStore(db_pool=db_pool)
+    await store.load_all()
+    wired_dashboard._executor.tm.settings_store = store
+    wired_dashboard._executor.tm.connectors[name] = _StubConnector()
+
+    r = await authenticated_client.get("/settings")
+    assert r.status_code == 200
+    # Slug of "Vantage Demo-10k" → "Vantage-Demo-10k"
+    assert 'id="tab-Vantage-Demo-10k"' in r.text
+    assert 'data-tab-target="tab-Vantage-Demo-10k"' in r.text
+    # Raw id with space must NOT be present — that would break CSS selectors
+    assert 'id="tab-Vantage Demo-10k"' not in r.text
+
+    # Drive the validate step (needs URL-encoded space in path)
+    r = await authenticated_client.post(
+        "/settings/Vantage%20Demo-10k",
+        data={"risk_mode": "fixed_lot", "risk_value": "0.05",
+              "max_stages": "1", "default_sl_pips": "100", "max_daily_trades": "30"},
+        headers={"hx-request": "true"},
+    )
+    assert r.status_code == 200, r.text[:400]
+    # Modal's hx-target must use the slugified id, not the raw name
+    assert 'hx-target="#tab-Vantage-Demo-10k .card"' in r.text
+    assert 'hx-target="#tab-Vantage Demo-10k .card"' not in r.text
+
+
 async def test_revert_post_renders_modal_with_inverted_diff(authenticated_client, seeded_account):
     """D-28: /revert produces modal with old/new swapped."""
     import db as db_mod

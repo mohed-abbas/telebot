@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets as _secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -66,6 +67,18 @@ def asset_url(logical_name: str) -> str:
 
 
 templates.env.globals["asset_url"] = asset_url
+
+
+def _slug(value: str) -> str:
+    """Jinja filter: make a string safe for HTML id / CSS selectors.
+
+    Account names like "Vantage Demo-10k" contain spaces, which are invalid in
+    HTML5 id attributes and parse as descendant combinators in CSS selectors.
+    """
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value)).strip("-") or "x"
+
+
+templates.env.filters["slug"] = _slug
 
 
 def init_dashboard(executor, notifier, settings):
@@ -565,6 +578,18 @@ _SETTINGS_HARD_CAPS_INT: dict[str, tuple[int, int]] = {
 }
 
 
+def _append_to_response_body(response, *fragments: str) -> None:
+    """Append HTML fragment(s) to a rendered TemplateResponse body.
+
+    Starlette sets Content-Length at Response.__init__ from the initial body;
+    mutating .body afterward without updating the header makes uvicorn raise
+    "Response content longer than Content-Length". This updates both.
+    """
+    extra = b"".join(f.encode() for f in fragments)
+    response.body = response.body + extra
+    response.headers["content-length"] = str(len(response.body))
+
+
 def _render_toast_oob(category: str, title: str, message: str = "") -> str:
     """Render OOB toast HTML fragment for HTMX response (SEED-001, D-13).
 
@@ -746,7 +771,7 @@ async def settings_validate(
             },
             status_code=422,
         )
-        response.body = response.body + toast_html.encode()
+        _append_to_response_body(response, toast_html)
         return response
 
     # Compute diff vs current effective settings
@@ -831,7 +856,8 @@ async def settings_confirm(
             "audit": audit,
         },
     )
-    response.body = response.body + toast_html.encode()
+    modal_clear_html = '<div id="modal-root" hx-swap-oob="true"></div>'
+    _append_to_response_body(response, toast_html, modal_clear_html)
     return response
 
 

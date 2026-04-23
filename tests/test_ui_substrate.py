@@ -36,7 +36,11 @@ def test_input_css_imports_basecoat():
 def test_htmx_bridge_installed():
     js = (REPO / "static/js/htmx_basecoat_bridge.js").read_text()
     assert "htmx:afterSwap" in js
-    assert "basecoat.initAll" in js
+    # Bridge re-inits Basecoat components inside the swap target only —
+    # calling initAll() on the whole document closes the mobile sidebar
+    # on every swap (regression observed in Phase 7).
+    assert "evt.detail.target" in js
+    assert "basecoat.init" in js
 
 def test_dockerfile_has_tailwind_build_stage():
     df = (REPO / "Dockerfile").read_text()

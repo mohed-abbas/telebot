@@ -1,9 +1,16 @@
 // Basecoat HTMX re-init bridge (UI-05, D-08).
-// Basecoat v0.3.3's internal MutationObserver auto-inits on body subtree mutations;
-// this listener is belt-and-suspenders if the observer is detached or loses a race.
-document.body.addEventListener("htmx:afterSwap", function () {
-  if (window.basecoat && typeof window.basecoat.initAll === "function") {
-    window.basecoat.initAll();
+// Only initialize components WITHIN the swapped element, not the whole document.
+// Calling initAll() after every swap resets sidebar state (closes mobile nav).
+document.body.addEventListener("htmx:afterSwap", function (evt) {
+  if (window.basecoat && evt.detail && evt.detail.target) {
+    // Re-init only components inside the swap target
+    var target = evt.detail.target;
+    ["dropdown-menu", "popover", "select", "tabs", "toast"].forEach(function(comp) {
+      var selector = "." + comp + ":not([data-" + comp + "-initialized])";
+      target.querySelectorAll(selector).forEach(function(el) {
+        window.basecoat.init(comp);
+      });
+    });
   }
 });
 

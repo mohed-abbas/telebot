@@ -41,7 +41,7 @@
         </div>
 
         <form hx-post="/settings/{{ account_name }}/confirm"
-              hx-target="#tab-{{ account_name }} .card"
+              hx-target="#tab-{{ account_name|slug }} .card"
               hx-swap="innerHTML"
               hx-headers='{"hx-request": "true"}'
               class="flex gap-2 mt-6 justify-end">
