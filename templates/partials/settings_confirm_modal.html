@@ -1,7 +1,8 @@
 <div role="dialog" aria-modal="true" aria-labelledby="confirm-heading-{{ account_name }}"
-     class="dialog fixed inset-0 bg-dark-900/80 flex items-center justify-center z-50"
+     class="fixed inset-0 bg-dark-900/80 flex items-center justify-center z-50 p-4"
+     onclick="if(event.target===event.currentTarget){document.getElementById('modal-root').innerHTML='';}"
      onkeydown="if(event.key==='Escape'){document.getElementById('modal-root').innerHTML='';}">
-    <div class="card p-8 max-w-lg mx-auto">
+    <div class="card p-8 max-w-lg mx-auto max-h-[calc(100vh-2rem)] overflow-y-auto">
         <h3 id="confirm-heading-{{ account_name }}" class="text-lg font-semibold">
             {% if is_revert %}Revert change &mdash; {{ account_name }}{% else %}Confirm settings change &mdash; {{ account_name }}{% endif %}
         </h3>
@@ -34,16 +35,19 @@
         </div>
 
         <div class="alert alert-destructive mt-4">
-            This applies to signals received AFTER you confirm. In-flight staged sequences are unaffected.
-            {% if pending_values.risk_mode %}
-                Switching risk mode affects how every future signal is sized. Review the dry-run above carefully.
-            {% endif %}
+            <section>
+                <p>This applies to signals received AFTER you confirm. In-flight staged sequences are unaffected.</p>
+                {% if pending_values.risk_mode %}
+                    <p>Switching risk mode affects how every future signal is sized. Review the dry-run above carefully.</p>
+                {% endif %}
+            </section>
         </div>
 
         <form hx-post="/settings/{{ account_name }}/confirm"
               hx-target="#tab-{{ account_name|slug }} .card"
               hx-swap="innerHTML"
               hx-headers='{"hx-request": "true"}'
+              hx-disabled-elt="find button[type=submit]"
               class="flex gap-2 mt-6 justify-end">
             {% for field, val in pending_values.items() %}
                 <input type="hidden" name="{{ field }}" value="{{ val }}" />

@@ -235,6 +235,21 @@ async def test_post_valid_renders_modal(authenticated_client, seeded_account):
     assert "Discard changes" in r.text
     assert "Effect on a typical signal" in r.text
     assert "applies to signals received AFTER you confirm" in r.text
+    # Regression: the Basecoat .dialog component class applies opacity-0 unless the
+    # element has [open] / :popover-open. Using it on a plain <div> made the modal
+    # invisible while still trapping pointer events — every click was swallowed by
+    # the transparent backdrop, freezing the page. The overlay must use plain
+    # Tailwind utilities so it actually renders.
+    modal_open_tag = re.search(r'<div[^>]*role="dialog"[^>]*>', r.text)
+    assert modal_open_tag is not None, "modal opening tag not found"
+    classes = re.search(r'class="([^"]*)"', modal_open_tag.group(0))
+    assert classes is not None, "modal has no class attribute"
+    class_list = classes.group(1).split()
+    assert "dialog" not in class_list, (
+        "modal must not use the Basecoat .dialog class — it applies opacity-0 "
+        "without an [open] attribute, making the modal invisible while the "
+        "backdrop still traps clicks"
+    )
 
 
 async def test_post_no_change_bounces_quietly(authenticated_client, seeded_account):
