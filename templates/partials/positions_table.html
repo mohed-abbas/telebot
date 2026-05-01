@@ -46,29 +46,13 @@
                                 Close
                             </button>
 
-                            <!-- Partial close -->
-                            <form hx-post="/api/close-partial/{{ p.account }}/{{ p.ticket }}"
-                                  hx-target="#result-{{ p.ticket }}" hx-swap="innerHTML"
-                                  class="flex items-center gap-1">
-                                <input type="number" name="percent" value="50" min="1" max="99" step="1" class="w-14 text-sm">
-                                <button type="submit" class="btn btn-secondary btn-sm">% Close</button>
-                            </form>
-
-                            <!-- Modify SL -->
-                            <form hx-post="/api/modify-sl/{{ p.account }}/{{ p.ticket }}"
-                                  hx-target="#result-{{ p.ticket }}" hx-swap="innerHTML"
-                                  class="flex items-center gap-1">
-                                <input type="number" name="sl" value="{{ '%.2f'|format(p.sl) }}" step="0.01" class="w-20 text-sm">
-                                <button type="submit" class="btn btn-secondary btn-sm">SL</button>
-                            </form>
-
-                            <!-- Modify TP -->
-                            <form hx-post="/api/modify-tp/{{ p.account }}/{{ p.ticket }}"
-                                  hx-target="#result-{{ p.ticket }}" hx-swap="innerHTML"
-                                  class="flex items-center gap-1">
-                                <input type="number" name="tp" value="{{ '%.2f'|format(p.tp) }}" step="0.01" class="w-20 text-sm">
-                                <button type="submit" class="btn btn-secondary btn-sm">TP</button>
-                            </form>
+                            <!-- Edit (SL/TP/Partial) — opens modal in #modal-root -->
+                            <button class="btn btn-secondary btn-sm"
+                                    hx-get="/partials/edit-levels/{{ p.account }}/{{ p.ticket }}"
+                                    hx-target="#modal-root"
+                                    hx-swap="innerHTML">
+                                Edit
+                            </button>
                         </div>
                         <div id="result-{{ p.ticket }}" class="text-xs mt-1"></div>
                     </td>
@@ -145,13 +129,13 @@
         </details>
         {# Actions #}
         <div class="border-t p-3 flex flex-wrap gap-2">
-            <button class="btn btn-destructive btn-sm" hx-post="/api/close/{{ p.account }}/{{ p.ticket }}" hx-confirm="Close #{{ p.ticket }}?">Close</button>
-            <form hx-post="/api/close-partial/{{ p.account }}/{{ p.ticket }}"
-                  hx-target="#result-mobile-{{ p.ticket }}" hx-swap="innerHTML"
-                  class="flex items-center gap-1">
-                <input type="number" name="percent" value="50" min="1" max="99" step="1" class="w-14 text-sm">
-                <button type="submit" class="btn btn-secondary btn-sm">%</button>
-            </form>
+            <button class="btn btn-destructive btn-sm" hx-post="/api/close/{{ p.account }}/{{ p.ticket }}" hx-confirm="Close #{{ p.ticket }}?" hx-target="#result-mobile-{{ p.ticket }}" hx-swap="innerHTML">Close</button>
+            <button class="btn btn-secondary btn-sm"
+                    hx-get="/partials/edit-levels/{{ p.account }}/{{ p.ticket }}"
+                    hx-target="#modal-root"
+                    hx-swap="innerHTML">
+                Edit
+            </button>
         </div>
         <div id="result-mobile-{{ p.ticket }}" class="text-xs px-3 pb-2"></div>
     </div>

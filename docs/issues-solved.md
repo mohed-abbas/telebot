@@ -421,6 +421,34 @@ docker compose up -d --build telebot
 
 ---
 
+## Issue #17: SL/TP inputs cleared by 3 s positions auto-refresh
+
+**Date:** 2026-05-01
+**Component:** Dashboard — `templates/positions.html`, `dashboard.py`
+
+**Symptom:** Operator typing a new SL or TP value into the per-row inline input on `/positions` could not finish before the field was wiped: the page polls every 3 s and re-swaps the entire `#positions-full` div, destroying the in-progress input. Same hazard for the `% Close` field.
+
+**Root Cause:** `templates/positions.html` polls `GET /partials/positions` with `hx-trigger="every 3s" hx-swap="innerHTML"`. The Modify SL, Modify TP, and Partial-Close forms (with their `<input>` elements) lived inside that polled div, so every tick destroyed and recreated them — focus, value, and uncommitted edits all gone.
+
+**Fix:** Moved SL/TP modify and partial close into a modal in `#modal-root`, which sits *outside* the polled div. The row now exposes a single **Edit** button per position (`hx-get /partials/edit-levels/{account}/{ticket}` → renders modal). The modal owns the SL/TP/`%` inputs; polling never touches them. On submit, the response empties `#modal-root` and emits an OOB toast; on broker error, the modal re-renders with the error inline so typed values aren't lost.
+
+**Files Changed:**
+- `templates/positions.html` — added `<div id="modal-root"></div>` outside the polling div.
+- `templates/partials/positions_table.html` — replaced inline SL / TP / % Close forms (desktop + mobile) with a single **Edit** button.
+- `templates/partials/edit_levels_modal.html` — new modal (SL + TP + Partial close).
+- `dashboard.py` — added `GET /partials/edit-levels/{account}/{ticket}` and `POST /api/modify-levels/{account}/{ticket}`; updated `POST /api/close-partial/...` to render the modal flow (clear modal + toast OOB on success, modal-with-error on failure).
+
+**Deprecated (kept for back-compat, no UI caller):**
+
+- `POST /api/modify-sl/{account}/{ticket}`
+- `POST /api/modify-tp/{account}/{ticket}`
+
+The dashboard no longer calls these. They remain mounted with deprecation docstrings in case any external script or curl-based tooling depends on the URLs. Safe to remove once you confirm no external callers.
+
+**No Windows VPS impact.** Only `dashboard.py` and `templates/` changed; the MT5 REST bridge (Windows) is untouched. Linux VPS pull + redeploy.
+
+---
+
 ## Summary
 
 | # | Issue | Severity | Component | Resolution |
@@ -441,3 +469,4 @@ docker compose up -d --build telebot
 | 14 | `order_send` returns `(-2, 'Unnamed arguments not allowed')` | Critical | mt5-rest-server | `_run` stops expanding empty kwargs dict |
 | 15 | `retcode=10027 AutoTrading disabled by client` | High | MT5 terminal | Enable Algo Trading in terminal toolbar |
 | 16 | `AuthKeyDuplicatedError` after `docker compose up --build` | Critical | Linux VPS deploy | Run `down` before `up --build` to avoid two-container session overlap |
+| 17 | SL/TP inputs cleared by 3 s positions refresh | High | Dashboard UI | Move SL/TP/% Close into a modal in `#modal-root` (outside polled div); deprecate old `/api/modify-sl` and `/api/modify-tp` |

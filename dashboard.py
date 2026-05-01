@@ -999,6 +999,37 @@ async def position_drilldown_partial(
     })
 
 
+@app.get("/partials/edit-levels/{account_name}/{ticket}", response_class=HTMLResponse)
+async def edit_levels_modal(
+    account_name: str, ticket: int, request: Request,
+    user: str = Depends(_verify_auth),
+):
+    """Render the SL/TP/partial-close modal for a single open position.
+
+    Modal lives in #modal-root, which sits outside the 3s positions polling div,
+    so the inputs survive auto-refresh ticks.
+    """
+    if not _executor:
+        raise HTTPException(status_code=503, detail="Trading not initialized")
+
+    connector = _executor.tm.connectors.get(account_name)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Account {account_name} not found")
+
+    positions = await connector.get_positions()
+    pos = next((p for p in positions if p.ticket == ticket), None)
+    if not pos:
+        return HTMLResponse(
+            '<div class="alert alert-destructive m-4" role="alert">'
+            '<section><p>Position no longer open.</p></section></div>'
+        )
+
+    return templates.TemplateResponse(
+        "partials/edit_levels_modal.html",
+        {"request": request, "account_name": account_name, "position": pos, "error": None},
+    )
+
+
 @app.get("/partials/overview", response_class=HTMLResponse)
 async def overview_partial(request: Request, user: str = Depends(_verify_auth)):
     accounts_data = await _get_accounts_overview()
@@ -1042,7 +1073,13 @@ async def modify_sl(
     account_name: str, ticket: int, request: Request,
     user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
 ):
-    """Modify SL on a position."""
+    """Modify SL on a position.
+
+    DEPRECATED (UI no longer calls this): kept for any external callers / scripts.
+    The dashboard now uses POST /api/modify-levels/{account}/{ticket} which sets
+    SL and TP atomically via the modal in #modal-root. Safe to remove once no
+    external integrations depend on this URL.
+    """
     if not _executor:
         raise HTTPException(status_code=503, detail="Trading not initialized")
 
@@ -1066,7 +1103,13 @@ async def modify_tp(
     account_name: str, ticket: int, request: Request,
     user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
 ):
-    """Modify TP on a position."""
+    """Modify TP on a position.
+
+    DEPRECATED (UI no longer calls this): kept for any external callers / scripts.
+    The dashboard now uses POST /api/modify-levels/{account}/{ticket} which sets
+    SL and TP atomically via the modal in #modal-root. Safe to remove once no
+    external integrations depend on this URL.
+    """
     if not _executor:
         raise HTTPException(status_code=503, detail="Trading not initialized")
 
@@ -1085,17 +1128,33 @@ async def modify_tp(
     return HTMLResponse(f'<span class="text-red-400">Failed: {result.error}</span>')
 
 
-@app.post("/api/close-partial/{account_name}/{ticket}", response_class=HTMLResponse)
-async def close_partial(
+def _render_edit_modal_with_error(
+    request: Request, account_name: str, position, error: str
+) -> HTMLResponse:
+    """Re-render the edit-levels modal with an inline error so the user can retry."""
+    return templates.TemplateResponse(
+        "partials/edit_levels_modal.html",
+        {"request": request, "account_name": account_name, "position": position, "error": error},
+    )
+
+
+@app.post("/api/modify-levels/{account_name}/{ticket}", response_class=HTMLResponse)
+async def modify_levels(
     account_name: str, ticket: int, request: Request,
     user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
 ):
-    """Partial close a position."""
+    """Modify SL and/or TP atomically from the edit-levels modal.
+
+    Form fields (both optional, blank = leave unchanged):
+        sl: float
+        tp: float
+
+    On success: empties #modal-root (closing the modal) and emits a toast OOB.
+    On failure: re-renders the modal with the broker error inline so the user
+    can correct and retry without losing typed values.
+    """
     if not _executor:
         raise HTTPException(status_code=503, detail="Trading not initialized")
-
-    form = await request.form()
-    percent = float(form.get("percent", 50))
 
     connector = _executor.tm.connectors.get(account_name)
     if not connector:
@@ -1104,15 +1163,107 @@ async def close_partial(
     positions = await connector.get_positions()
     pos = next((p for p in positions if p.ticket == ticket), None)
     if not pos:
-        return HTMLResponse(f'<span class="text-red-400">Position #{ticket} not found</span>')
+        return HTMLResponse(
+            '<div class="alert alert-destructive m-4" role="alert">'
+            '<section><p>Position no longer open.</p></section></div>'
+        )
+
+    form = await request.form()
+    sl_raw = (form.get("sl") or "").strip()
+    tp_raw = (form.get("tp") or "").strip()
+
+    try:
+        new_sl = float(sl_raw) if sl_raw else None
+        new_tp = float(tp_raw) if tp_raw else None
+    except ValueError:
+        return _render_edit_modal_with_error(
+            request, account_name, pos, "SL/TP must be numeric."
+        )
+
+    if new_sl is not None and new_sl <= 0:
+        return _render_edit_modal_with_error(request, account_name, pos, "SL must be > 0.")
+    if new_tp is not None and new_tp <= 0:
+        return _render_edit_modal_with_error(request, account_name, pos, "TP must be > 0.")
+
+    # Only send values that actually changed; treat tiny float noise as unchanged.
+    def _changed(new: float | None, current: float | None) -> bool:
+        if new is None:
+            return False
+        if current is None:
+            return True
+        return abs(new - current) > 1e-9
+
+    sl_to_send = new_sl if _changed(new_sl, pos.sl) else None
+    tp_to_send = new_tp if _changed(new_tp, pos.tp) else None
+
+    if sl_to_send is None and tp_to_send is None:
+        # Nothing changed — close modal, info toast.
+        return HTMLResponse(_render_toast_oob("info", "No change", "SL/TP unchanged."))
+
+    result = await connector.modify_position(ticket, sl=sl_to_send, tp=tp_to_send)
+    if not result.success:
+        return _render_edit_modal_with_error(
+            request, account_name, pos, result.error or "Broker rejected modify."
+        )
+
+    parts = []
+    if sl_to_send is not None:
+        parts.append(f"SL → {sl_to_send:.2f}")
+    if tp_to_send is not None:
+        parts.append(f"TP → {tp_to_send:.2f}")
+    msg = f"#{ticket} on {account_name}: " + ", ".join(parts)
+    return HTMLResponse(_render_toast_oob("success", "Levels updated", msg))
+
+
+@app.post("/api/close-partial/{account_name}/{ticket}", response_class=HTMLResponse)
+async def close_partial(
+    account_name: str, ticket: int, request: Request,
+    user: str = Depends(_verify_auth), _csrf=Depends(_verify_csrf),
+):
+    """Partial close a position from the edit-levels modal.
+
+    On success: empties #modal-root (closing the modal) and emits a toast OOB.
+    On failure: re-renders the modal with the broker error inline.
+    """
+    if not _executor:
+        raise HTTPException(status_code=503, detail="Trading not initialized")
+
+    connector = _executor.tm.connectors.get(account_name)
+    if not connector:
+        raise HTTPException(status_code=404, detail=f"Account {account_name} not found")
+
+    positions = await connector.get_positions()
+    pos = next((p for p in positions if p.ticket == ticket), None)
+    if not pos:
+        return HTMLResponse(
+            '<div class="alert alert-destructive m-4" role="alert">'
+            '<section><p>Position no longer open.</p></section></div>'
+        )
+
+    try:
+        percent = float((await request.form()).get("percent", 50))
+    except (TypeError, ValueError):
+        return _render_edit_modal_with_error(request, account_name, pos, "Percent must be numeric.")
+
+    if not 1 <= percent <= 99:
+        return _render_edit_modal_with_error(request, account_name, pos, "Percent must be between 1 and 99.")
 
     close_vol = round(pos.volume * (percent / 100), 2)
     close_vol = max(close_vol, 0.01)
 
     result = await connector.close_position(ticket, volume=close_vol)
-    if result.success:
-        return HTMLResponse(f'<span class="text-green-400">Closed {close_vol:.2f} lots</span>')
-    return HTMLResponse(f'<span class="text-red-400">Failed: {result.error}</span>')
+    if not result.success:
+        return _render_edit_modal_with_error(
+            request, account_name, pos, result.error or "Broker rejected partial close."
+        )
+
+    return HTMLResponse(
+        _render_toast_oob(
+            "success",
+            "Partial close",
+            f"Closed {close_vol:.2f} lots of #{ticket} on {account_name}.",
+        )
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

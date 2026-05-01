@@ -8,4 +8,7 @@
 <div id="positions-full" hx-get="/partials/positions" hx-trigger="every 3s" hx-swap="innerHTML">
     {% include "partials/positions_table.html" %}
 </div>
+
+{# Modal target — sits outside the polling div so SL/TP/% inputs survive ticks. #}
+<div id="modal-root"></div>
 {% endblock %}
