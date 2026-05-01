@@ -124,9 +124,10 @@ None yet.
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260330-shy | Optimize mt5-bridge and telebot Docker images | 2026-03-30 | 892de47 | [260330-shy-optimize-mt5-bridge-and-telebot-docker-i](./quick/260330-shy-optimize-mt5-bridge-and-telebot-docker-i/) |
+| 260501-i7u | Fix XAUUSD pip-size and add fixed_lot order branch | 2026-05-01 | 0ad60c3 | [260501-i7u-fix-xauusd-pip-size-and-add-fixed-lot-or](./quick/260501-i7u-fix-xauusd-pip-size-and-add-fixed-lot-or/) |
 
 ## Session Continuity
 
-Last activity: 2026-04-20 — Phase 07 Plan 07 complete (signals + staged pages restyle)
-Resume file: .planning/phases/07-dashboard-redesign/07-08-PLAN.md
-Next action: Wave 4 [07-08] — compat shim removal + verification
+Last activity: 2026-05-01 — Quick task 260501-i7u: pip-size + fixed_lot fix (awaiting live MT5 verification)
+Resume file: .planning/quick/260501-i7u-fix-xauusd-pip-size-and-add-fixed-lot-or/260501-i7u-SUMMARY.md
+Next action: Operator runs live UAT on Vantage Demo-10k (text-only signal + fixed_lot=0.04 trade)
