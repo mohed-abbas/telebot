@@ -35,6 +35,13 @@ _notifier = None
 _settings = None
 _daily_limit_warned: set[str] = set()  # Account names that already received 80% warning today
 
+# Last-good positions per account — used by _get_all_positions() to mask
+# transient REST failures that would otherwise blink the open-positions table
+# to "no positions" between 3-second polls. Cleared explicitly when an
+# account fetch returns an empty list AFTER a successful response (real
+# zero-position state vs. fetch failure).
+_last_positions_by_account: dict[str, list[dict]] = {}
+
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -1241,7 +1248,15 @@ async def sse_stream(request: Request, user: str = Depends(_verify_auth)):
 
 
 async def _get_all_positions() -> list[dict]:
-    """Get all open positions across all accounts (batched with asyncio.gather)."""
+    """Get all open positions across all accounts (batched with asyncio.gather).
+
+    Per-account stale-while-revalidate: a transient REST failure (timeout,
+    momentary disconnect) for one account returns the last-good list for
+    THAT account instead of dropping it from the response. Only a successful
+    fetch that returns zero positions counts as "really empty" and clears the
+    cache. This prevents the 3-second poll on /overview from blinking to
+    "no open positions" during a single failed tick.
+    """
     if not _executor:
         return []
 
@@ -1258,13 +1273,19 @@ async def _get_all_positions() -> list[dict]:
         return_exceptions=True,
     )
 
-    positions = []
+    positions: list[dict] = []
     for acct_name, result in zip(connected.keys(), results):
         if isinstance(result, Exception):
-            logger.error("Failed to get positions for %s: %s", acct_name, result)
+            logger.warning(
+                "Failed to get positions for %s: %s — using last-good cache",
+                acct_name, result,
+            )
+            cached = _last_positions_by_account.get(acct_name)
+            if cached:
+                positions.extend(cached)
             continue
-        for pos in result:
-            positions.append({
+        acct_positions = [
+            {
                 "account": acct_name,
                 "ticket": pos.ticket,
                 "symbol": pos.symbol,
@@ -1274,7 +1295,11 @@ async def _get_all_positions() -> list[dict]:
                 "sl": pos.sl,
                 "tp": pos.tp,
                 "profit": pos.profit,
-            })
+            }
+            for pos in result
+        ]
+        _last_positions_by_account[acct_name] = acct_positions
+        positions.extend(acct_positions)
     return positions
 
 
