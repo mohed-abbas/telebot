@@ -407,6 +407,124 @@ async def test_zone_watch_does_not_cascade_when_stage1_still_awaiting(
     assert row["status"] == "awaiting_zone"
 
 
+async def _set_signal_targets(signal_id: int, sl: float, tp: float) -> None:
+    """Patch the conftest seeded_signal row with SL/TP for target-cascade tests."""
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE signals SET sl=$1, tp=$2 WHERE id=$3",
+            sl, tp, signal_id,
+        )
+
+
+async def test_zone_watch_cancels_pending_stages_when_price_reaches_tp(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector,
+    executor_fixture, caplog,
+):
+    """Price-based cascade: BUY signal, bid reaches signals.tp → unfilled
+    stages flip to 'cancelled_target_reached'.
+    """
+    sid = seeded_signal
+    await _set_signal_targets(sid, sl=2030.0, tp=2060.0)
+    # Live bid AT/ABOVE TP (and above stage 2's band — exclude band-fire path).
+    priced_connector._prices = {"XAUUSD": (2060.5, 2060.7)}
+    # Stage 1 still alive on MT5 — D-16 must NOT be the one cancelling.
+    priced_connector._fake_positions[666001] = Position(
+        ticket=666001, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.1, sl=2030.0, tp=2060.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        band_low=2040.0, band_high=2040.1,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=666001,
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=2, account_name=seeded_staged_account,
+        band_low=2042.0, band_high=2043.0,
+        mt5_comment=f"telebot-{sid}-s2", status="awaiting_zone",
+    )
+
+    import logging as _lg
+    with caplog.at_level(_lg.INFO):
+        await _run_one_zone_watch_tick(executor_fixture)
+
+    row = await db.get_stage_by_comment(f"telebot-{sid}-s2")
+    assert row["status"] == "cancelled_target_reached"
+    assert any("target cascade" in rec.message and "tp_reached" in rec.message
+               for rec in caplog.records)
+
+
+async def test_zone_watch_cancels_pending_stages_when_price_reaches_sl(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector,
+    executor_fixture, caplog,
+):
+    """Price-based cascade: BUY signal, bid drops to/below signals.sl →
+    unfilled stages flip to 'cancelled_target_reached'.
+    """
+    sid = seeded_signal
+    await _set_signal_targets(sid, sl=2030.0, tp=2060.0)
+    priced_connector._prices = {"XAUUSD": (2029.5, 2029.7)}
+    priced_connector._fake_positions[666101] = Position(
+        ticket=666101, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.1, sl=2030.0, tp=2060.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        band_low=2040.0, band_high=2040.1,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=666101,
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=2, account_name=seeded_staged_account,
+        band_low=2042.0, band_high=2043.0,
+        mt5_comment=f"telebot-{sid}-s2", status="awaiting_zone",
+    )
+
+    import logging as _lg
+    with caplog.at_level(_lg.INFO):
+        await _run_one_zone_watch_tick(executor_fixture)
+
+    row = await db.get_stage_by_comment(f"telebot-{sid}-s2")
+    assert row["status"] == "cancelled_target_reached"
+    assert any("target cascade" in rec.message and "sl_reached" in rec.message
+               for rec in caplog.records)
+
+
+async def test_zone_watch_does_not_cancel_when_price_between_sl_and_tp(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector,
+    executor_fixture,
+):
+    """Negative: price still inside the (sl, tp) corridor → no cascade.
+
+    Stage 2's band sits ABOVE current price so the band-fire path also
+    refuses to fire. The stage must remain awaiting_zone.
+    """
+    sid = seeded_signal
+    await _set_signal_targets(sid, sl=2030.0, tp=2060.0)
+    # Bid sits between SL and TP, and below stage 2's band.
+    priced_connector._prices = {"XAUUSD": (2045.0, 2045.2)}
+    priced_connector._fake_positions[666201] = Position(
+        ticket=666201, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.1, sl=2030.0, tp=2060.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        band_low=2040.0, band_high=2040.1,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=666201,
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=2, account_name=seeded_staged_account,
+        band_low=2050.0, band_high=2051.0,
+        mt5_comment=f"telebot-{sid}-s2", status="awaiting_zone",
+    )
+
+    await _run_one_zone_watch_tick(executor_fixture)
+
+    row = await db.get_stage_by_comment(f"telebot-{sid}-s2")
+    assert row["status"] == "awaiting_zone"
+
+
 async def test_emergency_close_drains_staged_before_positions(
     db_pool, seeded_staged_account, seeded_signal, priced_connector, executor_fixture,
 ):
