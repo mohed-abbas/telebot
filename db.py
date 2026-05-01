@@ -1100,6 +1100,34 @@ async def cancel_unfilled_stages_for_signal(
     return int(result.split()[-1]) if result.startswith("UPDATE") else 0
 
 
+async def cancel_unfilled_stages_target_reached(
+    signal_id: int, reason: str,
+) -> int:
+    """Price-based cascade — cancels unfilled stages once live price has
+    reached the signal's target_tp or sl. Faster than D-16 (broker-independent)
+    and complements it. `reason` carries which level fired
+    ('tp_reached' or 'sl_reached').
+    """
+    result = await _pool.execute(
+        "UPDATE staged_entries "
+        "SET status='cancelled_target_reached', cancelled_reason=$1 "
+        "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
+        reason, signal_id,
+    )
+    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+
+
+async def get_signal_targets(signal_id: int) -> dict | None:
+    """Fetch the price-based exit levels of a signal for cascade decisions.
+    Returns {direction, sl, tp} or None.
+    """
+    row = await _pool.fetchrow(
+        "SELECT direction, sl, tp FROM signals WHERE id=$1",
+        signal_id,
+    )
+    return dict(row) if row else None
+
+
 async def get_recently_resolved_stages(limit: int = 50) -> list[dict]:
     """For /staged 'Recently resolved' section (D-36)."""
     rows = await _pool.fetch(
@@ -1107,7 +1135,8 @@ async def get_recently_resolved_stages(limit: int = 50) -> list[dict]:
         "status, cancelled_reason, created_at, filled_at "
         "FROM staged_entries "
         "WHERE status IN ('filled','cancelled_by_kill_switch',"
-        "'cancelled_stage1_closed','abandoned_reconnect','failed','capped') "
+        "'cancelled_stage1_closed','cancelled_target_reached',"
+        "'abandoned_reconnect','failed','capped') "
         "ORDER BY COALESCE(filled_at, created_at) DESC LIMIT $1",
         limit,
     )
