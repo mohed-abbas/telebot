@@ -692,7 +692,7 @@ class TradeManager:
         # No jitter for fixed_lot — operator-configured size is explicit.
         if snapshot is not None and snapshot.risk_mode == "fixed_lot":
             max_lot = snapshot.max_lot_size
-            lot_size = max(0.01, min(stage_lot_size(snapshot), max_lot))
+            lot_size = round(max(0.01, min(stage_lot_size(snapshot), max_lot)), 2)
         else:
             acct_info = await connector.get_account_info()
             if acct_info is None:
