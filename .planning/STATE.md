@@ -125,9 +125,10 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260330-shy | Optimize mt5-bridge and telebot Docker images | 2026-03-30 | 892de47 | [260330-shy-optimize-mt5-bridge-and-telebot-docker-i](./quick/260330-shy-optimize-mt5-bridge-and-telebot-docker-i/) |
 | 260501-i7u | Fix XAUUSD pip-size and add fixed_lot order branch | 2026-05-01 | 0ad60c3 | [260501-i7u-fix-xauusd-pip-size-and-add-fixed-lot-or](./quick/260501-i7u-fix-xauusd-pip-size-and-add-fixed-lot-or/) |
+| 260501-mrw | Align stage-1 SL+TP with correlated follow-up signal | 2026-05-01 | 08477cf | [260501-mrw-align-stage-1-sl-tp-with-correlated-foll](./quick/260501-mrw-align-stage-1-sl-tp-with-correlated-foll/) |
 
 ## Session Continuity
 
-Last activity: 2026-05-01 — Quick task 260501-i7u: pip-size + fixed_lot fix (awaiting live MT5 verification)
-Resume file: .planning/quick/260501-i7u-fix-xauusd-pip-size-and-add-fixed-lot-or/260501-i7u-SUMMARY.md
-Next action: Operator runs live UAT on Vantage Demo-10k (text-only signal + fixed_lot=0.04 trade)
+Last activity: 2026-05-01 — Quick task 260501-mrw: stage-1 SL/TP alignment on correlated follow-up (awaiting live MT5 verification)
+Resume file: .planning/quick/260501-mrw-align-stage-1-sl-tp-with-correlated-foll/260501-mrw-SUMMARY.md
+Next action: Operator runs live UAT on Vantage Demo-10k (text-only → structured follow-up; confirm stage-1 SL+TP both update)
