@@ -604,22 +604,30 @@ class TradeManager:
             )
 
         # ── Calculate lot size ──────────────────────────────────────────
-        acct_info = await connector.get_account_info()
-        if acct_info is None:
-            return {"account": name, "status": "failed", "reason": "Cannot get account info"}
-
         entry_for_calc = current_price if use_market else limit_price
         sl_distance = calculate_sl_distance(entry_for_calc, signal.sl)
-        # Phase 5: effective risk/lot caps come from SettingsStore when attached.
-        risk_pct, max_lot, _ = _effective(self, acct)
-        lot_size = calculate_lot_size(
-            account_balance=acct_info.balance,
-            risk_percent=risk_pct,
-            sl_distance=sl_distance,
-            max_lot_size=max_lot,
-            jitter_percent=self.cfg.lot_jitter_percent,
-            symbol=signal.symbol,
-        )
+
+        # D-15 / Bug #2: fixed_lot mode bypasses percent-of-balance math entirely.
+        # snapshot.risk_value carries the operator-configured total lot; stage_lot_size
+        # produces the per-stage slice. Cap at max_lot_size, floor at 0.01.
+        # No jitter for fixed_lot — operator-configured size is explicit.
+        if snapshot is not None and snapshot.risk_mode == "fixed_lot":
+            max_lot = snapshot.max_lot_size
+            lot_size = max(0.01, min(stage_lot_size(snapshot), max_lot))
+        else:
+            acct_info = await connector.get_account_info()
+            if acct_info is None:
+                return {"account": name, "status": "failed", "reason": "Cannot get account info"}
+            # Phase 5: effective risk/lot caps come from SettingsStore when attached.
+            risk_pct, max_lot, _ = _effective(self, acct)
+            lot_size = calculate_lot_size(
+                account_balance=acct_info.balance,
+                risk_percent=risk_pct,
+                sl_distance=sl_distance,
+                max_lot_size=max_lot,
+                jitter_percent=self.cfg.lot_jitter_percent,
+                symbol=signal.symbol,
+            )
 
         if lot_size <= 0:
             return {"account": name, "status": "failed", "reason": "Calculated lot size is 0"}

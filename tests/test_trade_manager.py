@@ -222,3 +222,94 @@ async def test_fixed_lot_mode_uses_accountconfig_risk_percent(
 
     risk_pct, _, _ = _effective(tm, acct)
     assert risk_pct == 1.0, "fixed_lot mode falls back to AccountConfig.risk_percent"
+
+
+# ── Bug #2 regression: fixed_lot must reach MT5 ─────────────────────────────
+
+from dataclasses import dataclass
+from unittest.mock import AsyncMock, MagicMock
+
+
+@dataclass
+class _StubSnapshot:
+    """Minimal AccountSettings stand-in for fixed_lot branch tests."""
+    risk_mode: str
+    risk_value: float
+    max_stages: int
+    max_lot_size: float
+    default_sl_pips: int = 100
+
+
+class TestFixedLotBranch:
+    """Bug #2 regression: snapshot.risk_mode='fixed_lot' must route the
+    operator-configured volume to connector.open_order — _execute_open_on_account
+    previously ignored snapshot.risk_mode and always called calculate_lot_size().
+    """
+
+    @pytest.fixture
+    def signal(self):
+        return SignalAction(
+            type=SignalType.OPEN_TEXT_ONLY, symbol="XAUUSD", raw_text="t",
+            direction=Direction.BUY, entry_zone=None,
+            sl=2790.0, tps=[], target_tp=None,
+        )
+
+    @pytest.fixture(autouse=True)
+    def _patch_db(self, monkeypatch):
+        """Patch all db.* calls _execute_open_on_account touches so the path
+        runs to open_order without a real Postgres connection.
+
+        Kept minimal: only the symbols actually called along the success path
+        for a text-only BUY (entry_zone=None, no TPs, no limit order)."""
+        import trade_manager as tm_mod
+
+        # Read paths — return non-blocking values
+        monkeypatch.setattr(tm_mod.db, "get_daily_stat", AsyncMock(return_value=0))
+        monkeypatch.setattr(tm_mod.db, "get_stage_by_comment", AsyncMock(return_value=None))
+        # Write paths — no-op
+        monkeypatch.setattr(tm_mod.db, "increment_daily_stat", AsyncMock(return_value=None))
+        monkeypatch.setattr(tm_mod.db, "mark_signal_counted_today", AsyncMock(return_value=False))
+        monkeypatch.setattr(tm_mod.db, "update_stage_status", AsyncMock(return_value=None))
+        monkeypatch.setattr(tm_mod.db, "log_trade", AsyncMock(return_value=None))
+
+    async def _run(self, tm, signal, snapshot):
+        """Drive _execute_open_on_account once and return the open_order spy."""
+        connector = next(iter(tm.connectors.values()))
+        acct = next(iter(tm.accounts.values()))
+        # Text-only path: entry_zone is None → no auto-feed of simulated price.
+        # Seed one explicitly so connector.get_price() returns (bid, ask).
+        connector.set_simulated_price(signal.symbol, 2799.5, 2800.0)
+        spy = AsyncMock(return_value=MagicMock(
+            success=True, ticket=12345, price=2800.0, retcode=10009, comment="ok",
+        ))
+        connector.open_order = spy
+        await tm._execute_open_on_account(
+            signal, signal_id=1, acct=acct, connector=connector,
+            staged=True, stage_number=1, stage_row_id=None, snapshot=snapshot,
+        )
+        return spy
+
+    async def test_fixed_lot_mode_sends_configured_volume(self, tm, signal):
+        snapshot = _StubSnapshot(
+            risk_mode="fixed_lot", risk_value=0.04,
+            max_stages=1, max_lot_size=1.0,
+        )
+        spy = await self._run(tm, signal, snapshot)
+        assert spy.await_count == 1
+        assert spy.call_args.kwargs["volume"] == 0.04
+
+    async def test_fixed_lot_mode_caps_at_max_lot_size(self, tm, signal):
+        snapshot = _StubSnapshot(
+            risk_mode="fixed_lot", risk_value=2.0,
+            max_stages=1, max_lot_size=0.5,
+        )
+        spy = await self._run(tm, signal, snapshot)
+        assert spy.call_args.kwargs["volume"] == 0.5
+
+    async def test_fixed_lot_mode_floors_at_001(self, tm, signal):
+        snapshot = _StubSnapshot(
+            risk_mode="fixed_lot", risk_value=0.001,
+            max_stages=1, max_lot_size=1.0,
+        )
+        spy = await self._run(tm, signal, snapshot)
+        assert spy.call_args.kwargs["volume"] == 0.01
