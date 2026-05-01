@@ -392,6 +392,85 @@ class TradeManager:
                 snapshot = store.snapshot(acct_name) if store else None
             except KeyError:
                 snapshot = None
+
+            # ── Stage-1 SL/TP alignment (operator UAT 2026-05-01) ─────────────
+            # When the follow-up arrives, modify the already-open stage-1
+            # position so SL/TP match the follow-up's plan. Skip silently if
+            # stage 1 is missing, not yet filled, or has no broker ticket.
+            # Failure-isolated (D-17): a modify failure must not abort band
+            # creation/firing.
+            stage1 = await db.get_stage_by_signal_account(
+                paired_signal_id, acct_name, 1,
+            )
+            if (
+                stage1
+                and stage1.get("status") == "filled"
+                and stage1.get("mt5_ticket")
+            ):
+                new_sl = calculate_sl_with_jitter(
+                    signal.sl, self.cfg.sl_tp_jitter_points, signal.direction,
+                )
+                new_tp = 0.0
+                if signal.target_tp:
+                    new_tp = calculate_tp_with_jitter(
+                        signal.target_tp, self.cfg.sl_tp_jitter_points, signal.direction,
+                    )
+                try:
+                    modify_result = await connector.modify_position(
+                        stage1["mt5_ticket"], sl=new_sl, tp=new_tp,
+                    )
+                except Exception as exc:  # never let a connector error abort bands
+                    logger.warning(
+                        "%s: stage-1 align raised — continuing with bands: %s",
+                        acct_name, exc,
+                    )
+                    modify_result = OrderResult(
+                        success=False, ticket=stage1["mt5_ticket"], error=str(exc),
+                    )
+                if modify_result.success:
+                    logger.info(
+                        "%s: stage-1 aligned ticket=%d sl=%.5f tp=%.5f",
+                        acct_name, stage1["mt5_ticket"], new_sl, new_tp,
+                    )
+                    results.append({
+                        "account": acct_name,
+                        "status": "stage1_aligned",
+                        "ticket": stage1["mt5_ticket"],
+                        "sl": new_sl,
+                        "tp": new_tp,
+                    })
+                    try:
+                        await db.log_signal(
+                            raw_text=signal.raw_text or "",
+                            signal_type="modify_sl_tp",
+                            action_taken=f"stage1_aligned ticket={stage1['mt5_ticket']}",
+                            symbol=signal.symbol,
+                            direction=signal.direction.value,
+                            sl=new_sl,
+                            tp=new_tp,
+                            source_name=source_name,
+                        )
+                    except Exception as exc:  # audit row failure must not abort
+                        logger.warning(
+                            "%s: stage-1 align audit log failed: %s", acct_name, exc,
+                        )
+                else:
+                    logger.warning(
+                        "%s: stage-1 align FAILED ticket=%s reason=%s",
+                        acct_name, stage1.get("mt5_ticket"), modify_result.error,
+                    )
+                    results.append({
+                        "account": acct_name,
+                        "status": "stage1_align_failed",
+                        "ticket": stage1["mt5_ticket"],
+                        "reason": modify_result.error,
+                    })
+            else:
+                logger.debug(
+                    "%s: skipping stage-1 align (stage1=%s)",
+                    acct_name, stage1,
+                )
+
             max_stages = snapshot.max_stages if snapshot else 1
             bands = compute_bands(
                 signal.entry_zone[0], signal.entry_zone[1],

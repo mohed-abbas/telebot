@@ -1136,6 +1136,24 @@ async def get_stage_by_comment(mt5_comment: str) -> dict | None:
     return dict(row) if row else None
 
 
+async def get_stage_by_signal_account(
+    signal_id: int, account_name: str, stage_number: int,
+) -> dict | None:
+    """Multi-account-safe stage lookup — used by correlated-followup stage-1 alignment.
+
+    Returns the stage row for (signal_id, account_name, stage_number) or None.
+    Selected because mt5_comment UNIQUE makes get_stage_by_comment() collide
+    across accounts; this is the correct shape for per-account stage lookups.
+    """
+    row = await _pool.fetchrow(
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "status, mt5_ticket FROM staged_entries "
+        "WHERE signal_id=$1 AND account_name=$2 AND stage_number=$3",
+        signal_id, account_name, stage_number,
+    )
+    return dict(row) if row else None
+
+
 async def get_position_drilldown(ticket: int, account_name: str) -> dict | None:
     """Get position details for drilldown panel (DASH-03, D-05).
 
