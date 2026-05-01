@@ -1,6 +1,6 @@
 ---
 slug: settings-save-freezes-ui
-status: fixed-pending-verification
+status: resolved
 trigger: |
   After updating settings on /settings and clicking "Save settings", the page appears
   to register the save but the UI becomes completely frozen — no clicks work anywhere.
@@ -8,7 +8,9 @@ trigger: |
   default values, even though the new values DID persist in the database. Risky and
   annoying — operator cannot tell if save succeeded without a hard refresh + DB check.
 created: 2026-04-26T16:32:40Z
-updated: 2026-04-26T17:10:00Z
+updated: 2026-05-01
+resolved: 2026-05-01
+resolution: Operator verified in browser — settings save works, UI stays responsive, persisted values render on reload.
 ---
 
 # Debug: settings-save-freezes-ui
