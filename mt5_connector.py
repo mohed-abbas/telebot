@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
 
@@ -58,6 +59,26 @@ class AccountInfo:
     margin: float
     free_margin: float
     currency: str = "USD"
+
+
+@dataclass
+class Deal:
+    """A single MT5 history deal — closing leg of a position when entry==1."""
+
+    ticket: int
+    position_id: int
+    time: float          # MT5 server epoch seconds (broker timezone, treated as UTC)
+    entry: int           # 0=in, 1=out, 2=inout, 3=out_by
+    volume: float
+    price: float
+    profit: float
+    commission: float = 0.0
+    swap: float = 0.0
+    symbol: str = ""
+    comment: str = ""
+    magic: int = 0
+    type: int = 0
+    order: int = 0
 
 
 class MT5Connector:
@@ -126,6 +147,13 @@ class MT5Connector:
         raise NotImplementedError
 
     async def get_pending_orders(self, symbol: str | None = None) -> list[dict]:
+        raise NotImplementedError
+
+    async def get_history_deals(
+        self, since: datetime, until: datetime | None = None,
+    ) -> list[Deal]:
+        """Fetch broker deal history in [since, until]. Used by the bot's
+        history-sync loop to reconcile broker-side closes."""
         raise NotImplementedError
 
 
@@ -373,6 +401,13 @@ class DryRunConnector(MT5Connector):
         if symbol:
             orders = [o for o in orders if o["symbol"] == symbol]
         return orders
+
+    async def get_history_deals(
+        self, since: datetime, until: datetime | None = None,
+    ) -> list[Deal]:
+        """Dry-run path already updates trades via the on_close callback in
+        bot.py — the history-sync loop has nothing to reconcile here."""
+        return []
 
     # ── Background monitoring loop ─────────────────────────────────────
 
@@ -736,6 +771,35 @@ class RestApiConnector(MT5Connector):
         if data is None:
             return []
         return data.get("orders", [])
+
+    async def get_history_deals(
+        self, since: datetime, until: datetime | None = None,
+    ) -> list[Deal]:
+        params = {"from_ts": since.timestamp()}
+        if until is not None:
+            params["to_ts"] = until.timestamp()
+        data = await self._request("GET", "/api/v1/history/deals", params=params)
+        if data is None:
+            return []
+        return [
+            Deal(
+                ticket=d["ticket"],
+                position_id=d.get("position_id", 0),
+                time=float(d.get("time", 0)),
+                entry=int(d.get("entry", 0)),
+                volume=float(d.get("volume", 0.0)),
+                price=float(d.get("price", 0.0)),
+                profit=float(d.get("profit", 0.0)),
+                commission=float(d.get("commission", 0.0)),
+                swap=float(d.get("swap", 0.0)),
+                symbol=d.get("symbol", ""),
+                comment=d.get("comment", ""),
+                magic=int(d.get("magic", 0)),
+                type=int(d.get("type", 0)),
+                order=int(d.get("order", 0)),
+            )
+            for d in data.get("deals", [])
+        ]
 
 
 def create_connector(
