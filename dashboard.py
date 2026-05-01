@@ -406,6 +406,7 @@ async def signals_page(request: Request, user: str = Depends(_verify_auth)):
 _RESOLVED_STATUS_LABELS: dict[str, str] = {
     "cancelled_by_kill_switch": "Kill-switch drain",
     "cancelled_stage1_closed": "Stage 1 exited",
+    "cancelled_target_reached": "Target/SL reached",
     "abandoned_reconnect": "Abandoned (reconnect)",
     "failed": "Failed",
     "capped": "Capped",

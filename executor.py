@@ -447,7 +447,65 @@ class Executor:
                         if getattr(p, "comment", "")
                     }
 
+                    # Price-based cascade: if live price has reached the
+                    # signal's target_tp or sl, cancel ALL unfilled stages
+                    # for that signal_id and skip them in the band-fire loop.
+                    # Faster than D-16 (broker-independent) and complementary.
+                    cascaded_signal_ids: set[int] = set()
+                    seen_signal_ids: set[int] = set()
                     for stage in stages:
+                        sid_iter = stage["signal_id"]
+                        if sid_iter in seen_signal_ids:
+                            continue
+                        seen_signal_ids.add(sid_iter)
+                        try:
+                            targets = await db.get_signal_targets(sid_iter)
+                        except Exception as exc:
+                            logger.warning(
+                                "%s: target fetch failed signal_id=%d: %s",
+                                acct_name, sid_iter, exc,
+                            )
+                            continue
+                        if not targets:
+                            continue
+                        sig_dir = (targets.get("direction") or "").lower()
+                        sig_sl = float(targets.get("sl") or 0.0)
+                        sig_tp = float(targets.get("tp") or 0.0)
+                        hit_reason: str | None = None
+                        if sig_dir == "buy":
+                            if sig_tp > 0 and bid >= sig_tp:
+                                hit_reason = "tp_reached"
+                            elif sig_sl > 0 and bid <= sig_sl:
+                                hit_reason = "sl_reached"
+                        elif sig_dir == "sell":
+                            if sig_tp > 0 and ask <= sig_tp:
+                                hit_reason = "tp_reached"
+                            elif sig_sl > 0 and ask >= sig_sl:
+                                hit_reason = "sl_reached"
+                        if hit_reason is None:
+                            continue
+                        try:
+                            cancelled = await db.cancel_unfilled_stages_target_reached(
+                                sid_iter, reason=hit_reason,
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "%s: target-cascade DB write failed signal_id=%d: %s",
+                                acct_name, sid_iter, exc,
+                            )
+                            continue
+                        cascaded_signal_ids.add(sid_iter)
+                        logger.info(
+                            "%s: target cascade — signal_id=%d %s "
+                            "(bid=%.2f ask=%.2f sl=%.2f tp=%.2f); "
+                            "cancelled %d unfilled stage(s)",
+                            acct_name, sid_iter, hit_reason,
+                            bid, ask, sig_sl, sig_tp, cancelled,
+                        )
+
+                    for stage in stages:
+                        if stage["signal_id"] in cascaded_signal_ids:
+                            continue
                         # D-21 mid-tick re-check (before any work on this stage)
                         if self._trading_paused:
                             break
