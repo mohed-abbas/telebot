@@ -453,6 +453,48 @@ async def get_pending_orders(symbol: str | None = Query(None)):
     return _ok({"orders": result})
 
 
+@app.get("/api/v1/history/deals", dependencies=[Depends(verify_api_key)])
+async def get_history_deals(
+    from_ts: float = Query(..., description="Unix timestamp (UTC) inclusive"),
+    to_ts: float | None = Query(None, description="Unix timestamp (UTC) inclusive; defaults to now"),
+):
+    """Return MT5 deal history in the [from_ts, to_ts] window.
+
+    Wraps `mt5.history_deals_get(date_from, date_to)`. Used by the bot's
+    history-sync loop to reconcile broker-side closes (SL/TP hits) into
+    the trades table so analytics + history P&L show the right numbers.
+    """
+    from datetime import datetime, timezone
+    date_from = datetime.fromtimestamp(from_ts, tz=timezone.utc)
+    if to_ts is None:
+        date_to = datetime.now(tz=timezone.utc)
+    else:
+        date_to = datetime.fromtimestamp(to_ts, tz=timezone.utc)
+    deals = await _run(mt5.history_deals_get, date_from, date_to)
+    if deals is None:
+        deals = ()
+    result = [
+        {
+            "ticket": d.ticket,
+            "order": d.order,
+            "position_id": d.position_id,
+            "time": d.time,             # MT5 epoch seconds (server time)
+            "type": d.type,             # 0=buy, 1=sell, others=balance/credit/etc
+            "entry": d.entry,           # 0=in (open), 1=out (close), 2=inout, 3=out_by
+            "volume": d.volume,
+            "price": d.price,
+            "profit": d.profit,
+            "commission": d.commission,
+            "swap": d.swap,
+            "symbol": d.symbol,
+            "comment": d.comment,
+            "magic": d.magic,
+        }
+        for d in deals
+    ]
+    return _ok({"deals": result})
+
+
 @app.delete("/api/v1/pending-order/{ticket}", dependencies=[Depends(verify_api_key)])
 async def cancel_pending_order(ticket: int):
     request = {
