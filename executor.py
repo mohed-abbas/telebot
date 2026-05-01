@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 import db
 from models import AccountSettings, Direction, GlobalConfig, SignalAction, SignalType
 from notifier import Notifier
+from risk_calculator import GOLD_PIP_SIZE
 from trade_manager import Band, TradeManager, stage_is_in_zone_at_arrival
 
 logger = logging.getLogger(__name__)
@@ -598,9 +599,10 @@ class Executor:
         band_low = stage["band_low"]
         band_high = stage["band_high"]
 
-        # XAUUSD is the only v1.1-supported symbol; pip size hard-coded for parity
-        # with trade_manager._pip_size_for_symbol (gold = $0.01).
-        pip_size = 0.01 if symbol.upper() == "XAUUSD" else 0.0001
+        # XAUUSD is the only v1.1-supported symbol.
+        # Source of truth: risk_calculator.GOLD_PIP_SIZE (parity with
+        # trade_manager._pip_size_for_symbol; gold pip = $0.10 = 10 points).
+        pip_size = GOLD_PIP_SIZE if symbol.upper() == "XAUUSD" else 0.0001
         default_sl_pips = getattr(snapshot, "default_sl_pips", 100) if snapshot else 100
         if direction_str == "buy":
             entry_price = band_high

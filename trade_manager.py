@@ -118,9 +118,9 @@ def stage_lot_size(snapshot: AccountSettings) -> float:
 
 
 def _pip_size_for_symbol(symbol: str) -> float:
-    """Pip size by symbol — v1.1 only supports XAUUSD (1 pip = $0.01)."""
+    """Pip size by symbol — v1.1 only supports XAUUSD (1 pip = $0.10)."""
     if symbol.upper() == "XAUUSD":
-        return 0.01
+        return 0.10
     logger.warning("Non-XAUUSD symbol %s — defaulting pip size to 0.0001", symbol)
     return 0.0001
 

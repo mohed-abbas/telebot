@@ -1,8 +1,8 @@
 """Per-account lot sizing with humanization jitter.
 
-Gold (XAUUSD) specifics:
+Gold (XAUUSD) specifics (broker convention):
   - 1 standard lot = 100 troy ounces
-  - 1 pip = $0.01 price movement = $1.00 per standard lot
+  - 1 pip = $0.10 price movement = 10 points = $10.00 per standard lot
   - Lot size = risk_amount / (sl_distance_in_pips × pip_value_per_lot)
 """
 
@@ -15,10 +15,12 @@ from models import AccountConfig, Direction
 
 logger = logging.getLogger(__name__)
 
-# Gold: 1 pip = $0.01 movement, pip value = $1.00 per standard lot (100 oz)
-# So: $1 risk with 10 pip SL → 0.10 lots
-GOLD_PIP_VALUE_PER_LOT = 1.0  # $1 per pip per standard lot
-GOLD_PIP_SIZE = 0.01  # 1 pip = $0.01 movement in price
+# Gold (broker convention): 1 pip = $0.10 movement = 10 points;
+# pip value = $10.00 per standard lot (100 oz × $0.10/pip).
+# So: $100 risk with 10 pip SL → 1.0 lot; $100 risk with $10 SL distance
+#     → sl_pips = 10/0.10 = 100; lot = 100 / (100 * 10.0) = 0.10.
+GOLD_PIP_VALUE_PER_LOT = 10.0  # $10 per pip per standard lot (100 oz × $0.10)
+GOLD_PIP_SIZE = 0.10  # 1 pip = $0.10 price movement (= 10 points)
 
 
 def calculate_lot_size(

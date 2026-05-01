@@ -20,7 +20,7 @@ class TestCalculateLotSize:
             max_lot_size=5.0,
             jitter_percent=0.0,
         )
-        # risk_amount = 100, sl_pips = 10/0.01 = 1000, lot = 100 / (1000 * 1) = 0.10
+        # risk_amount = 100, sl_pips = 10/0.10 = 100, lot = 100 / (100 * 10.0) = 0.10
         assert lot == 0.10
 
     def test_6k_account(self):
@@ -32,7 +32,8 @@ class TestCalculateLotSize:
             max_lot_size=0.5,
             jitter_percent=0.0,
         )
-        # risk = 60, sl_pips = 800, lot = 60 / 800 = 0.075 → rounds to 0.07 or 0.08
+        # risk = 60, sl_pips = 8/0.10 = 80, lot = 60 / (80 * 10.0) = 0.075
+        # → rounds to 0.07 or 0.08
         assert lot in (0.07, 0.08)
 
     def test_25k_account(self):
@@ -44,7 +45,7 @@ class TestCalculateLotSize:
             max_lot_size=2.0,
             jitter_percent=0.0,
         )
-        # risk = 125, sl_pips = 600, lot = 125 / 600 = 0.2083 → 0.21
+        # risk = 125, sl_pips = 6/0.10 = 60, lot = 125 / (60 * 10.0) = 0.2083 → 0.21
         assert lot == 0.21
 
     def test_max_lot_cap(self):
@@ -134,3 +135,25 @@ class TestTPJitter:
             tp = calculate_tp_with_jitter(4973.0, 0.8, Direction.SELL)
             results.add(tp)
         assert len(results) > 1
+
+
+class TestPipSizeConstants:
+    """Pin gold pip-size constants to broker convention.
+    Regression guard against drift back to the v1.0 'point' value."""
+
+    def test_gold_pip_size_is_ten_cents(self):
+        from risk_calculator import GOLD_PIP_SIZE
+        assert GOLD_PIP_SIZE == 0.10
+
+    def test_gold_pip_value_per_lot_is_ten_dollars(self):
+        from risk_calculator import GOLD_PIP_VALUE_PER_LOT
+        assert GOLD_PIP_VALUE_PER_LOT == 10.0
+
+    def test_existing_invariant_holds_after_rescale(self):
+        """Both constants must move together to preserve the
+        $10k/1%/$10-SL → 0.10 lots invariant."""
+        lot = calculate_lot_size(
+            account_balance=10000, risk_percent=1.0,
+            sl_distance=10.0, max_lot_size=5.0, jitter_percent=0.0,
+        )
+        assert lot == 0.10
