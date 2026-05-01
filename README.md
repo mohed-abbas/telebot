@@ -248,12 +248,22 @@ The MT5 toolbar has an **Algo Trading** toggle (green ▶ when on). If it's off,
 ### Steps
 
 ```bash
-# On the VPS
+# On the VPS — first deploy
 git clone https://github.com/mohed-abbas/telebot.git && cd telebot
 scp user@local:.env .env          # or create .env manually
 docker compose up -d --build
 docker logs -f telebot
 ```
+
+**Subsequent deploys (avoid the Telegram session conflict):**
+
+```bash
+git pull
+docker compose down telebot       # stop the old container FIRST
+docker compose up -d --build telebot
+```
+
+Always `down` before `up --build`. Skipping the `down` step can briefly run two containers with the same `TG_SESSION` against Telegram, which permanently invalidates the session (Telethon's `AuthKeyDuplicatedError`). See [`docs/issues-solved.md`](docs/issues-solved.md) Issue #16 for full recovery if it happens.
 
 The stack auto-restarts on crashes and host reboots (`restart: unless-stopped`).
 
@@ -274,7 +284,7 @@ The stack auto-restarts on crashes and host reboots (`restart: unless-stopped`).
 
 | Command                         | Purpose                                     |
 | ------------------------------- | ------------------------------------------- |
-| `docker compose up -d --build`  | Start or rebuild the bot                    |
+| `docker compose down telebot && docker compose up -d --build telebot` | Safe rebuild — avoids Telegram `AuthKeyDuplicatedError` (Issue #16) |
 | `docker compose up -d`          | Recreate containers (picks up `.env` edits) |
 | `docker compose down`           | Stop the bot                                |
 | `docker logs -f telebot`        | Follow live logs                            |
@@ -413,6 +423,7 @@ For any production incident, start at [`docs/issues-solved.md`](docs/issues-solv
 | `FAILED — Cannot get current price`                         | [Issue #13](docs/issues-solved.md#issue-13-cannot-get-current-price-on-live-account--symbol-not-in-market-watch) |
 | `(-2, 'Unnamed arguments not allowed')` on every order      | [Issue #14](docs/issues-solved.md#issue-14-mt5-order_send--order_check-returns--2-unnamed-arguments-not-allowed) |
 | `retcode=10027 AutoTrading disabled by client`              | [Issue #15](docs/issues-solved.md#issue-15-retcode10027-autotrading-disabled-by-client)                          |
+| `AuthKeyDuplicatedError` after a deploy / restart loop      | [Issue #16](docs/issues-solved.md#issue-16-authkeyduplicatederror-after-docker-compose-up--d---build)            |
 | `IPC timeout` from NSSM-hosted REST server                  | [Issue #10](docs/issues-solved.md#issue-10-nssm-service--mt5-ipc-timeout-session-0-isolation)                    |
 | REST server returns `connected: false` despite `200 OK`     | [Issue #6](docs/issues-solved.md#issue-6-rest-api-connect-always-returns-false)                                  |
 

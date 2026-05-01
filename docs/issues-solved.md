@@ -373,6 +373,54 @@ The menu option persists across terminal restarts as long as the profile is save
 
 ---
 
+## Issue #16: `AuthKeyDuplicatedError` after `docker compose up -d --build`
+
+**Date:** 2026-05-01
+**Component:** Linux VPS deploy procedure
+**Symptom:** After running `git pull && docker compose up -d --build` on the VPS, the bot enters an infinite restart loop with:
+
+```
+telethon.errors.rpcerrorlist.AuthKeyDuplicatedError: The authorization key
+(session file) was used under two different IP addresses simultaneously,
+and can no longer be used.
+```
+
+**Root Cause:** `docker compose up --build` builds the new image while the OLD container is still running, then briefly starts both during the swap. For the few seconds both containers are alive, both connect to Telegram with the same `TG_SESSION` string. Telegram's MTProto layer detects the same auth key in use from what it perceives as two clients (different process IDs, possibly different ephemeral source ports) and **permanently invalidates** the auth key. The old container then crashes; the new one loops forever because no amount of restarting brings the dead key back.
+
+The same failure mode triggers if a second instance is running anywhere — a forgotten dev container locally, a second VPS pulling from the same `.env`, etc.
+
+**Fix (recovery):**
+
+1. Stop the restart loop:
+   ```bash
+   docker compose stop telebot
+   ```
+2. Confirm nothing else is running with the same `TG_SESSION` (dev machine, second VPS).
+3. Regenerate the session **locally** (needs interactive phone-code input):
+   ```bash
+   python generate_session.py
+   ```
+4. Update `TG_SESSION` in the VPS `.env` with the new string.
+5. Restart:
+   ```bash
+   docker compose up -d telebot
+   docker compose logs -f telebot
+   ```
+
+**Prevention (canonical deploy sequence):**
+
+```bash
+git pull
+docker compose down telebot       # stop the old container FIRST
+docker compose up -d --build telebot
+```
+
+`down` waits for the old container to fully exit before `up` starts the new one. No window where two containers hold the session at the same time. The README's "Subsequent deploys" section now reflects this sequence.
+
+**Files Changed:** `README.md` (deploy commands)
+
+---
+
 ## Summary
 
 | # | Issue | Severity | Component | Resolution |
@@ -392,3 +440,4 @@ The menu option persists across terminal restarts as long as the profile is save
 | 13 | Cannot get current price (live) | High | mt5-rest-server | Add symbol to MT5 Market Watch |
 | 14 | `order_send` returns `(-2, 'Unnamed arguments not allowed')` | Critical | mt5-rest-server | `_run` stops expanding empty kwargs dict |
 | 15 | `retcode=10027 AutoTrading disabled by client` | High | MT5 terminal | Enable Algo Trading in terminal toolbar |
+| 16 | `AuthKeyDuplicatedError` after `docker compose up --build` | Critical | Linux VPS deploy | Run `down` before `up --build` to avoid two-container session overlap |

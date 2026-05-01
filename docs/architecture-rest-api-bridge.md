@@ -172,6 +172,7 @@ Response envelope:
 | DELETE | `/api/v1/position/{ticket}` | `close_position()` — body: `{volume}` (optional) |
 | GET | `/api/v1/pending-orders?symbol=` | `get_pending_orders()` |
 | DELETE | `/api/v1/pending-order/{ticket}` | `cancel_pending()` |
+| GET | `/api/v1/history/deals?from_ts=&to_ts=` | `get_history_deals()` — returns `{deals: [...]}`, used by the bot's history-sync loop to reconcile broker-side closes (SL/TP hits) into the trades table |
 
 Error codes: `NOT_CONNECTED` (503), `SYMBOL_NOT_FOUND` (404), `POSITION_NOT_FOUND` (404), `ORDER_REJECTED` (422), `AUTH_FAILED` (401).
 
