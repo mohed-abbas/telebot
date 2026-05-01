@@ -18,7 +18,7 @@ import os
 import random
 import time
 from dataclasses import fields as _dc_fields
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import db
 from models import AccountSettings, Direction, GlobalConfig, SignalAction, SignalType
@@ -42,6 +42,10 @@ class Executor:
         self._heartbeat_task: asyncio.Task | None = None
         self._cleanup_task: asyncio.Task | None = None
         self._zone_watch_task: asyncio.Task | None = None  # Phase 6 D-11/D-14
+        self._history_sync_task: asyncio.Task | None = None
+        # Per-account high-water mark (UTC) of the last successful history-sync
+        # poll. Initialised lazily to (now - lookback_hours) on first iteration.
+        self._last_history_sync: dict[str, datetime] = {}
 
     def is_accepting_signals(self) -> bool:
         """Check if executor can process new signals."""
@@ -65,7 +69,10 @@ class Executor:
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self._zone_watch_task = asyncio.create_task(self._zone_watch_loop())
-        logger.info("Executor started — cleanup + heartbeat + zone-watch loops running")
+        self._history_sync_task = asyncio.create_task(self._history_sync_loop())
+        logger.info(
+            "Executor started — cleanup + heartbeat + zone-watch + history-sync loops running",
+        )
 
     async def stop(self) -> None:
         # Stop dry-run monitoring loops
@@ -77,7 +84,10 @@ class Executor:
         if self._price_simulator:
             await self._price_simulator.stop()
         # Stop background tasks
-        for task in (self._cleanup_task, self._heartbeat_task, self._zone_watch_task):
+        for task in (
+            self._cleanup_task, self._heartbeat_task, self._zone_watch_task,
+            self._history_sync_task,
+        ):
             if task:
                 task.cancel()
                 try:
@@ -380,6 +390,131 @@ class Executor:
             except Exception as exc:
                 logger.error("Cleanup loop error: %s", exc)
                 await asyncio.sleep(30)
+
+    # ── History sync (broker-side close reconciliation) ─────────────
+
+    # MT5 deal entry constant — DEAL_ENTRY_OUT (closing leg of a position).
+    # Hard-coded to avoid an import dependency on MetaTrader5 in the bot
+    # process, which only talks to MT5 via the REST server.
+    _DEAL_ENTRY_OUT = 1
+
+    async def _history_sync_loop(self) -> None:
+        """Reconcile broker-side position closes into the trades table.
+
+        For each connected account, every `history_sync_interval_seconds`:
+          - fetch deal history since the per-account high-water mark
+            (initialised to now - `history_sync_lookback_hours` on first run)
+          - for each closing deal whose position_id maps to a status='opened'
+            trade in our DB, call db.update_trade_close(...) with the deal's
+            profit (gross broker P&L; commission and swap excluded for now)
+          - advance the high-water mark to max(deal.time) + 1s
+
+        This is the path that fixes /analytics zeros and /history empty P&L
+        for trades the broker closed via SL/TP or via manual MT5 action.
+        """
+        interval = max(5, int(self.cfg.history_sync_interval_seconds))
+        lookback = max(1, int(self.cfg.history_sync_lookback_hours))
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                if self._trading_paused:
+                    # Don't reconcile while drained — operator may be in the
+                    # middle of inspecting state. Resume picks it up next tick.
+                    continue
+                for acct_name, connector in self.tm.connectors.items():
+                    if acct_name in self._reconnecting:
+                        continue
+                    if not connector.connected:
+                        continue
+                    try:
+                        await self._sync_history_for_account(
+                            acct_name, connector, lookback,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "%s: history-sync iteration failed: %s",
+                            acct_name, exc,
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("History-sync loop error: %s", exc)
+
+    async def _sync_history_for_account(
+        self, acct_name: str, connector, lookback_hours: int,
+    ) -> None:
+        """One iteration of the history sync for a single account."""
+        now = datetime.now(timezone.utc)
+        since = self._last_history_sync.get(acct_name)
+        if since is None:
+            since = now - timedelta(hours=lookback_hours)
+
+        try:
+            open_tickets = await db.get_open_trade_tickets_for_account(acct_name)
+        except Exception as exc:
+            logger.warning(
+                "%s: history-sync DB lookup failed: %s", acct_name, exc,
+            )
+            return
+        if not open_tickets:
+            # Nothing to reconcile; still advance the watermark so the next
+            # iteration doesn't re-scan a growing window.
+            self._last_history_sync[acct_name] = now
+            return
+
+        try:
+            deals = await connector.get_history_deals(since, now)
+        except Exception as exc:
+            logger.warning(
+                "%s: history-sync REST call failed: %s", acct_name, exc,
+            )
+            return
+
+        if not deals:
+            self._last_history_sync[acct_name] = now
+            return
+
+        max_deal_time = 0.0
+        reconciled = 0
+        for deal in deals:
+            if deal.time > max_deal_time:
+                max_deal_time = deal.time
+            if deal.entry != self._DEAL_ENTRY_OUT:
+                continue
+            ticket = deal.position_id
+            if ticket not in open_tickets:
+                continue
+            try:
+                await db.update_trade_close(
+                    ticket=ticket,
+                    account_name=acct_name,
+                    pnl=deal.profit,
+                    close_price=deal.price,
+                )
+            except Exception as exc:
+                logger.error(
+                    "%s: update_trade_close ticket=%d failed: %s",
+                    acct_name, ticket, exc,
+                )
+                continue
+            reconciled += 1
+            logger.info(
+                "%s: history-sync reconciled ticket=%d pnl=%+.2f close=%.2f",
+                acct_name, ticket, deal.profit, deal.price,
+            )
+
+        if max_deal_time > 0:
+            # +1s so we don't re-process the boundary deal next tick.
+            advanced = datetime.fromtimestamp(max_deal_time + 1.0, tz=timezone.utc)
+            self._last_history_sync[acct_name] = max(advanced, since)
+        else:
+            self._last_history_sync[acct_name] = now
+
+        if reconciled:
+            logger.info(
+                "%s: history-sync — %d trade(s) reconciled this tick",
+                acct_name, reconciled,
+            )
 
     # ── Phase 6 Zone Watch (D-11/D-14) ───────────────────────────────
 
