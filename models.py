@@ -138,6 +138,8 @@ class GlobalConfig:
     sl_tp_jitter_points: float = 0.8
     correlation_window_seconds: int = 600  # Phase 6 D-04 — orphan/follow-up pairing window
     signal_max_age_minutes: int = 30       # Phase 6 Research Q2 — reconcile cutoff for abandoned stages
+    history_sync_interval_seconds: int = 60  # cadence for the history-deals reconcile loop
+    history_sync_lookback_hours: int = 48    # cold-start backfill window for closed-deal reconcile
 
 
 @dataclass

@@ -341,6 +341,19 @@ async def update_trade_close(ticket: int, account_name: str, pnl: float, close_p
     )
 
 
+async def get_open_trade_tickets_for_account(account_name: str) -> set[int]:
+    """Return the set of ticket numbers that are still status='opened' for
+    this account. Used by the history-sync loop to filter the broker deal
+    stream — we only care about deals whose position_id maps to one of OUR
+    open trades.
+    """
+    rows = await _pool.fetch(
+        "SELECT ticket FROM trades WHERE account_name=$1 AND status='opened'",
+        account_name,
+    )
+    return {r["ticket"] for r in rows if r["ticket"]}
+
+
 # ── Daily stats ──────────────────────────────────────────────────────
 
 
