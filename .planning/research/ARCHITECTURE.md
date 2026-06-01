@@ -1,552 +1,512 @@
-# Architecture Research — v1.1 Integration
+# Architecture Research — v1.2 React/Vite SPA ↔ FastAPI Integration
 
-**Domain:** MT5 trade-execution bot (FastAPI + HTMX dashboard, Telethon handler, multi-account MT5 bridge)
-**Researched:** 2026-04-18
-**Confidence:** HIGH (read of existing `executor.py`, `trade_manager.py`, `bot.py`, `dashboard.py`, `db.py`, `models.py`, `risk_calculator.py`, `templates/`, `accounts.json`)
-**Scope:** How the four v1.1 features (staged entries, per-account settings in DB, dashboard redesign, login form) slot into the existing single-process ASGI topology without regressing kill switch, reconnect/position-sync, or daily limits.
-
----
-
-## 1. Existing Architecture (v1.0) — the substrate we're extending
-
-### System overview
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                      Single Python process (bot.py)                   │
-│                      asyncio event loop                               │
-├──────────────────────────────────────────────────────────────────────┤
-│  Telethon                 FastAPI (uvicorn on same loop)             │
-│  NewMessage handler       Dashboard routes (Jinja + HTMX + SSE)      │
-│     │                         │                                       │
-│     │ parse_signal()           │                                      │
-│     ▼                          ▼                                      │
-│  signal_parser        dashboard._verify_auth (HTTPBasic)             │
-│     │                          │                                      │
-│     └──────────┬───────────────┘                                     │
-│                ▼                                                      │
-│          Executor (owns lifecycle)                                   │
-│          ├─ is_accepting_signals()  (gate: _trading_paused,          │
-│          │                           _reconnecting set)              │
-│          ├─ execute_signal()        (shuffle + stagger + per-acct)   │
-│          ├─ _heartbeat_loop         (30s, MT5 ping → reconnect)      │
-│          ├─ _cleanup_loop           (60s, expired pending orders)    │
-│          ├─ _reconnect_account      (backoff + _sync_positions)      │
-│          └─ emergency_close         (kill switch)                    │
-│                │                                                      │
-│                ▼                                                      │
-│          TradeManager (handle_signal → open/close/modify)            │
-│          ├─ self.connectors: dict[name → MT5Connector]               │
-│          ├─ self.accounts:   dict[name → AccountConfig]              │
-│          └─ self.cfg:        GlobalConfig                            │
-│                │                                                      │
-│                ▼                                                      │
-│          MT5Connector per account (gRPC or direct) ───► MT5 bridge   │
-├──────────────────────────────────────────────────────────────────────┤
-│  PostgreSQL via asyncpg pool (db.py module-global _pool)             │
-│    signals · trades · daily_stats · pending_orders                   │
-└──────────────────────────────────────────────────────────────────────┘
-```
-
-### Key invariants v1.1 must not break
-
-1. **Single shared event loop.** Dashboard is launched inside `bot.py:main` as `asyncio.create_task(uvicorn.Server(…).serve())`. The Telethon handler, all Executor background tasks, and all dashboard routes share state via direct object references (`_executor`, `_notifier` in `dashboard.py:27-30`). No IPC, no queue. New v1.1 components must stay in-process for the same reason.
-2. **Signal-gate triad.** `Executor.is_accepting_signals()` returns False if `_trading_paused` OR all connectors are in `_reconnecting`. This is the single source of truth for "should we execute?" and it's called in `bot.py:308` **before** `executor.execute_signal`. Anything that opens positions — including staged-entry follow-ups — MUST pass through this gate.
-3. **Daily-limit counters live in Postgres, not memory.** `daily_stats` is read per-account per-execution (`trade_manager.py:168-175`). Staged follow-ups are new executions and must increment the same counters and respect the same ceilings.
-4. **Position sync after reconnect (REL-02).** `Executor._sync_positions` runs inside `_reconnect_account` before removing the account from `_reconnecting`. Any v1.1 state that tracks "what the bot thinks is open" (zone watchers, staged-entry progress) must either be sync-reconcilable from MT5 or gracefully tolerate being told "reality differs."
-5. **In-memory config.** `TradeManager.accounts` is a dict built once at startup from `accounts.json` (`bot.py:94-108`). Today it's immutable at runtime. v1.1 introduces mutation, which is a behavioral change even if the dataclass layout is preserved.
-6. **CSRF model is HTMX-header based.** `_verify_csrf` accepts requests that carry `hx-request` (`dashboard.py:67-74`). Forms rendered outside the HTMX flow — notably an unauthenticated `POST /login` — need a new CSRF story.
+**Domain:** Single-operator live-trading control dashboard; SPA front-end over an existing in-process FastAPI app
+**Researched:** 2026-06-01
+**Confidence:** HIGH (grounded in the actual codebase; transport/auth patterns verified against TanStack Query + FastAPI docs)
 
 ---
 
-## 2. Component diff — what's new vs. modified vs. unchanged
+## TL;DR Recommendations
 
-| Area | Component | New / Modified / Unchanged | Notes |
-|------|-----------|----------------------------|-------|
-| DB schema | `account_settings` table | **New** | One row per `account_name`, overrides `accounts.json` |
-| DB schema | `staged_entries` table | **New** | Per-signal pending stages with zone + status |
-| DB schema | `signals`, `trades`, `daily_stats`, `pending_orders` | Unchanged | No column additions needed |
-| DB layer | `db.init_schema()` | **Modified** | Add two `CREATE TABLE IF NOT EXISTS` blocks |
-| DB layer | `db.get_account_settings()`, `db.upsert_account_settings()` | **New** helpers | Read/write `account_settings` |
-| DB layer | `db.create_staged_entry()`, `db.list_active_stages()`, `db.mark_stage_triggered()`, `db.cancel_stages_for_signal()`, `db.cancel_all_active_stages()` | **New** helpers | CRUD for staged entries |
-| Models | `AccountSettings` dataclass | **New** | `risk_mode`, `fixed_lot`, `max_stages`, `stage_allocation`, `max_open_trades`, `risk_percent`, `max_lot_size` (runtime-mutable copies of fields currently on `AccountConfig`) |
-| Models | `SignalAction` | Unchanged | Staged entries are derived at execution time, not a new signal type |
-| Models | `AccountConfig` | **Effectively frozen** | Fields stay for bootstrap; effective values read via `SettingsStore` |
-| Parser | `signal_parser` | Unchanged | Text-only signal handling is an execution change, not a parse change (verify in Phase 1 that "gold buy now" still parses to a valid `SignalAction`) |
-| Risk | `risk_calculator.calculate_lot_size` | **Modified (small)** | New branch: if settings says `risk_mode="fixed"`, return `min(fixed_lot, max_lot_size)` |
-| Executor | `_zone_watch_loop` | **New** background task | 5-10s cadence, polls price for each active stage, triggers follow-up executions. Launched in `start()`, cancelled in `stop()` alongside heartbeat/cleanup |
-| Executor | `_trigger_stage` | **New** helper | Mirrors `_execute_single_account` but uses a pre-computed stage lot and the same daily-limit / reconnect gates |
-| Executor | `is_accepting_signals` | Unchanged | Already correct — zone watcher calls it per-stage too |
-| Executor | `emergency_close` | **Modified** | After setting `_trading_paused`, call `db.cancel_all_active_stages()` BEFORE closing positions so the watcher can't race |
-| TradeManager | `handle_signal` | **Modified** | On OPEN success, if signal qualifies for staging (see §3), persist follow-up stages before returning |
-| TradeManager | `_execute_open_on_account` | **Modified (lot sizing)** | Replace direct `acct.risk_percent` / `acct.max_lot_size` reads with a call to `settings_store.effective(name)` |
-| TradeManager | daily-limit checks | Unchanged | They already hit the DB, so runtime settings changes propagate naturally |
-| Settings layer | `SettingsStore` class | **New** | In-process cache of `AccountSettings` by account, write-through to `account_settings` table, with `.reload(name)` and `.effective(name)` |
-| Dashboard | `/login`, `/logout` routes | **New** | GET renders form; POST validates `argon2-cffi`; sets signed session cookie via `SessionMiddleware` |
-| Dashboard | `_verify_auth` | **Modified** | Read `request.session["user"]` instead of HTTP Basic; `RedirectResponse("/login?next=…")` on miss |
-| Dashboard | `_verify_csrf` | **Modified** | Keep HTMX header check for existing routes; for `/login` POST, use a one-shot hidden token (`session["csrf_pending"]`) generated on GET |
-| Dashboard | `/api/settings/{account}` | **New** routes | GET partial row, POST form update → writes DB, calls `settings_store.reload(name)` |
-| Dashboard | `/settings` page | **Modified (rewrite)** | Render editable forms (risk mode toggle, fixed-lot input, max-stages, max-open-trades) instead of the read-only table at `templates/settings.html:36-82` |
-| Dashboard | existing pages | **Modified (UI-only)** | Swap Tailwind Play CDN + handwritten CSS for Basecoat classes + built `app.css`; logic unchanged |
-| Dashboard | `/partials/stages`, `/staged` page | **New** | Live list of active/triggered/cancelled/expired stages |
-| Dashboard | SSE `/stream` | **Modified** | Add `staged_entries` payload alongside `positions` and `accounts` |
-| Templates | `base.html` | **Modified** | Drop Play CDN; link built `/static/css/app.css`; conditional Basecoat JS bundle |
-| Templates | `login.html` | **New** | Login form using Basecoat form primitives |
-| Templates | `settings.html` | **Modified** | Editable; per-account form with HTMX `hx-post` |
-| Templates | `staged.html` + partial | **New** | Active-stages overview page |
-| Config | `settings` (config.py) | **Modified** | Add `DASHBOARD_PASS_HASH`, `SESSION_SECRET`, `SESSION_MAX_AGE`, `ZONE_WATCH_INTERVAL_SECONDS`; keep `DASHBOARD_PASS` as deprecated fallback for one release |
-| bot.py | `main()` / `_setup_trading` | **Modified** | Build `SettingsStore` after `db.init_db()` and before `TradeManager(...)`; pass to both `TradeManager` and `Executor`; pass to `init_dashboard()` |
-| Docker | Tailwind CLI build step | **New** | Per STACK.md §2 — compile `static/css/app.css` at image build |
-| Repo hygiene | `drizzle.config.json` | **Delete** | Stray, unrelated (per STACK.md) |
+1. **JSON API:** Mount a new `APIRouter` at `/api/v2`, kept in a new `api/` package separate from `dashboard.py`. Reuse the existing `_get_all_positions()` / `_get_accounts_overview()` / `db.*` helpers verbatim — wrap their dict output in Pydantic v2 response models. **Zero imports change in `executor.py` / `trade_manager.py` / `db.py` / `mt5_connector.py`.**
+2. **Auth:** Keep the `telebot_session` httpOnly cookie. Login becomes `POST /api/v2/auth/login` returning JSON + `Set-Cookie`. SPA detects auth failure via a **global TanStack Query `QueryCache.onError` 401 handler → redirect to login**. CSRF stays double-submit but the cookie becomes **readable (`httponly=false`) so the SPA can echo it in an `X-CSRF-Token` header**.
+3. **Same-origin nginx:** `/api/` → uvicorn (JSON). `/app/` → SPA static bundle with `try_files … /app/index.html` fallback. `/` and legacy page paths (`/overview`, `/positions`, …) → uvicorn (legacy HTMX) **until each is decommissioned**. No CORS, no second origin.
+4. **Live data:** **Keep polling via TanStack Query `refetchInterval: 3000`.** Do not introduce WebSocket. SSE is optional and low-value for one operator; polling is simpler, survives reconnects for free, and the 3s cadence already matches the current UX. (See rationale.)
+5. **Build/deploy:** Add a **Node build stage** to the existing multi-stage Dockerfile that runs `vite build` and emits to `/app/static/app/`. Serve that directory. Cut over **page-by-page** by flipping the operator's entry/nav per page from HTMX → SPA. Analytics first (read-only pilot).
 
 ---
 
-## 3. Staged-entry data flow (the load-bearing feature)
-
-### Staging decision
-
-A signal qualifies for staging when **all three** hold:
-
-1. `signal.type == SignalType.OPEN`
-2. `signal.entry_zone` is a real range (`zone_high > zone_low + ε`). A text-only "buy now" without a zone does NOT stage — it executes once, market, done.
-3. The account's `AccountSettings.max_stages > 1`.
-
-Staging produces `max_stages` executions total (not `max_stages + 1`). The first stage fills immediately (either market, if price is already in-zone, or a limit at zone-mid under existing v1.0 logic — unchanged). Stages 2..N are persisted with target bands derived from the zone and filled when price re-enters those bands.
-
-### Stage allocation
-
-Per STACK.md §4: `AccountSettings.stage_allocation: list[float]` summing to 1.0 (e.g. `[0.4, 0.3, 0.3]`). Lot for stage `k` = `full_lot × stage_allocation[k]`, where `full_lot` is computed once from current balance and SL distance (same `calculate_lot_size` call used today).
-
-### Happy-path flow
+## Current System (grounded)
 
 ```
-Telegram signal "XAU buy 2340-2345 sl 2330 tp 2360"
-        │
-        ▼
-bot.py handler → parse_signal → SignalAction(type=OPEN, zone=(2340,2345),…)
-        │
-        ▼
-Executor.is_accepting_signals() ──► True
-        │
-        ▼
-Executor.execute_signal(signal)
-        │
-        ├─► per account (shuffled, staggered):
-        │     TradeManager._execute_open_on_account(signal, account)
-        │          ├─ daily-limit & duplicate checks (unchanged)
-        │          ├─ get_price, determine_order_type (unchanged)
-        │          ├─ settings_store.effective(account) → AccountSettings
-        │          ├─ full_lot = calculate_lot_size(...)  # honors risk_mode
-        │          ├─ IF max_stages > 1 AND zone is real:
-        │          │     stage_lots = [full_lot * w for w in stage_allocation]
-        │          │     open market/limit for stage_lots[0] as today
-        │          │     INSERT staged_entries rows for k=1..max_stages-1
-        │          │         status='active', target_zone_low/high per band
-        │          │ELSE:
-        │          │     open as v1.0 (single stage, full_lot)
-        │          └─ returns result dict (existing shape)
-        │
-        ▼
-Executor._zone_watch_loop (runs independently, every 5-10s)
-        │
-        ├─ db.list_active_stages()
-        ├─ group by (account, symbol), get_price once per pair
-        ├─ for each active stage:
-        │    IF self._trading_paused → continue
-        │    IF account in self._reconnecting → continue
-        │    IF current_price in [target_zone_low, target_zone_high]:
-        │         is_accepting_signals() re-check
-        │         daily-limit re-check (stages count toward the limit)
-        │         stale re-check (price already past TP1?)
-        │         Executor._trigger_stage(stage)  # opens the order
-        │         db.mark_stage_triggered(stage.id, ticket)
-        └─ IF parent trade's TP1 already hit
-             → db.cancel_stages_for_signal(signal_id)
+                          ┌────────────── shared-nginx (proxy-net) ──────────────┐
+   Browser ──HTTPS──▶     │  location = /login   (rate-limited) ─┐                │
+                          │  location /          ────────────────┴─▶ telebot:8080 │
+                          └───────────────────────────────────────────────────────┘
+                                                                       │
+                                            ┌──────────────────────────┴───────────────┐
+                                            │  bot.py (asyncio main)                     │
+                                            │  └─ uvicorn.Server(dashboard.app)  ◀── SAME PROCESS
+                                            │       ├─ ~31 routes, mostly HTMLResponse    │
+                                            │       ├─ SessionMiddleware (telebot_session)│
+                                            │       ├─ Jinja2 templates/ + static/css     │
+                                            │       └─ imports executor, db, notifier ────┼──▶ TRADING CORE
+                                            └────────────────────────────────────────────┘     (executor.py,
+                                                          │                                      trade_manager.py,
+                                                          ▼                                      mt5_connector.py)
+                                            PostgreSQL (asyncpg, data-net)
+                                            MT5 REST bridge (separate FastAPI svc) — UNAFFECTED
 ```
 
-### Critical cross-cutting interactions
+**Critical facts the design must respect (from `dashboard.py`):**
 
-| Cross-cutting concern | Interaction with staged entries | Resolution |
-|-----------------------|--------------------------------|------------|
-| **Kill switch** | Watcher must not open new stages after `emergency_close` | In `Executor.emergency_close`, FIRST set `_trading_paused=True` (already done), THEN `db.cancel_all_active_stages()`, THEN close positions. Watcher's top-of-loop `if self._trading_paused: continue` is a second line of defense |
-| **Reconnect / position sync** | MT5 may already contain a stage that was opened by the watcher before disconnect, or a stage the watcher thinks opened but actually failed | After `_sync_positions`, reconcile: for each active stage on that account, if its last-known ticket appears in MT5 positions → mark `triggered`; if stage is marked `triggered` but ticket absent from positions → mark `reconciled_lost` and alert. Soft reconcile — don't re-open |
-| **Daily trade limit** | Stage triggers are real executions | `_trigger_stage` calls the same `get_daily_stat`/`increment_daily_stat` path. Counter is already shared |
-| **Daily server-message limit** | Each stage trigger sends an MT5 order → +1 server message | Same path increments `server_messages` |
-| **Duplicate-direction check** | `_execute_open_on_account` rejects a new OPEN if account already holds a same-direction position on the symbol | For stages we explicitly BYPASS this check — stages ARE additional positions by design. Gate the bypass on `stage_number > 1` |
-| **max_open_trades** | A 3-stage signal on an account with `max_open_trades=3` could fill all slots on one symbol | Enforce per-stage in `_trigger_stage`: if `len(positions) >= max_open_trades`, mark stage `skipped_capacity` and log. No silent cancel — dashboard surfaces it |
-| **Stale-signal re-check** | When a stage finally fills (minutes later), price may be past TP1 | `_trigger_stage` runs the same `_check_stale` as v1.0 |
-| **Stage expiry** | Zones can sit "active" forever if price never re-enters | Reuse v1.0 `limit_order_expiry_minutes` idea: `staged_entries.expires_at`. `_cleanup_loop` (already running every 60s) can co-own this — mark expired stages `expired` |
-| **Concurrent watcher + new signal** | Stage triggering at the same instant as a close signal on the same position | Per-account scoped temp `TradeManager` pattern from v1.0 `_execute_single_account` is preserved for stages — no shared-connector races |
-
-### DB schema additions
-
-```sql
-CREATE TABLE IF NOT EXISTS account_settings (
-    account_name TEXT PRIMARY KEY,
-    risk_mode TEXT NOT NULL DEFAULT 'percent',   -- 'percent' | 'fixed'
-    risk_percent DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-    fixed_lot DOUBLE PRECISION NOT NULL DEFAULT 0.01,
-    max_lot_size DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-    max_open_trades INTEGER NOT NULL DEFAULT 3,
-    max_stages INTEGER NOT NULL DEFAULT 1,
-    stage_allocation JSONB NOT NULL DEFAULT '[1.0]'::jsonb,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_by TEXT
-);
-
-CREATE TABLE IF NOT EXISTS staged_entries (
-    id SERIAL PRIMARY KEY,
-    signal_id INTEGER REFERENCES signals(id),
-    account_name TEXT NOT NULL,
-    symbol TEXT NOT NULL,
-    direction TEXT NOT NULL,
-    stage_number INTEGER NOT NULL,
-    total_stages INTEGER NOT NULL,
-    lot_size DOUBLE PRECISION NOT NULL,
-    target_zone_low DOUBLE PRECISION NOT NULL,
-    target_zone_high DOUBLE PRECISION NOT NULL,
-    sl DOUBLE PRECISION NOT NULL,
-    tp DOUBLE PRECISION,
-    status TEXT NOT NULL DEFAULT 'active',
-      -- 'active' | 'triggered' | 'cancelled' | 'expired' | 'skipped_capacity' | 'reconciled_lost'
-    triggered_at TIMESTAMPTZ,
-    triggered_ticket BIGINT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_staged_entries_active
-    ON staged_entries(status) WHERE status = 'active';
-CREATE INDEX IF NOT EXISTS idx_staged_entries_signal
-    ON staged_entries(signal_id);
-```
-
-Per STACK.md §5, stay on the hand-DDL pattern; defer alembic to v1.2.
+| Fact | Source | Implication |
+|------|--------|-------------|
+| Dashboard runs **in the same process** as the bot; `init_dashboard()` injects live `_executor`/`_notifier`/`_settings` | `dashboard.py:91`, `bot.py:409-420` | JSON routes can call the SAME live objects — no IPC, no second service. |
+| Auth = `request.session["user"]` via Starlette `SessionMiddleware`, cookie `telebot_session`, 30-day, `same_site=lax`, `https_only` config-driven | `dashboard.py:192-200`, `283` | SPA reuses this cookie verbatim. No token store needed. |
+| `_verify_auth` already branches: `/api/`-prefixed or `hx-request` → **401**; page routes → **303 redirect** | `dashboard.py:99-125` | The 401 branch is exactly what the SPA needs — reuse it. |
+| CSRF today = "POST must carry `HX-Request` header" (`_verify_csrf`) + login double-submit cookie `telebot_login_csrf` | `dashboard.py:128-135`, `142`, `237-245` | SPA can't send `HX-Request`; needs a real double-submit token instead. |
+| Computation already lives in helpers returning **plain dicts** (`_get_all_positions`, `_get_accounts_overview`, `_enrich_stage_for_ui`, all `db.get_*`) | `dashboard.py:1401-1510` etc. | JSON layer is a **serialization refactor**, not a logic rewrite. |
+| Mutations call `connector.close_position` / `modify_position` and `db.update_trade_close` directly | `dashboard.py:1049-1266` | These move into JSON routes **unchanged**; only the response shape (HTML→JSON) changes. |
+| SSE `/stream` exists (2s tick, emits pre-rendered HTML + JSON) | `dashboard.py:1339-1393` | The HTML-partial half dies with HTMX. JSON half could be repurposed, but polling is recommended instead. |
 
 ---
 
-## 4. Settings propagation — the cache-invalidation subproblem
-
-### Problem
-
-`TradeManager.accounts: dict[name → AccountConfig]` is built once at startup. v1.0 has no mutation path — "restart to change config" is the design. v1.1 introduces a dashboard form that must take effect immediately, including for the zone watcher's in-flight stages.
-
-### Solution: SettingsStore with write-through cache
+## Target System Overview
 
 ```
-Form POST /api/settings/{name}
-        │
-        ▼
-dashboard.update_settings(name, form)
-        │
-        ├─ validate (risk_percent in [0.1, 10], stage_allocation sums to 1.0, etc.)
-        ├─ db.upsert_account_settings(name, fields, updated_by=user)
-        └─ settings_store.reload(name)       # re-read row into in-memory dict
-                │
-                ▼
-          subsequent calls to settings_store.effective(name) see new values
+                ┌───────────────────── shared-nginx (proxy-net) ─────────────────────┐
+                │  location /api/        ─────────────────────────▶ telebot:8080      │  JSON API (/api/v2)
+                │  location = /login     (rate-limit) ────────────▶ telebot:8080      │  legacy login (until cut)
+   Browser ─────│  location /app/        ─▶ try_files $uri /app/index.html (STATIC)   │  React SPA bundle
+                │  location /            ─────────────────────────▶ telebot:8080      │  legacy HTMX (shrinking)
+                │  location = /stream    ─────────────────────────▶ telebot:8080      │  legacy SSE (until cut)
+                └────────────────────────────────────────────────────────────────────┘
+                                                          │
+                       ┌──────────────────────────────────┴──────────────────────────┐
+                       │ dashboard.app (FastAPI, same process as bot)                  │
+                       │   ├─ SessionMiddleware (telebot_session)  ◀── shared by both  │
+                       │   ├─ app.include_router(api_v2_router)   prefix="/api/v2" NEW │
+                       │   │     ├─ auth.py     (login/logout/me, JSON + Set-Cookie)   │
+                       │   │     ├─ positions.py, accounts.py, history.py, signals.py, │
+                       │   │     │   stages.py, settings.py, analytics.py, actions.py   │
+                       │   │     └─ deps.py     (require_user, verify_csrf_token)        │
+                       │   └─ legacy HTMX routes (untouched, removed page-by-page)      │
+                       └───────────────────────────────────────────────────────────────┘
+                                                          │  (same live objects, unchanged calls)
+                                                          ▼
+                                       executor / trade_manager / db / mt5_connector  — UNTOUCHED
 ```
 
-`SettingsStore` is a dataclass-plus-dict owned by `bot.py:main`, passed to both `TradeManager` and `Executor`. It's the single reader of `account_settings`. No pub/sub, no invalidation events — `reload(name)` after write is sufficient because we're in one process.
-
-### What settings affect mid-flight
-
-| Setting | Takes effect from | Notes |
-|---------|------------------|-------|
-| `risk_mode`, `risk_percent`, `fixed_lot` | Next signal execution | Already-placed limit orders keep their sized lot; staged entries already in DB keep their pre-computed `lot_size` |
-| `max_lot_size` | Next signal execution | Same — sized before persisting the stage |
-| `max_open_trades` | Next signal AND next stage trigger | `_trigger_stage` re-reads via `settings_store.effective()` each cycle |
-| `max_stages`, `stage_allocation` | Next signal only | Changing mid-signal would break allocation invariants; stages are planned once at signal time |
-
-**Design rule:** Once a stage row lands in `staged_entries`, its `lot_size` is frozen. Settings changes never retroactively rewrite pending stages — they affect only the NEXT signal. Avoids a whole class of races. Dashboard should make this explicit in the UI copy.
-
-### accounts.json becomes a bootstrap seed
-
-On startup, for each account in `accounts.json`:
-
-1. If no row exists in `account_settings`, INSERT populated from `accounts.json` values.
-2. Always load `account_settings`. DB wins on conflict.
-
-Preserves the v1.0 "no breaking changes to accounts.json" constraint.
+The SPA static bundle is served directly from a directory baked into the image (`/app/static/app/`), so there is **no Node runtime in production** (satisfies the locked "Vite SPA over Next.js / minimize dependencies" decision).
 
 ---
 
-## 5. Login form — layering on without breaking existing routes
+## 1. JSON API Design
 
-### Target state
+### Mount strategy — `/api/v2`, new package, bot core untouched
 
-```
-GET  /login   ─► render templates/login.html (CSRF token in session)
-POST /login   ─► argon2-cffi verify → session["user"]="admin" → redirect to ?next= or /overview
-GET  /logout  ─► session.clear() → redirect /login
-every other  ─► _verify_auth reads session["user"]; miss → RedirectResponse("/login?next=<path>")
-```
-
-### Middleware ordering
+Create an `api/` package and attach it to the existing app with **one line** in `dashboard.py`:
 
 ```python
-app = FastAPI(…)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=settings.session_secret,    # ≥32 bytes, hard-fail if missing
-    session_cookie="telebot_session",
-    max_age=settings.session_max_age,      # e.g. 28800 (8h)
-    same_site="lax",
-    https_only=True,                        # prod only; toggle via settings
-)
-app.mount("/static", StaticFiles(...), …)
+# dashboard.py (near app creation)
+from api import api_router          # NEW package
+app.include_router(api_router)      # api_router = APIRouter(prefix="/api/v2")
 ```
 
-### Route-level changes
+- **Why `/api/v2`:** the legacy mutation routes already live under `/api/` (`/api/close/...`, `/api/emergency-close`, …). Versioning at `/api/v2` avoids collision and signals "JSON contract" vs the legacy `/api/*` HTML responses. The legacy `/api/*` routes stay until their pages are cut over, then get deleted.
+- **Why a new package, not in `dashboard.py`:** `dashboard.py` is 1,510 lines mixing Jinja, OOB-toast HTML builders, and logic. The JSON layer should be clean. Keep `dashboard.py` as the legacy file that shrinks to nothing as cutover completes.
+- **Bot-core safety:** every JSON route imports only `db`, the injected `_executor`/`_settings` accessors, and the existing helper functions. **No new import lands in `executor.py`, `trade_manager.py`, `mt5_connector.py`, `db.py`.** The dangerous code is only ever *called*, never *modified*.
 
-- `_verify_auth` is the only dependency injected on pages. Swap body from `HTTPBasic` to `request.session.get("user")`. For HTMX/API routes, raise 401 (HTMX shows toast); for top-level pages, return `RedirectResponse("/login?next=" + urlencode(request.url.path))`.
-- `/health` remains auth-free.
-- `/login` and `/logout` are auth-free.
-- `/stream` (SSE): EventSource sends cookies automatically, so no flow change — just swap the auth dep.
+`init_dashboard()` stashes the live objects as module globals. Expose them to the `api/` package via accessor functions (not `from dashboard import _executor`, which is fragile because the globals are rebound):
 
-### Login-form CSRF
-
-HTMX header trick doesn't work on the first GET /login (no session yet) and the subsequent POST must be validated. Pattern:
-
-1. GET `/login` generates `csrf = secrets.token_urlsafe(32)`, stores in `session["csrf_pending"]`, renders hidden input.
-2. POST `/login` compares form `csrf` to `session["csrf_pending"]` (constant-time), then pops it.
-3. Subsequent state-changing requests keep using the existing `_verify_csrf` (HX-Request header check), unchanged.
-
-Keeps the CSRF story cleanly split: login uses token+session, HTMX API routes use header-origin.
-
-### Password migration path
-
-Per STACK.md §3:
-- Add env `DASHBOARD_PASS_HASH` (argon2 hash).
-- Keep `DASHBOARD_PASS` as fallback for ONE release. On successful login via plaintext env, log one-time WARN.
-- Ship `scripts/hash_password.py` that prints the hash for ops.
-
-### What this does NOT break
-
-- All existing routes still go through `_verify_auth` by `Depends`, so swapping the implementation is surgical.
-- HTMX header CSRF UNCHANGED for API routes.
-- Kill switch, SSE, settings edits all sit behind the same dependency → session replacement applies uniformly.
-
----
-
-## 6. Dashboard redesign — integration, not a rewrite
-
-Per STACK.md §1–2, the substrate stays **FastAPI + Jinja + HTMX**. Basecoat is a CSS layer + tiny vanilla JS on top.
-
-### Asset pipeline
-
-```
-static/css/
-├─ input.css            # (new) @tailwind directives + @import basecoat.css
-├─ basecoat.css         # (new, vendored) from npm basecoat-css@0.3.3
-└─ app.css              # (new, built) output of tailwindcss CLI
-
-static/js/
-└─ basecoat.min.js      # (new, vendored) only on pages using interactive comps
+```python
+# dashboard.py — add accessors so api/ never imports rebindable globals
+def get_executor():       return _executor
+def get_settings():       return _settings
+def get_notifier():       return _notifier
+def get_settings_store(): return _get_settings_store()
 ```
 
-Dockerfile adds the standalone Tailwind CLI binary and runs the build at image-build time (no node_modules, no npm in runtime image). Templates point at `/static/css/app.css` via the existing `StaticFiles` mount.
+### Resource grouping (one router module per resource)
 
-### Template migration order
+| Router module | Routes (GET unless noted) | Backed by (existing) |
+|---------------|---------------------------|----------------------|
+| `auth.py` | `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `GET /auth/csrf` | `db.get_failed_login_count`, argon2, session |
+| `accounts.py` | `/accounts` (overview cards) | `_get_accounts_overview()` |
+| `positions.py` | `/positions`, `/positions/{account}/{ticket}` (drilldown) | `_get_all_positions()`, `db.get_position_drilldown` |
+| `history.py` | `/history` (+ filter query params), `/history/filter-options` | `db.get_filtered_trades`, `db.get_trade_filter_options` |
+| `signals.py` | `/signals` | `db.get_recent_signals` |
+| `stages.py` | `/stages` (active + resolved) | `db.get_pending_stages`, `db.get_recently_resolved_stages`, `_enrich_stage_for_ui` |
+| `settings.py` | `/settings`, `POST /settings/{account}/validate`, `POST /settings/{account}` (confirm), `POST /settings/{account}/revert` | `SettingsStore`, `validate_settings_form`, `db.get_settings_audit` |
+| `analytics.py` | `/analytics` (+ range/source query) | `db.get_analytics_with_filters`, `db.get_analytics_sources` |
+| `actions.py` | `POST /positions/{account}/{ticket}/close`, `.../levels` (modify SL/TP), `.../close-partial`, `GET /emergency/preview`, `POST /emergency/close`, `POST /emergency/resume`, `GET /trading-status` | `connector.*`, `_executor.emergency_close`, `db.update_trade_close` |
+| `meta.py` | `/overview` aggregate (accounts + positions + top-5 stages + flags) for the overview page's single fetch | composes the above helpers |
 
-1. `base.html` — drop Play CDN script, add built CSS link. Keep page layout unchanged at first. **Verify every existing page still renders** before touching component markup.
-2. Partials (`overview_cards.html`, `positions_table.html`, `kill_switch_preview.html`) — swap handwritten `.card`, `.btn-*`, `.badge-*` for Basecoat equivalents. Most-reused bits.
-3. Page shells (`overview.html`, `positions.html`, `history.html`, `signals.html`, `analytics.html`) — layout grids on Basecoat's Tailwind-native utilities.
-4. `settings.html` — now editable (see §4), built fresh on the new substrate.
-5. `login.html` — new.
-6. `staged.html` + partial — new, last.
+**Settings two-step flow:** today it returns HTML modal fragments (`settings_confirm_modal.html`). In the SPA this becomes pure data: `POST .../validate` returns `{ valid, errors[], diff[], dry_run_text }`; the React modal renders that JSON; `POST .../{account}` (confirm) persists. The server-side hard-cap validator `validate_settings_form()` is reused **verbatim** — it already returns `(parsed, errors)` not HTML.
 
-### Live data paths — reuse, don't rewrite
+### Pydantic v2 response models
 
-| Data | Current transport | v1.1 transport |
-|------|-------------------|----------------|
-| Positions | SSE `/stream` (JSON) + HTMX partial `/partials/positions` | Unchanged — add staged-entry payload to `/stream` |
-| Overview cards | HTMX partial `/partials/overview` | Unchanged, restyled |
-| Trading status | `/api/trading-status` polled via HTMX | Unchanged |
-| Active stages | (none) | **New** HTMX partial `/partials/stages` + SSE payload |
+Put models in `api/schemas.py`. Wrap the existing dict-returning helpers — do not re-query.
 
-SSE is battle-tested in the codebase; extend its payload, don't introduce a second transport.
+```python
+# api/schemas.py
+from pydantic import BaseModel
 
-### Mobile responsiveness
+class Position(BaseModel):
+    account: str
+    ticket: int
+    symbol: str
+    direction: str
+    volume: float
+    open_price: float
+    sl: float | None
+    tp: float | None
+    profit: float
 
-Basecoat's Tailwind classes give responsive breakpoints for free. The current `base.html` sidebar is fixed-width and always-visible — in v1.1 replace with Basecoat `Sidebar` component (an interactive component that DOES need the vanilla JS bundle) so mobile collapses it.
+class AccountOverview(BaseModel):
+    name: str
+    connected: bool
+    enabled: bool
+    balance: float
+    equity: float
+    open_trades: int
+    total_profit: float
+    daily_trades: int
+    max_daily_trades: int
+    daily_limit_pct: float
+    # … mirror the dict keys produced in _get_accounts_overview()
 
----
-
-## 7. Recommended build order (dependency-honest)
-
-```
-Phase 1 — Settings foundation  (1–2 weeks, NO UI yet)
-    ├─ AccountSettings dataclass + SettingsStore cache
-    ├─ account_settings table + db helpers
-    ├─ bot.py wires SettingsStore before TradeManager
-    ├─ TradeManager reads effective settings (not AccountConfig) in
-    │    _execute_open_on_account and daily-limit paths
-    ├─ risk_calculator: fixed-lot branch
-    └─ TESTS: effective() returns DB overrides, bootstrap seed from accounts.json,
-              risk_mode='fixed' path correct, kill switch still works
-
-Phase 2 — Staged entries  (2–3 weeks, trickiest)
-    ├─ staged_entries table + db helpers
-    ├─ Executor._zone_watch_loop + _trigger_stage
-    ├─ TradeManager persists stages on multi-stage OPEN
-    ├─ emergency_close cancels active stages BEFORE closing positions
-    ├─ _reconnect_account reconciles stages with MT5 state
-    ├─ _cleanup_loop expires old stages
-    └─ TESTS: watcher respects _trading_paused, respects _reconnecting,
-              respects daily limits, kill switch cancels stages before close,
-              reconnect reconciles, stage lot_size frozen on persist
-
-Phase 3 — UI substrate swap  (1 week, isolated)
-    ├─ Dockerfile: Tailwind CLI build stage
-    ├─ Vendor Basecoat CSS + JS
-    ├─ base.html: swap Play CDN for built css
-    ├─ Partials & pages restyled (no logic changes)
-    ├─ Delete drizzle.config.json
-    └─ TESTS: existing dashboard routes still pass integration suite;
-              visual smoke on each page
-
-Phase 4 — Login form  (0.5–1 week, depends on Phase 3 styling)
-    ├─ config: SESSION_SECRET, DASHBOARD_PASS_HASH
-    ├─ SessionMiddleware, /login, /logout
-    ├─ _verify_auth swap + RedirectResponse
-    ├─ login.html on Basecoat primitives
-    ├─ CSRF token for login POST
-    └─ TESTS: redirect on unauth, argon2 verify, logout clears session,
-              SSE works with cookie auth, HTMX CSRF unaffected
-
-Phase 5 — Settings UI + stages UI  (1 week, depends on 1, 2, 3)
-    ├─ /settings page rewrite (editable forms, HTMX hx-post)
-    ├─ /api/settings/{account} → settings_store.reload()
-    ├─ /staged page + partial
-    ├─ SSE /stream emits stages payload
-    └─ TESTS: form validation, settings change takes effect on NEXT signal not
-              retroactively on pending stages, live stage list updates
+class OverviewResponse(BaseModel):
+    accounts: list[AccountOverview]
+    positions: list[Position]
+    pending_stages: list[Stage]
+    trading_enabled: bool
+    dry_run: bool
+    trading_paused: bool
 ```
 
-### Why this order
+Routes declare `response_model=` so FastAPI validates + documents (re-enable `docs_url` scoped for `/api/v2` if useful internally):
 
-- **Phase 1 first** because every later phase needs runtime-mutable settings. Building staged entries (Phase 2) against hardcoded `AccountConfig` would require a second pass to rewire later.
-- **Phase 2 before UI for staging** because the server-side behavior must be correct and test-covered before we give operators a button. Live trading on real money.
-- **Phase 3 (substrate swap) before Phase 4 (login form)** because the login form must be styled with the same tokens as the rest of the dashboard; doing it in the current hand-rolled CSS means rebuilding it twice.
-- **Phase 4 (login) before Phase 5 (settings UI)** because settings-edit is the first truly sensitive dashboard action introduced in v1.1 — it writes to DB state that affects live trading. Doing it behind HTTP Basic and then "upgrading" later is asking for an accidental-prod-change window.
-- **Phase 5 last** because it integrates all prior phases: needs SettingsStore (1), staged-entry tables (2), Basecoat components (3), and session auth for sensitive POSTs (4).
+```python
+@router.get("/positions", response_model=list[Position])
+async def positions(user: str = Depends(require_user)):
+    return await _get_all_positions()   # dict list coerces into Position[]
+```
 
-Phase 1+2 can overlap partially (DB schema work is similar). Phase 3 can run in parallel with Phase 2 since they touch different files. The serial chain is **1 → 2 → 5** and **3 → 4 → 5**.
+### Error envelope
 
----
+FastAPI's default error shape is `{"detail": ...}`. **Standardize** so the SPA has one parse path. Add an app-level exception handler that wraps `HTTPException` and validation errors:
 
-## 8. Integration points (cross-reference)
+```python
+# api/errors.py
+# 2xx success → bare resource
+# 4xx/5xx     → { "error": { "code": str, "message": str, "fields"?: {field: msg} } }
+```
 
-### External boundaries (unchanged)
+Recommendation: **bare resources on success, enveloped errors on failure.** This keeps `response_model` clean (no `{data: …}` wrapper noise) while giving the SPA a single `if (res.error)` branch. The settings validator's per-field errors map naturally to `error.fields`.
 
-| Service | Integration | v1.1 impact |
-|---------|-------------|-------------|
-| Telegram (Telethon) | `bot.py` NewMessage handler | None |
-| Discord (webhook) | `notifier.py` via httpx | Add stage-triggered notifications, kill-switch-cancels-stages notification |
-| MT5 bridge (per account) | `mt5_connector.py` gRPC/direct | None — stages reuse `open_order`, `get_price`, `close_position` |
-| PostgreSQL | asyncpg pool in `db.py` | Two new tables, several new helpers |
-| nginx | proxy-net | None (same port, same app) |
-
-### Internal boundaries
-
-| Boundary | v1.0 mechanism | v1.1 change |
-|----------|----------------|-------------|
-| bot.py ↔ Executor | Direct object reference | Unchanged |
-| Executor ↔ TradeManager | Per-account scoped TradeManager (race-safe v1.0 pattern) | Unchanged; staged-entry triggers use the same scoping |
-| Executor ↔ SettingsStore | — | New: read-only reference; writes go through dashboard → SettingsStore |
-| Dashboard ↔ Executor | Module-global `_executor` injected by `init_dashboard` | Unchanged |
-| Dashboard ↔ SettingsStore | — | New: module-global injected by `init_dashboard(executor, notifier, settings, settings_store)` |
-| TradeManager ↔ SettingsStore | — | New: reference passed in constructor, used in lot sizing and gating |
-| Everything ↔ db | Module-global `_pool` | Unchanged |
+Action endpoints that can partially fail (emergency close across N accounts) return a structured result, not a toast string — e.g. `{ closed: [...], failed: [{account, ticket, error}] }`. Today `emergency_close_endpoint` already returns the raw `results` dict (`dashboard.py:1307`); just model it.
 
 ---
 
-## 9. Anti-patterns to avoid
+## 2. Auth for an SPA on Session Cookies
 
-### AP-1: Spinning up a second process for the zone watcher
+**Keep everything that works; change only the response shape and the CSRF mechanism.**
 
-**Tempting because:** A dedicated worker feels "cleaner."
-**Why wrong:** Would require IPC to read `_trading_paused`, `_reconnecting`, `_last_sync` from Executor. Those are in-memory state. Either we replicate through DB (latency + race window where watcher triggers during a reconnect the Executor already detected) or we build a message bus for four booleans.
-**Instead:** Zone watcher is an `asyncio.Task` inside `Executor`, peering with `_heartbeat_loop` and `_cleanup_loop`.
+### Login flow (JSON)
 
-### AP-2: Redis pub/sub for settings invalidation
+```
+POST /api/v2/auth/login
+  body: { "password": "...", "csrf_token": "<echo of telebot_csrf cookie>" }
+  ── argon2 verify (reuse dashboard.py:262-280) ──▶ on success:
+     request.session["user"] = "admin"      # same as dashboard.py:283
+     Set-Cookie: telebot_session=...  (httpOnly, SameSite=Lax, Secure)   # SessionMiddleware
+  ◀── 200 { "user": "admin" }
+      401 { "error": { "code": "invalid_credentials", ... } }
+      429 { "error": { "code": "rate_limited", ... } }   # reuse db.get_failed_login_count
+```
 
-**Tempting because:** Standard cache-invalidation pattern.
-**Why wrong:** Exactly one writer (dashboard) and one reader (same process). A `reload(name)` at the write site is strictly simpler and strictly correct.
-**Instead:** Write-through in-process cache. Reload is a direct method call in the same event loop.
+The existing rate-limit (`db.get_failed_login_count(ip, 15) ≥ 5 → 429`) and `_client_ip()` logic port over unchanged. The nginx `limit_req zone=telebot_login` block must also cover `/api/v2/auth/login`.
 
-### AP-3: Letting the zone watcher bypass `is_accepting_signals()`
+### How the SPA detects unauthenticated state
 
-**Tempting because:** The stage is a "follow-up" to an already-accepted signal.
-**Why wrong:** Between signal time and stage-trigger time, kill switch may have fired or a reconnect started. Stages that ignore the gate will open positions during a paused-trading window. v1.0 spent effort establishing that gate; respect it.
-**Instead:** `_trigger_stage` calls `is_accepting_signals()` at the top. Second line of defense: `emergency_close` cancels active stages in DB.
+- **App boot:** SPA calls `GET /api/v2/auth/me`. `200 {user}` → render app; `401` → redirect to login view.
+- **Mid-session expiry:** any query/mutation returning 401 triggers a **global TanStack Query handler** that redirects. Verified pattern:
 
-### AP-4: Mutating `AccountConfig` in place on settings changes
+```ts
+// queryClient.ts — verified against TanStack Query QueryCache docs
+const onAuthError = (error: unknown) => {
+  if (error instanceof HttpError && error.status === 401) {
+    window.location.assign("/app/login");   // hard nav clears in-memory state
+  }
+};
+export const queryClient = new QueryClient({
+  queryCache:    new QueryCache({    onError: onAuthError }),
+  mutationCache: new MutationCache({ onError: onAuthError }),
+});
+```
 
-**Tempting because:** The dict already exists.
-**Why wrong:** `AccountConfig` is used by tests and serialized in a few places; treating it as mutable invites "but what about THIS reader" spelunking. Also `dataclass` without `frozen=True` gives no protection.
-**Instead:** `AccountConfig` stays static bootstrap. Runtime-tunable values live in `AccountSettings`. Effective values read via `SettingsStore.effective(name)`.
+The fetch wrapper throws `HttpError(status)` on non-2xx so both caches see it. This reuses `_verify_auth`'s existing `/api/`→401 branch (`dashboard.py:112`) — **no server change needed**, since `/api/v2` is `/api/`-prefixed and already hits the 401 path.
 
-### AP-5: Keeping HTTPBasic as a fallback alongside session auth
+### Keeping the cookie httpOnly + SameSite
 
-**Tempting because:** "Ship login without breaking existing integrations."
-**Why wrong:** Two auth paths double the attack surface and the confusion. Nothing automates HTTPBasic against this dashboard today — the user logs in via browser — so migration is cheap.
-**Instead:** Replace HTTPBasic cleanly in one phase. Keep `DASHBOARD_PASS` env as a bootstrap fallback for ONE release (per STACK.md §3) — only transitional concession.
+- `telebot_session` stays **`httpOnly`** (JS never reads it — defeats XSS token theft). `SameSite=Lax` is correct for a same-origin SPA. `Secure` stays config-driven (`session_cookie_secure`) for dev/test. **No change to `SessionMiddleware` config** (`dashboard.py:192-200`).
+- SPA + API are **same-origin** (one nginx host), so the cookie is sent automatically with `fetch(url, { credentials: "same-origin" })`. No CORS, no `Access-Control-Allow-Credentials`.
 
-### AP-6: Adding alembic mid-milestone
+### CSRF on JSON mutations (double-submit, adapted from HTMX)
 
-**Tempting because:** Schema changes are the canonical alembic use case.
-**Why wrong:** Per STACK.md §5, DBE-01 (alembic) was explicitly deferred. Introducing it mid-v1.1 drags in a new workflow and test infrastructure for two new tables.
-**Instead:** Stay on `CREATE TABLE IF NOT EXISTS` in `db.init_schema()`. Flag alembic as a v1.2 candidate.
+The HTMX-era CSRF check (`_verify_csrf`: "POST must carry `HX-Request`") **cannot work for the SPA** and was always a weak proxy. Replace with a proper **double-submit cookie**:
+
+1. On login success (and on `GET /api/v2/auth/csrf`), set a **non-httpOnly** cookie `telebot_csrf` = random token, `SameSite=Lax`, `Secure`, `path=/`.
+2. SPA reads `telebot_csrf` and echoes it as header `X-CSRF-Token` on every mutating request.
+3. Server dependency compares header vs cookie with `secrets.compare_digest`; 403 on mismatch.
+
+```python
+# api/deps.py
+async def verify_csrf_token(request: Request):
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        cookie = request.cookies.get("telebot_csrf", "")
+        header = request.headers.get("x-csrf-token", "")
+        if not cookie or not secrets.compare_digest(cookie, header):
+            raise HTTPException(403, "CSRF token invalid")
+```
+
+**Why safe:** SameSite=Lax already blocks most cross-site POST vectors; double-submit adds defense-in-depth, and the readable token is *not* a session credential (it grants nothing alone). Standard SPA-with-cookies pattern, strictly stronger than the current `HX-Request` heuristic.
+
+> Distinct from the legacy login CSRF (`telebot_login_csrf`, `path=/login`, httpOnly form token, `dashboard.py:142`) which protects the *legacy login form* and stays while legacy login lives. The new `telebot_csrf` protects *API mutations*. They coexist; `telebot_login_csrf` is removed when legacy login is decommissioned.
 
 ---
 
-## 10. Scaling / load considerations
+## 3. Same-Origin nginx Routing (parallel-run)
 
-v1.0 is designed for single-user, small number of accounts (1–5), moderate signal rate (<50/day per group). v1.1 keeps the same envelope.
+One host, four `location` classes. Order matters (most-specific first).
 
-| Dimension | v1.0 load | v1.1 load | Risk |
-|-----------|-----------|-----------|------|
-| MT5 price fetches per minute | ~2 per account (heartbeat only) | +6–12 per account with zone watcher @ 5–10s cadence, **only when stages are active** | LOW — MT5 bridges handle >1 Hz; adaptive interval keeps idle cost at v1.0 level |
-| DB queries per minute | ~20–30 | +~5–10 from stage polling (one `SELECT * FROM staged_entries WHERE status='active'` per loop) | LOW — indexed on `status`; single-row queries otherwise |
-| Session cookie verification | N/A | Every dashboard request (~microseconds) | NONE |
-| Built CSS size | Play CDN ~350 KB uncompressed per cold load | ~30–50 KB gzipped via built `app.css` | Strictly better |
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name dashboard.YOURDOMAIN.com;
+    # … ssl + security headers unchanged …
 
-Watcher cadence is the only dial worth tuning. Recommend 10 s by default, configurable via `GlobalConfig.zone_watch_interval_seconds`.
+    # 1) JSON API → uvicorn
+    location /api/ {
+        proxy_pass http://telebot:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 1b) login rate-limit also guards the JSON login
+    location = /api/v2/auth/login {
+        limit_req zone=telebot_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://telebot:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # 2) SPA static bundle → SPA-router fallback to index.html
+    location /app/ {
+        alias /usr/share/nginx/telebot-spa/;   # if served by nginx (option a)
+        try_files $uri $uri/ /app/index.html;
+    }
+
+    # 3) legacy login rate-limit (until decommissioned)
+    location = /login {
+        limit_req zone=telebot_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://telebot:8080;
+        # … headers …
+    }
+
+    # 4) everything else (legacy HTMX pages + /stream + /static + /health) → uvicorn
+    location / {
+        proxy_pass http://telebot:8080;
+        # … headers …
+        proxy_buffering off;          # keep for /stream while SSE lives
+        proxy_http_version 1.1;
+        proxy_set_header Connection '';
+        proxy_read_timeout 86400s;
+    }
+}
+```
+
+**Routing decisions:**
+
+- **SPA lives under `/app/`** (not `/`) so legacy `/overview`, `/positions`, etc. keep working untouched during parallel-run. The SPA client-router uses `/app/*` paths. `try_files … /app/index.html` makes deep-links and refreshes resolve to the SPA shell instead of 404.
+- **Serving mechanism — two options:**
+  - **(a) nginx serves from a shared volume** (`location /app/ { alias …; }`): no proxy hop, fastest; matches the existing `/home/murx/shared` topology but requires wiring a volume into `shared-nginx`.
+  - **(b) uvicorn serves it** via `app.mount("/app", StaticFiles(directory="static/app", html=True))`: simpler (no volume change), one fewer moving part; every asset hits Python but that's negligible at one operator. **Recommended for v1.2.** With (b), nginx needs only the `location /` proxy and the SPA is reachable at `/app/`.
+- **CORS:** none. Same scheme/host/port for SPA + API ⇒ cookies flow automatically.
+- **Cutover knob:** migrating a page changes *nothing in nginx for that page* — the SPA already owns `/app/<page>`. Cutover = "make the SPA the operator's entry point for that page, then delete the legacy route." For a hard redirect (`/analytics` → `/app/analytics`) add a per-path `return 301` (or FastAPI redirect) when the legacy route is removed.
 
 ---
 
-## 11. Confidence & open questions
+## 4. Live Data Transport — Recommendation: keep polling
 
-| Area | Confidence | Basis |
-|------|------------|-------|
-| Executor zone-watcher placement | HIGH | Direct read of `executor.py` — pattern mirrors `_heartbeat_loop` exactly |
-| Staged-entry cross-cutting interactions | HIGH | Read of `emergency_close`, `_reconnect_account`, `_execute_open_on_account` confirms gate points |
-| SettingsStore design | HIGH | Single-process app, single writer, no distributed concerns |
-| Login form layering | HIGH | Verified via STACK.md and `dashboard.py` dependency structure; SessionMiddleware docs |
-| Basecoat template migration cost | MEDIUM | Basecoat is pre-1.0 (v0.3.3 per STACK.md) — might hit rough edges in specific components; mitigated by "vendor + copy" philosophy |
-| Stage allocation semantics | MEDIUM | `stage_allocation: list[float]` is a design choice; alternative is "stages share lot equally, user picks count." Recommendation is the former — confirm with user during Phase 2 design |
-| Stage target-band derivation | MEDIUM | "Stages 2..N fire as price re-enters the zone" — the exact sub-band split (equal-width? single re-entry?) isn't fully pinned by the feature description. Resolve at Phase 2 kickoff |
+**Recommendation: TanStack Query `refetchInterval: 3000` per live view. Do NOT add WebSocket. SSE optional but not recommended for v1.2.**
 
-### Open questions to resolve before / during each phase
+| Option | Pros | Cons | Fit for single-operator live-money tool |
+|--------|------|------|------------------------------------------|
+| **Polling (TanStack Query)** ✅ | Trivial; auto-pauses on hidden tab (`refetchIntervalInBackground:false`); reconnect free; same data path as one-shot fetches; matches current 3s UX; no server fan-out state | A request every 3s per open view (negligible for 1 user) | **Best.** One operator, one browser. The herd cost polling "solves badly" doesn't exist here. |
+| **SSE** | Push, lower latency; `/stream` plumbing exists | Server holds a long-lived generator per client; `/stream` emits HTML (must be reworked to pure JSON); reconnect/auth-expiry handling adds code; needs `proxy_buffering off` | Marginal. 3s→2s push is imperceptible for monitoring. Adds moving parts for ~zero operator benefit. |
+| **WebSocket** | Bidirectional, lowest latency | Connection lifecycle, WS auth handshake, reconnect/backoff, message protocol, nginx upgrade config; overkill for read-mostly UI | **Reject.** No bidirectional need; mutations are plain POSTs. |
 
-1. **Phase 2 kickoff — BAND SEMANTICS.** How are stage-N target bands computed from the original zone? Equal-width slices? All stages wait for full zone re-entry? Single re-entry triggers all remaining? → User decision, behavioral spec.
-2. **Phase 2 kickoff — STAGING TRIGGER MODEL.** PROJECT.md reads "text-only signals open 1 initial position immediately; follow-up signal with zone/SL/TP opens additional positions." That wording suggests a **two-signal correlation** (first text signal = stage 1, second signal with details = stages 2+) rather than STACK.md §4's **single-signal-with-zone model** (one signal, N stages queued from its zone). These are different features architecturally:
-   - **Zone-watcher model** (STACK.md §4): one OPEN signal produces N stages; watcher polls price and triggers 2..N as price re-enters bands.
-   - **Two-signal correlation model** (PROJECT.md wording): first signal fills stage 1 (market, no zone needed); a second signal "attaches" zone/SL/TP and produces stages 2..N, either executed immediately or queued as limits at zone-mid (reusing v1.0 limit logic).
-   
-   **This must be resolved before Phase 2 begins.** If two-signal correlation is the intent, `signal_parser` needs a correlation heuristic (same symbol + direction, within N minutes), the zone watcher simplifies or disappears (stages 2..N just become N-1 new OPEN executions on the second signal), and the staged_entries table may not even be necessary — it becomes a parent-ticket column on `trades`. Architecturally simpler, but requires signal-correlation spec. Recommend the orchestrator include this as the #1 question in the discussion phase.
-3. **Phase 4 — MULTI-USER?** Single admin is the current model. Multi-user would be a small delta (`account_users` table + password-per-user) but not hinted in PROJECT.md. Confirm single-user.
-4. **Phase 5 — AUDIT TRAIL UI.** `account_settings.updated_by` is captured; decide whether to surface "last changed by X at Y" in the settings UI or only log.
+**Rationale (verified against TanStack Query docs):** `refetchInterval` supports a static interval *and* a function form that can stop/slow polling based on state (e.g. stop when hidden, back off on error). With `staleTime`, the operator gets near-live numbers with cache-dedup and automatic retry. The dynamic-interval capability lets overview poll fast (3s) while history/analytics poll slowly or not at all.
+
+```ts
+useQuery({
+  queryKey: ["overview"],
+  queryFn: fetchOverview,
+  refetchInterval: 3000,
+  refetchIntervalInBackground: false,   // pause when the operator's tab is hidden
+});
+```
+
+**Migration note:** the legacy SSE `/stream` stays alive only as long as the HTMX overview/staged pages exist. Once those pages are cut over, delete `/stream` and remove `proxy_buffering off` / `proxy_read_timeout 86400s` from nginx (they exist solely for SSE) — a final cutover cleanup item, not a blocker.
+
+The existing `_last_positions_by_account` stale-while-revalidate cache (`dashboard.py:43, 1434`) that masks transient REST blips should be **kept** — it lives in `_get_all_positions()` and benefits the JSON API identically (prevents the positions list blinking to empty on a single failed poll). TanStack Query's `placeholderData: keepPreviousData` complements this client-side.
+
+---
+
+## 5. Build / Deploy & Cutover
+
+### Vite build in the multi-stage Dockerfile
+
+Add a Node build stage. The existing Tailwind-CLI stage is **removed** once the last HTMX page is gone (Tailwind moves into Vite via `@tailwindcss/vite`); during parallel-run **both coexist**.
+
+```dockerfile
+# ── Stage A: SPA build (NEW) ───────────────────────────────
+FROM node:22-slim AS spa-build
+WORKDIR /spa
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build          # vite build → /spa/dist
+
+# ── Stage 1: legacy Tailwind CSS build (UNCHANGED, until HTMX gone) ──
+FROM debian:bookworm-slim AS css-build
+# … existing stage verbatim …
+
+# ── Stage 2: runtime (MODIFIED) ────────────────────────────
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY *.py *.json ./
+COPY templates/ ./templates/
+COPY static/ ./static/
+COPY scripts/ ./scripts/
+COPY --from=css-build /build/static/css/app.*.css ./static/css/
+COPY --from=css-build /build/static/css/manifest.json ./static/css/
+COPY --from=spa-build  /spa/dist/ ./static/app/          # NEW: SPA bundle
+RUN mkdir -p /app/data
+EXPOSE 8080
+CMD ["python", "-u", "bot.py"]
+```
+
+- `frontend/` is a new top-level dir (Vite project: `index.html`, `src/`, `vite.config.ts`, `package.json`). Set Vite `base: "/app/"` so asset URLs resolve under the nginx prefix.
+- If serving via uvicorn (option b): add `app.mount("/app", StaticFiles(directory=str(BASE_DIR/"static"/"app"), html=True))` in `dashboard.py`. `html=True` gives the index.html fallback for client-side routes.
+- **No production Node runtime** — `node` exists only in the build stage; the runtime image stays `python:3.12-slim`. Honors the locked decision.
+- **Dev workflow:** `npm run dev` (Vite dev server, HMR) with a proxy in `vite.config.ts` forwarding `/api` → the dev container (`localhost:8090` per `docker-compose.dev.yml`). Cookies stay same-origin because Vite proxies the API under the same dev origin.
+
+### Page-by-page cutover mechanism
+
+The non-negotiable constraint (live-money controls must never regress) is satisfied because **legacy and SPA run simultaneously**; flip pages one at a time, roll back instantly.
+
+```
+Operator entry today:  /overview (HTMX)
+During parallel-run:   /overview (HTMX) AND /app/overview (SPA) both live
+Cutover of a page  =   verify SPA page vs MT5 demo → make it the linked entry → delete legacy route
+Rollback           =   re-add legacy route / re-link old nav (git revert one file)
+```
+
+**Pilot: analytics** (read-only, no live-money action) → lowest blast radius. Build `/app/analytics`, verify numbers match `/analytics`, then it's "cut over." Live-money pages (position actions, settings, kill switch) come last, each verified against the MT5 demo before its legacy twin is removed.
+
+**Decommission gate per page:** delete the legacy route + template only after its SPA twin passes MT5-demo verification. Kill switch and position-action endpoints are the final, most-scrutinized cutovers.
+
+### Suggested build order (dependency-aware)
+
+```
+Phase A — JSON API foundation        (no UI; fully testable with curl/pytest)
+  1. api/ package + APIRouter mounted at /api/v2 (one line in dashboard.py)
+  2. deps.py: require_user (reuse _verify_auth's 401 branch), verify_csrf_token
+  3. auth.py: login/logout/me/csrf (JSON) + telebot_csrf cookie
+  4. read routers wrapping existing helpers: accounts, positions, history,
+     signals, stages, analytics, meta/overview → Pydantic models
+  5. action routers (close, modify-levels, close-partial, emergency, resume,
+     trading-status) → JSON results, NOT toast HTML
+  6. error-envelope exception handler
+  ▸ Gate: pytest covers each route's shape + 401/403 paths. Bot core untouched.
+
+Phase B — SPA scaffold + auth + design system
+  7. frontend/ Vite + React 19 + Tailwind (+ @tailwindcss/vite) + shadcn/ui
+  8. dark palette tokens (#252542 / #1a1a2e / #0f0f1a) → Tailwind theme
+  9. fetch wrapper (HttpError, X-CSRF-Token, credentials:same-origin)
+ 10. QueryClient with global 401 → /app/login; login view; /app/me boot guard
+ 11. app shell + client router under /app/*; serve via uvicorn mount (or nginx /app/)
+  ▸ Gate: can log in, see authed shell, 401 redirects work.
+
+Phase C — page migration waves (each: fetch hook + view + verify vs legacy)
+ 12. analytics (PILOT, read-only)            ← cut over first
+ 13. signals, history (read-only)
+ 14. overview + positions list (live polling 3s)
+ 15. staged (live polling)
+ 16. settings (validate→confirm two-step modal as JSON)
+ 17. live-money actions: close, modify SL/TP, partial close, KILL SWITCH (last)
+  ▸ Gate per page: SPA numbers/actions verified vs MT5 demo before legacy twin deleted.
+
+Phase D — parallel-run cutover + HTMX decommission
+ 18. delete legacy routes/templates page-by-page as each twin is verified
+ 19. remove SSE /stream + nginx SSE directives once overview/staged are SPA
+ 20. remove legacy Tailwind CLI Dockerfile stage + templates/ + legacy /login
+  ▸ Gate: only SPA + JSON API remain; dashboard.py reduced to wiring.
+```
+
+---
+
+## New vs Modified Components
+
+| Component | New / Modified / Untouched | Notes |
+|-----------|---------------------------|-------|
+| `api/` package (router, schemas, deps, errors, auth, per-resource modules) | **NEW** | The JSON contract; ~10 small modules |
+| `frontend/` Vite + React SPA | **NEW** | shadcn/ui, Tailwind, TanStack Query, 9 views |
+| `dashboard.py` | **MODIFIED** | +`include_router`, +`get_executor/settings/notifier` accessors, +optional `app.mount("/app")`; legacy routes deleted in Phase D |
+| `Dockerfile` | **MODIFIED** | +Node `spa-build` stage; +`COPY --from=spa-build`; Tailwind stage removed in Phase D |
+| `nginx/telebot.conf` | **MODIFIED** | +`location /app/` (option a), +`/api/v2/auth/login` rate-limit; SSE directives removed in Phase D |
+| `nginx/limit_req_zones.conf` | **UNTOUCHED** | zone reused for JSON login |
+| `config.py` SessionMiddleware settings | **UNTOUCHED** | cookie config reused as-is |
+| `vite.config.ts` dev proxy | **NEW** | `/api` → dev container for same-origin cookies in dev |
+| `executor.py`, `trade_manager.py`, `mt5_connector.py`, `db.py` | **UNTOUCHED** | called, never modified — blast radius confined to presentation |
+| MT5 REST bridge | **UNTOUCHED** | separate service |
+| `_verify_auth` 401 branch, `validate_settings_form`, `_get_all_positions`, `_get_accounts_overview`, `_enrich_stage_for_ui` | **REUSED** | called by JSON routes, logic unchanged |
+
+---
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern 1: Storing the session in `localStorage`
+**Why bad:** Reintroduces the XSS-token-theft risk the httpOnly cookie avoids; PROJECT.md explicitly rejects it.
+**Instead:** httpOnly `telebot_session` cookie, same-origin, `credentials: "same-origin"`.
+
+### Anti-Pattern 2: Returning toast HTML strings from JSON action routes
+**Why bad:** Legacy action routes return `_render_toast_oob(...)` HTML (`dashboard.py:1201,1215`). Carrying that into the JSON API couples the API to the view.
+**Instead:** Return structured results (`{ok, message}` or `{closed, failed}`); the SPA renders sonner toasts client-side.
+
+### Anti-Pattern 3: Keeping the `HX-Request` CSRF check for the SPA
+**Why bad:** A heuristic the SPA can't satisfy and that gives no real protection.
+**Instead:** Double-submit `telebot_csrf` cookie + `X-CSRF-Token` header with `compare_digest`.
+
+### Anti-Pattern 4: Re-querying / re-deriving data in JSON routes
+**Why bad:** Duplicates logic already in `_get_*` helpers; risks divergence (e.g. the stale-while-revalidate cache).
+**Instead:** Wrap the existing dict-returning helpers in `response_model`.
+
+### Anti-Pattern 5: Adding WebSocket for a read-mostly single-operator UI
+**Why bad:** Connection-lifecycle, WS auth handshake, reconnect-backoff for zero latency benefit at one user.
+**Instead:** TanStack Query polling; SSE only if a measured need appears.
+
+### Anti-Pattern 6: Cutting over live-money pages first
+**Why bad:** Maximum blast radius on the one thing that must never regress.
+**Instead:** Analytics pilot → read-only pages → live-money actions last, each verified vs MT5 demo.
+
+---
+
+## Scalability / Risk Notes (right-sized for a single operator)
+
+| Concern | Assessment |
+|---------|------------|
+| Polling load | 1 operator × few views × 3s = trivial; no fan-out problem |
+| Same-process coupling | Already the case in v1.0; JSON layer doesn't worsen it — bot core unimported |
+| Asset serving via uvicorn (option b) | Acceptable at this scale; switch to nginx `alias` (option a) only if latency observed |
+| Session-expiry mid-action | Global 401 handler redirects; in-flight mutation fails cleanly with 401 envelope |
+| Rollback | Every cutover is one route/nav edit; legacy twin stays until verified |
 
 ---
 
 ## Sources
 
-- Existing codebase: `/Users/murx/Developer/personal/telebot/bot.py`, `executor.py`, `trade_manager.py`, `dashboard.py`, `db.py`, `models.py`, `risk_calculator.py`, `templates/`, `accounts.json`
-- `/Users/murx/Developer/personal/telebot/.planning/PROJECT.md`
-- `/Users/murx/Developer/personal/telebot/.planning/research/STACK.md`
-
----
-*Architecture research for: Telebot v1.1 integration*
-*Researched: 2026-04-18*
+- Codebase (HIGH): `dashboard.py`, `bot.py:405-421`, `Dockerfile`, `nginx/telebot.conf`, `nginx/limit_req_zones.conf`, `docker-compose*.yml`, `config.py`, `.planning/codebase/ARCHITECTURE.md`, `.planning/PROJECT.md`
+- TanStack Query — `QueryCache`/`MutationCache` global `onError`, `refetchInterval` (static + function form), `refetchIntervalInBackground` (HIGH, Context7 `/tanstack/query`): https://tanstack.com/query/latest/docs/framework/react/guides/polling
+- FastAPI `APIRouter` + `include_router` + `response_model` + dependency-based auth/CSRF (HIGH, consistent with installed `fastapi==0.115.0`): https://fastapi.tiangolo.com/tutorial/bigger-applications/
+- Double-submit-cookie CSRF for cookie-auth SPAs (MEDIUM, established pattern; consistent with OWASP CSRF cheat-sheet guidance)

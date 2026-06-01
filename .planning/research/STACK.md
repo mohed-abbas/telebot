@@ -1,266 +1,216 @@
-# Technology Stack — v1.1
-
-**Project:** Telebot v1.1 (staged-entry execution + settings page + shadcn UI + login form)
-**Researched:** 2026-04-18
-**Scope:** Additions / changes only. The v1.0 core stack (Python 3.12, FastAPI 0.115, asyncpg 0.31, Jinja2 3.1, HTMX 2, Telethon 1.42, PostgreSQL 16, Docker) stays. Nothing is being replaced.
-**Overall confidence:** HIGH for UI substrate (multiple primary sources), HIGH for auth deps (PyPI/docs-verified), MEDIUM on Tailwind v3-vs-v4 choice (both viable; we recommend v3 for lower migration risk).
-
----
-
-## TL;DR — What's Being Added
-
-| Category | Add | Version | Why |
-|----------|-----|---------|-----|
-| **UI substrate** | `basecoat-css` (vendored) | 0.3.3 | shadcn/ui look & feel with zero JS framework; stays in the HTMX+Jinja model we already have |
-| **CSS tooling** | Tailwind CSS **standalone CLI** | v3.4.x (recommended) or v4.1.x | Replace the dev-only `cdn.tailwindcss.com` script currently in `templates/base.html:7` with a built stylesheet — production-required |
-| **Password hashing** | `argon2-cffi` | 25.1.0 | Hash the dashboard password at rest; Passlib is unmaintained, direct argon2-cffi is the current idiomatic pick |
-| **Session cookies** | `starlette.middleware.sessions.SessionMiddleware` | n/a (already installed) | Signed session cookie for the login form; comes with FastAPI's Starlette. `itsdangerous` is also already transitive |
-| **Staged-entry logic** | *(nothing)* | — | Pure in-repo code — new price-monitor loop in `executor.py`, new DB tables; no new dependency |
-| **Settings persistence** | *(nothing)* | — | Existing asyncpg + a new `account_settings` table; alembic stays deferred (see DBE-01 tension below) |
-
-Everything else below is explanation and rationale.
-
----
-
-## 1. Frontend Substrate — the "shadcn with HTMX" question resolved
-
-### Recommended: **Basecoat UI** (`basecoat-css`)
-
-A Tailwind-based, framework-agnostic port of shadcn/ui's visual language and component patterns. "All of the shadcn/ui magic, none of the React." ([basecoatui.com](https://basecoatui.com/), [hunvreus/basecoat](https://github.com/hunvreus/basecoat))
-
-- **Latest release:** v0.3.3 (2025-11-05), MIT license
-- **JS requirement:** none for most components; for 6 interactive components (Dropdown Menu, Popover, Select, Sidebar, Tabs, Toast) a small vanilla JS file ships. **Does NOT require Alpine.js, React, or Vue.** Verified against install docs and dropdown component docs.
-- **Install for our stack:** include `basecoat.css` (vendored or CDN) and the JS module for any interactive components used, and import `basecoat-css` into the Tailwind input CSS file. No npm runtime, no build tool beyond Tailwind CLI.
-- **Component surface:** 40+ components including everything we need (button, card, form, input, select, dialog, table, tabs, toast, sidebar, dropdown-menu, alert-dialog, command/combobox, badge).
-
-### Why this over the alternatives
-
-| Option | Verdict | Reason |
-|--------|---------|--------|
-| **(A) Basecoat UI on existing HTMX + Jinja** | **Chosen** | Keeps Jinja/HTMX substrate; no SPA; minimal JS; shadcn aesthetic the user asked for; actively maintained |
-| **(B) Basic Components (basicmachines-co)** | Rejected | **Archived 2026-04-05, read-only** — dead upstream. Also requires JinjaX (we're on plain Jinja2) and Alpine.js |
-| **(C) SPA rewrite (Vue/Nuxt or React/Next)** | Rejected | Violates "minimize new dependencies" (v1.0 constraint); introduces a build toolchain, a second container, CORS/auth plumbing, and weeks of integration for a dashboard that's read-heavy and already works well with HTMX |
-| **(D) daisyUI / Franken UI / Park UI** | Rejected | Fine libraries, but the user explicitly asked for shadcn. Their design tokens/classnames diverge from shadcn, which breaks the `/frontend-design` workflow that expects shadcn conventions |
-| **(E) Vanilla Tailwind + hand-rolled components** | Rejected | Duplicates what Basecoat does for free and gives up shadcn visual parity |
-
-### Maturity disclaimer
-
-Basecoat is **pre-1.0 (v0.3.3)**. It's the right choice because every alternative is worse (Basic Components is dead, SPA violates scope, everything else isn't shadcn), but we should:
-- Pin to an **exact** version (`basecoat-css@0.3.3`), not `@latest`.
-- **Vendor** the CSS + JS files into `static/` rather than hot-loading from jsDelivr so a CDN outage doesn't brick the dashboard (matches the v1.0 discipline around HTMX — we already pin `htmx.org@2.0.4`).
-- Treat Basecoat CSS as a starting layer; hand-write Tailwind freely for anything missing. This is the shadcn philosophy anyway — copy, don't depend.
-
-Sources: [Basecoat home](https://basecoatui.com/), [Basecoat install](https://basecoatui.com/installation/), [Basecoat GitHub](https://github.com/hunvreus/basecoat), [Show HN discussion](https://news.ycombinator.com/item?id=43971688), [Basic Components GitHub (archived)](https://github.com/basicmachines-co/basic-components), [Basic Components docs](https://components.basicmachines.co/docs/introduction), [htmx.org endorsement on X](https://x.com/htmx_org/status/1920526787710497263).
-
----
-
-## 2. Tailwind CSS — a production blocker in v1.0 that v1.1 must fix
-
-### Current state (a liability, not "already handled")
-
-`templates/base.html:7` loads Tailwind via the Play CDN:
-
-```html
-<script src="https://cdn.tailwindcss.com"></script>
-```
-
-Tailwind labels this **development-only** — it JIT-compiles classes in the browser on every request, doesn't include the full feature set, and has no reasonable caching. Any v1.1 work layering Basecoat on top of this compounds the debt. **v1.1 MUST replace this** — it is not optional.
-
-### Recommendation: Tailwind **v3.4.x standalone CLI** (preferred), or v4.1.x
-
-| Choice | Pros | Cons |
-|--------|------|------|
-| **v3.4 standalone CLI** (recommended) | Minimal migration — existing Tailwind classes in templates keep working; no `@theme` rewrite; stable and widely known; standalone binary = no node_modules | Older engine; no Oxide speed gains |
-| **v4.1 standalone CLI** | 5× faster builds, CSS-first `@theme`, modern | Breaking changes: `@tailwind` → `@import "tailwindcss"`, `bg-gradient-to-*` → `bg-linear-to-*`, default border color changed, browser floor is Safari 16.4 / Chrome 111 / Firefox 128; more moving parts during an already-large UI phase |
-
-**Recommendation:** Ship v1.1 on **Tailwind v3.4 standalone CLI**. The v1.1 scope is already "redesign the UI + add features"; stacking a v4 migration on top widens the blast radius for no immediate runtime benefit. Plan a focused v1.2 migration using Tailwind's official `@tailwindcss/upgrade` codemod.
-
-### Integration in Docker
-
-Add a build stage to `Dockerfile`:
-
-1. Download the standalone CLI binary for linux/amd64 into the image (no Node.js).
-2. Run `tailwindcss -i static/css/input.css -o static/css/app.css --minify` against the templates.
-3. Serve `static/css/app.css` via the existing `StaticFiles` mount at `/static`.
-
-This keeps the runtime image Python-only. `npm`, `node`, `package.json`, `package-lock.json` should **not** appear. The existing `drizzle.config.json` at the repo root appears to be stray (drizzle is a JS ORM unused by this project) and should be deleted in this phase.
-
-Sources: [Tailwind standalone CLI blog](https://tailwindcss.com/blog/standalone-cli), [Tailwind standalone CLI beginner tutorial](https://github.com/tailwindlabs/tailwindcss/discussions/15855), [Tailwind v4 upgrade guide](https://tailwindcss.com/docs/upgrade-guide), [Tailwind v4 migration summary](https://medium.com/@mernstackdevbykevin/tailwind-css-v4-0-complete-migration-guide-breaking-changes-you-need-to-know-7f99944a9f95).
-
----
-
-## 3. Login Form — replacing HTTP Basic
-
-### Recommended: `SessionMiddleware` + `argon2-cffi`
-
-The current dashboard uses FastAPI's `HTTPBasic` (`dashboard.py:33,47-64`). Browser basic-auth prompts are ugly, can't be themed with the UI, and can't log out cleanly. Replace with a signed-cookie session and a real HTML login form.
-
-### Components
-
-| Piece | Library | Version | Notes |
-|-------|---------|---------|-------|
-| Signed session cookie | `starlette.middleware.sessions.SessionMiddleware` | ships with Starlette 0.x (already transitive via FastAPI 0.115) | Set `https_only=True`, `same_site="lax"`, `max_age=` (e.g. 8h) |
-| Signing backend | `itsdangerous` | already transitive via Starlette | Nothing to add — Starlette uses it under the hood |
-| Password hash | **`argon2-cffi`** | **25.1.0** | Verify `DASHBOARD_PASS_HASH` against submitted password on login; never store plaintext after init |
-| CSRF | existing `_verify_csrf` (checks `hx-request`) | — | Keep it; login POST uses `hx-post` so the header is set automatically |
-
-### Why argon2-cffi, not Passlib
-
-Passlib is the historical Python umbrella for password hashing, **but**:
-- Last release was 2020; maintainers have been seeking a replacement for years.
-- It raises deprecation warnings on `crypt` that turn into breakages on Python 3.13.
-- We're on 3.12 today, but 3.13 is the near-term default; adopting a dead library for a 2026 milestone is the wrong trajectory.
-
-`argon2-cffi` (v25.1.0, published Nov 2025) is actively maintained by Hynek Schlawack, supports Python 3.13/3.14 officially, ships platform wheels via `argon2-cffi-bindings`, and exposes exactly the API we need:
-
-```python
-from argon2 import PasswordHasher
-ph = PasswordHasher()
-hash_ = ph.hash(plaintext)              # at setup-time, to produce env var value
-ph.verify(hash_, submitted_password)    # at login; raises on mismatch
-ph.check_needs_rehash(hash_)            # for future parameter tuning
-```
-
-### What NOT to add
-
-- **`fastapi-users`** / **`fastapi-login`** / **`authlib`** — overkill for a single-admin dashboard. We're not managing user registration, OAuth flows, JWT rotation, password reset, or multi-tenant identity. A single env-var-driven admin with a signed session cookie is adequate and matches v1.0's "one admin" model, just with better UX.
-- **`python-jose`**, JWT libraries — session cookies are simpler, safer (server-side secret, no client-held claims), and revocable by rotating the secret.
-- **`fastapi-csrf-protect`** — we already have HTMX-header-based CSRF in `_verify_csrf`; extending it to the login POST is a one-line change.
-
-### Config additions (env)
-
-| Var | Purpose |
-|-----|---------|
-| `DASHBOARD_PASS_HASH` (new) | Argon2 hash of the admin password, generated by a small helper script |
-| `SESSION_SECRET` (new, required) | ≥32 bytes random; bot fails to start if unset (matches `SEC-02` discipline) |
-
-Keep `DASHBOARD_PASS` for one release as a fallback that is auto-upgraded to the hashed form on first successful login, then remove.
-
-Sources: [FastAPI cookie docs](https://fastapi.tiangolo.com/advanced/response-cookies/), [Starlette middleware docs](https://starlette.dev/middleware/), [argon2-cffi 25.1.0 docs](https://argon2-cffi.readthedocs.io/), [argon2-cffi PyPI](https://pypi.org/project/argon2-cffi/), [Passlib maintenance issue](https://github.com/pypi/warehouse/issues/15454).
-
----
-
-## 4. Staged-Entry Execution — no new stack
-
-The orchestrator flagged staged-entry as an open stack question. After reading `executor.py`, `trade_manager.py`, `risk_calculator.py`, and `models.py`: **no new Python dependencies are needed.**
-
-What's already in place we'll reuse:
-- `Executor._heartbeat_loop` and `Executor._cleanup_loop` patterns (asyncio.Tasks with cancellation) — add a `_zone_watch_loop` in the same style for price monitoring of follow-up zones.
-- `trade_manager.determine_order_type` already handles "price in zone → market; else limit at mid" — staged entry is a generalisation: split the lot across N stages, open one immediately, queue the rest on price-in-zone events.
-- `risk_calculator.calculate_lot_size` already accepts risk-percent; adding a fixed-lot mode is a ~10-line change (new branch: if `risk_mode == "fixed"`, return `min(acct.fixed_lot, max_lot)`).
-
-New code (not new deps):
-- `AccountSettings` dataclass in `models.py` with `risk_mode: Literal["percent", "fixed"]`, `fixed_lot: float`, `max_stages: int`, `stage_allocation: list[float]`.
-- DB table `account_settings` (one row per account, overrides `accounts.json` at runtime).
-- DB table `staged_entries` to track pending stages per signal (`signal_id`, `account`, `stage_number`, `status`, `target_zone_low`, `target_zone_high`, `triggered_at`).
-- Zone watcher loop polls MT5 prices on a cadence (e.g. 10s) and fills queued stages when price enters the zone; reuses the existing stale-signal and daily-limit checks.
-
-Sources: in-tree code (`executor.py`, `trade_manager.py`, `risk_calculator.py`, `models.py`).
-
----
-
-## 5. Per-Account Settings Page — no new stack
-
-UI: a new Jinja template + HTMX forms that POST to new `/api/settings/{account}` endpoints, exactly like the existing `modify_sl` / `modify_tp` / `close_partial` endpoints in `dashboard.py:224-299`.
-
-Persistence: the new `account_settings` table (see §4). Load at startup, write on form submit. Settings override `accounts.json` (which becomes the bootstrap/default layer). On container restart, DB wins — `accounts.json` is now a one-time seed.
-
-No new dependencies.
-
-### Schema-migration tooling tension (flag for roadmap)
-
-v1.0 `REQUIREMENTS.md` explicitly lists **DBE-01 alembic** as a v2 item. v1.1 introduces at least two new tables (`account_settings`, `staged_entries`). Options:
-
-1. **Stay on the v1.0 pattern** — hand-write DDL in `db.py init_schema()` guarded by `CREATE TABLE IF NOT EXISTS`. This is what v1.0 did for all its tables. Cheap, zero new tooling, acceptable for small schema additions. **Recommended for v1.1.**
-2. **Promote DBE-01 into v1.1** — introduce alembic mid-milestone. Correct long-term but adds a migration-authoring workflow mid-milestone.
-
-**Recommendation:** Option 1 for v1.1. Promote DBE-01 to v1.2 as a focused data-layer milestone once we have 3–4 tables added this round. The orchestrator should flag this as a v1.2 candidate.
-
----
-
-## Dependency Delta Summary
-
-### `requirements.txt` additions
-
-```
-argon2-cffi==25.1.0
-```
-
-That is the only new Python runtime package. `itsdangerous` and `starlette` are already transitive via FastAPI.
-
-### `requirements-dev.txt` additions
-
-None.
-
-### Build toolchain additions (not Python)
-
-- Tailwind v3.4 standalone CLI binary (downloaded in Dockerfile, no npm).
-- Vendored Basecoat CSS + JS files in `static/` (no package manager needed — the v0.3.3 release ships drop-in files from jsDelivr).
-
-### Files to delete / clean up
-
-- `drizzle.config.json` at repo root — stray JS ORM config, unrelated to this Python project.
-
----
-
-## Installation Cheat Sheet (for the roadmap's phase plans)
+# Stack Research
+
+**Domain:** Internal single-operator live-trading dashboard — React 19 + Vite SPA over a same-origin FastAPI JSON API
+**Researched:** 2026-06-01
+**Confidence:** HIGH (all versions verified live against the npm registry; shadcn ↔ Tailwind v4 compatibility verified against official shadcn docs)
+
+> Supersedes the 2026-04-18 v1.1 STACK research (Basecoat/HTMX UI substrate), which is obsolete now that the dashboard is being rewritten as a React/Vite SPA.
+>
+> Scope note: The locked stack (React 19 · Vite · shadcn/ui · Tailwind CSS) is **final and not re-litigated** here. This document pins exact current versions, resolves the shadcn ↔ Tailwind v4 question, fills the unspecified slots (routing, server-state, forms, toast, charting), and specifies the nginx-static-serving + dev-proxy cookie-auth integration. Backend deps (FastAPI, asyncpg, Telethon, argon2, itsdangerous) are unchanged — see `requirements.txt`.
+
+## Recommended Stack
+
+### Core Technologies
+
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| react / react-dom | `19.2.7` | UI runtime | Locked. Latest stable React 19.x. Client-side state model eliminates the HTMX refresh-race bug class that motivated the rewrite. |
+| vite | `8.0.16` | Build tool + dev server | **Vite 8 is the current stable line** (verified npm `latest`). Vite 7 and earlier are no longer supported upstream — pin to 8. Produces a static `dist/` (no Node runtime in prod — satisfies the minimize-deps constraint). |
+| @vitejs/plugin-react | `6.0.2` | React Fast Refresh + JSX transform | v6 pairs with Vite 8; uses Oxc for the Refresh transform (Babel dropped → smaller install, faster). Standard plugin for non-RSC React SPAs. |
+| typescript | `6.0.3` | Type safety | Operator fluent in React; TS catches API-shape drift between the FastAPI JSON layer and the SPA at compile time. Strongly recommended given the live-money surface. |
+| tailwindcss | `4.3.0` | Styling | Locked. **Use v4** (see Version Compatibility — shadcn now defaults to v4 and this is the non-negotiable alignment point). Backend already vendors Tailwind v4.2.2 CLI; the SPA uses the Vite plugin instead of the standalone CLI. |
+| @tailwindcss/vite | `4.3.0` | Tailwind v4 Vite integration | The v4 way to wire Tailwind into Vite. Replaces the v3 `postcss` + `tailwind.config.js` + `autoprefixer` chain entirely. No `postcss.config.js`, no `autoprefixer` needed. |
+| shadcn (CLI) | `4.10.0` | Component scaffolding (not a runtime dep) | Locked. Copies component source into `src/components/ui/` — you own the code, nothing to version-bump as a dependency. CLI init targets Tailwind v4 + React 19 by default now. |
+
+### Supporting Libraries
+
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| @tanstack/react-query | `5.100.14` | Server-state / data-fetching / live polling | **The data layer for the whole app.** Positions/prices poll via `refetchInterval`. Replaces the HTMX 3s-refresh model that clobbered inputs — Query caches server state separately from form/UI state, so a background refetch never touches an open SL/TP input. Peer-supports React 19. |
+| react-router-dom | `7.16.0` | Client-side routing | 9 views (overview, positions, history, signals, staged, settings, analytics, login, root-redirect). Use **declarative / library mode** (`createBrowserRouter` + `<RouterProvider>`), NOT framework/SSR mode — we are a static SPA. Mature, lowest cognitive overhead. |
+| react-hook-form | `7.77.0` | Form state + validation wiring | Settings page (folds SEED-001) and all mutation forms (modify SL/TP, partial close). Uncontrolled-input model means a background poll cannot re-render and clobber a field — directly addresses the bug class that killed HTMX. |
+| zod | `4.4.3` | Schema validation | Validate settings inputs (recommended ranges + footgun warnings from SEED-001) and optionally parse API responses to catch JSON-shape drift. |
+| @hookform/resolvers | `5.4.0` | Bridge zod ↔ react-hook-form | Single line: `resolver: zodResolver(schema)`. Required to use zod schemas as RHF validators. resolvers 5.x supports zod 4. |
+| sonner | `2.0.7` | Toast notifications | shadcn's official toast primitive (the old `toast`/`useToast` component is deprecated in favor of sonner). Drives the settings save/error toasts in the SEED-001 UX. |
+| recharts | `3.8.1` | Charting (analytics page only) | React 19 supported (peer dep `^19.0.0` verified). shadcn's `Chart` component is a thin themeable wrapper over recharts, so it drops straight into the design system. Analytics is the read-only pilot page — low risk, ideal first cutover. |
+| lucide-react | `1.17.0` | Icons | shadcn's default icon set. Now post-1.0 (verified `latest = 1.17.0`). Tree-shaken per-icon imports. |
+| class-variance-authority | `0.7.1` | Variant styling for shadcn components | Installed automatically by shadcn init; powers component `variant`/`size` props. |
+| clsx | `2.1.1` | Conditional className join | Part of the shadcn `cn()` helper. |
+| tailwind-merge | `3.6.0` | Dedup conflicting Tailwind classes | Other half of `cn()` — lets component consumers override classes safely. |
+| @radix-ui/react-slot | `1.2.4` | `asChild` polymorphism | Pulled in by shadcn primitives. Individual `@radix-ui/react-*` packages are added on-demand by `shadcn add` per component — do NOT install the deprecated monolithic `radix-ui` umbrella; let the CLI add the granular ones you actually use. |
+
+### Development Tools
+
+| Tool | Purpose | Notes |
+|------|---------|-------|
+| Vite dev server | Local dev with HMR | Configure `server.proxy` to forward `/api` (and login/logout routes) to FastAPI so the **httpOnly session cookie survives** — see Dev-Time Setup below. |
+| @types/node | Types for `path.resolve` in vite.config | Required by the shadcn Vite guide for the `@/*` alias setup. |
+| ESLint + typescript-eslint | Lint | Vite React-TS template ships a baseline config; keep it minimal (minimize-deps ethos). Optional. |
+| pnpm or npm | Package manager | shadcn docs use `pnpm dlx`; npm/`npx` works identically. Use whatever the operator already runs. |
+
+## Installation
 
 ```bash
-# Python side
-pip install argon2-cffi==25.1.0
+# 1. Scaffold (React + TS + Vite 8)
+npm create vite@latest dashboard -- --template react-ts
+cd dashboard
+
+# 2. Tailwind v4 (Vite plugin — NOT the standalone CLI the backend uses)
+npm install tailwindcss@4 @tailwindcss/vite@4
+npm install -D @types/node
+
+# 3. shadcn init (targets Tailwind v4 + React 19 by default; writes components.json,
+#    installs cva / clsx / tailwind-merge / lucide-react)
+npx shadcn@latest init
+
+# 4. Data + routing
+npm install @tanstack/react-query@5 react-router-dom@7
+
+# 5. Forms + validation
+npm install react-hook-form@7 zod@4 @hookform/resolvers@5
+
+# 6. Toast (shadcn add wires the component file; sonner is the runtime dep)
+npx shadcn@latest add sonner
+
+# 7. Charting (analytics page only — defer until that wave)
+npm install recharts@3
+npx shadcn@latest add chart
+
+# shadcn primitives are added per-component as pages are built, e.g.:
+npx shadcn@latest add button card dialog input form table tabs tooltip badge
 ```
 
-Dockerfile additions (illustrative, final placement to be decided in phase plan):
+`vite.config.ts` (Tailwind v4 + `@/` alias + dev proxy):
 
-```dockerfile
-# Tailwind standalone CLI — no Node.js required
-RUN curl -sL -o /usr/local/bin/tailwindcss \
-      https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-linux-x64 \
- && chmod +x /usr/local/bin/tailwindcss
+```ts
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import path from "path";
 
-# At build time, compile the stylesheet
-RUN tailwindcss -i static/css/input.css -o static/css/app.css --minify
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  resolve: { alias: { "@": path.resolve(__dirname, "./src") } },
+  server: {
+    proxy: {
+      // Forward API + auth to FastAPI so the httpOnly session cookie works in dev
+      "/api": { target: "http://localhost:8000", changeOrigin: false },
+      "/login": { target: "http://localhost:8000", changeOrigin: false },
+      "/logout": { target: "http://localhost:8000", changeOrigin: false },
+    },
+  },
+});
 ```
 
-Vendor Basecoat into the repo (one-time, checked in):
-
-```bash
-curl -sL -o static/css/basecoat.css \
-  https://cdn.jsdelivr.net/npm/basecoat-css@0.3.3/dist/basecoat.css
-curl -sL -o static/js/basecoat.min.js \
-  https://cdn.jsdelivr.net/npm/basecoat-css@0.3.3/dist/js/all.min.js
-```
-
-Input CSS file (`static/css/input.css`):
+`src/index.css` (v4 — replaces the entire v3 `@tailwind base/components/utilities` chain):
 
 ```css
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-/* Basecoat provides shadcn-style CSS variables and component primitives */
-@import "./basecoat.css";
+/* Map the existing v1.0 dark palette as v4 @theme tokens (no tailwind.config.js in v4) */
+@theme {
+  --color-dark-700: #252542;
+  --color-dark-800: #1a1a2e;
+  --color-dark-900: #0f0f1a;
+}
 ```
 
+## Production Serving — Vite static build behind nginx (same origin)
+
+Goal: zero Node runtime in prod; static `dist/` served by nginx on the **same origin** as FastAPI so the httpOnly session cookie and CSRF double-submit cookie work without CORS.
+
+1. `vite build` → emits `dist/` (hashed JS/CSS + `index.html`). Bake this into the Docker image (multi-stage: a Node stage builds, then copy `dist/` into the nginx/app image; the final runtime image has **no Node**).
+2. nginx serves the SPA and proxies API calls on one host:
+
+```nginx
+# API + auth → FastAPI (cookie stays first-party, same origin)
+location /api/   { proxy_pass http://telebot:8000; proxy_set_header Host $host; }
+location /login  { proxy_pass http://telebot:8000; }
+location /logout { proxy_pass http://telebot:8000; }
+
+# Static SPA assets (long-cache the hashed files)
+location /assets/ { root /usr/share/nginx/html; expires 1y; add_header Cache-Control "immutable"; }
+
+# SPA fallback — every other path returns index.html so client routing works on reload
+location / {
+  root /usr/share/nginx/html;
+  try_files $uri $uri/ /index.html;
+}
+```
+
+3. **Parallel-run cutover** (per PROJECT.md): keep the existing HTMX dashboard reachable (e.g. under a path prefix or the legacy `location` blocks) and route page-by-page to the SPA fallback as each React view is verified against the MT5 demo. Because both are same-origin behind one nginx, the session cookie is shared between old and new pages during the transition.
+
+Because the cookie is `httpOnly` and same-origin, the SPA **cannot and should not read it** — `fetch`/Query just send it automatically (same-origin requests include cookies by default). For mutations, read the CSRF token from the non-httpOnly double-submit cookie in JS and echo it in a request header (preserve the existing v1.0 scheme).
+
+## Dev-Time Setup — keeping auth cookies working
+
+- Run FastAPI on `:8000`, Vite dev on `:5173`.
+- Vite `server.proxy` (above) forwards `/api`, `/login`, `/logout` to FastAPI. Because the browser only ever talks to the Vite origin (`localhost:5173`), the session cookie is **first-party to the Vite origin** — no `SameSite`/CORS headaches, mirrors the prod same-origin model.
+- Set `changeOrigin: false` so the `Host` header (and thus cookie domain) is preserved.
+- In app code, use relative URLs (`fetch("/api/positions")`), never absolute `http://localhost:8000/...` — that would make the cookie cross-origin and break it. Relative URLs work identically in dev (through the proxy) and prod (through nginx).
+- TanStack Query `queryFn`s should use the same relative paths; no base-URL config needed.
+
+## Alternatives Considered
+
+| Recommended | Alternative | When to Use Alternative |
+|-------------|-------------|-------------------------|
+| react-router-dom 7 (declarative mode) | TanStack Router 1.170.x | TanStack Router has best-in-class type-safe routing + search-param validation. Choose it if you want compile-time-checked routes and are already deep in the TanStack ecosystem. For 9 flat views with a fluent-in-React solo operator, react-router is the lower-overhead, more-documented pick. Either works; react-router minimizes new concepts. |
+| TanStack Query (server state only) | + Zustand/Redux for client state | Add a client-state lib ONLY if genuinely app-wide *client* state emerges (it likely won't). Query covers all server state; React local state / context covers the rest. Do not pre-emptively add one. |
+| recharts 3 | shadcn chart wrapper alone / visx / nivo | recharts IS what shadcn's `Chart` wraps — use them together. visx/nivo only if you outgrow recharts' chart types (unlikely for win-rate / profit-factor analytics). |
+| sonner | Old shadcn `toast` (`useToast`) | None — the legacy toast is deprecated; sonner is the current default. |
+| Vite SPA | Next.js / Remix (SSR) | Already decided against (PROJECT.md): SSR/SEO irrelevant for an internal tool and would add a Node prod runtime. Do not reopen. |
+
+## What NOT to Use
+
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| Next.js / Remix / any SSR framework | Adds a Node runtime in prod, violating the minimize-deps constraint; SSR/SEO worthless for an internal single-operator tool | Vite SPA → static `dist/` behind nginx |
+| A Node process in production | Same — the whole point of choosing Vite over Next was to ship static files only | nginx serving prebuilt `dist/` |
+| Redux / Zustand / Jotai / MobX (state lib) | TanStack Query owns server state; there is no meaningful global *client* state in a polling dashboard. Adding one is dead weight + a footgun (re-introduces the manual-cache-sync bug class Query exists to remove) | TanStack Query + React local state / Context |
+| Tailwind CSS **v3** in the SPA | shadcn now defaults to v4; the backend already vendors v4; mixing v3 config (`tailwind.config.js`, `@tailwind` directives) with v4 components causes broken styling and OKLCH/HSL color mismatches | Tailwind v4 via `@tailwindcss/vite` + `@theme` tokens in CSS |
+| `postcss.config.js` + `autoprefixer` | The v3 build chain. Tailwind v4's Vite plugin handles this internally | `@tailwindcss/vite` plugin only |
+| The standalone Tailwind CLI (the backend's approach) | Right for the HTMX/Jinja side; wrong for a Vite SPA — bypasses HMR and the v4 plugin | `@tailwindcss/vite` |
+| Monolithic `radix-ui` umbrella package | Pulls in primitives you don't use; shadcn adds granular `@radix-ui/react-*` per component | Let `shadcn add` install the specific primitives |
+| `localStorage` / JWT tokens for auth | Decided against (PROJECT.md): XSS-exfiltration risk + CORS/cookie complexity | Keep httpOnly session cookie, same-origin, CSRF double-submit |
+| Axios | Extra dependency; native `fetch` + TanStack Query covers everything for same-origin relative calls | `fetch` inside Query `queryFn`s |
+| Vite 7 or earlier | No longer supported upstream | Vite 8 |
+
+## Stack Patterns by Variant
+
+**For the live-money mutation views (positions: close / modify SL-TP / partial close):**
+- Forms via react-hook-form (uncontrolled inputs) so background polls never clobber an open field — the exact failure mode that killed HTMX.
+- Mutations via TanStack Query `useMutation` with explicit `onSuccess` invalidation of the positions query (don't optimistically update live-money state — confirm against server, then refetch).
+- Send the CSRF token header on every mutation; surface failures via sonner.
+
+**For the analytics page (read-only pilot):**
+- Pure `useQuery` + recharts via the shadcn chart wrapper. No mutations, no CSRF, no live-money risk → correct first page to cut over.
+
+**For polling cadence:**
+- `refetchInterval: 3000` (matching the old HTMX cadence) on positions/prices; rely on Query's default pause-on-tab-blur. Crucially, polling now lives in the cache layer, decoupled from form/render state.
+
+## Version Compatibility
+
+| Package A | Compatible With | Notes |
+|-----------|-----------------|-------|
+| shadcn CLI `4.10.0` | tailwindcss `4.x` + react `19.x` | **CRITICAL ALIGNMENT:** shadcn init now defaults to Tailwind **v4** and React 19. Components ship with `data-slot` attributes, OKLCH colors, no `forwardRef`. Using Tailwind v3 here = broken styling. v3 is only "still works" for *existing* v3 apps — a fresh SPA must be v4. This aligns with the backend's vendored Tailwind v4.2.2 (same major). |
+| tailwindcss `4.3.0` | @tailwindcss/vite `4.3.0` | Keep these two on the same major/minor. v4 has NO `tailwind.config.js` — tokens go in CSS via `@theme`. |
+| vite `8.0.16` | @vitejs/plugin-react `6.0.2` | plugin-react v6 is the Vite 8 pairing (Oxc-based, Babel-free). |
+| @tanstack/react-query `5.100.14` | react `^18 \|\| ^19` | React 19 verified in peer deps. |
+| react-router-dom `7.16.0` | react `>=18` | Use declarative/library mode (`createBrowserRouter`), not framework/SSR mode. |
+| recharts `3.8.1` | react `^19.0.0` (peer) | React 19 explicitly in peer deps; pairs with shadcn `chart` wrapper. |
+| react-hook-form `7.77.0` + @hookform/resolvers `5.4.0` + zod `4.4.3` | each other | resolvers 5.x supports zod 4. Pin zod to 4.x (zod 4 has API changes vs 3). |
+| sonner `2.0.7` | react `19.x` | Current shadcn default toast. |
+
+## Sources
+
+- npm registry (live, 2026-06-01) — exact `latest` versions for vite (8.0.16), @vitejs/plugin-react (6.0.2), react/react-dom (19.2.7), tailwindcss + @tailwindcss/vite (4.3.0), shadcn (4.10.0), @tanstack/react-query (5.100.14), react-router-dom (7.16.0), @tanstack/react-router (1.170.10), react-hook-form (7.77.0), zod (4.4.3), @hookform/resolvers (5.4.0), sonner (2.0.7), recharts (3.8.1), lucide-react (1.17.0), cva (0.7.1), clsx (2.1.1), tailwind-merge (3.6.0), @radix-ui/react-slot (1.2.4), typescript (6.0.3) — HIGH confidence (authoritative registry).
+- npm peer-dependency queries — recharts / react-router / tanstack-query React 19 support — HIGH confidence.
+- https://ui.shadcn.com/docs/tailwind-v4 — shadcn defaults to Tailwind v4; v3 backward-compatible only for existing apps — HIGH confidence.
+- https://ui.shadcn.com/docs/installation/vite — exact Vite + Tailwind v4 setup (`@tailwindcss/vite`, `@import "tailwindcss"`, `@/*` alias, `@types/node`) — HIGH confidence.
+- https://vite.dev/releases — Vite 8 is the current stable line; v7 and earlier unsupported — HIGH confidence.
+- https://tanstack.com/query/latest/docs/framework/react/guides/polling — `refetchInterval` semantics, pause-on-blur default — HIGH confidence.
+- Existing repo: `requirements.txt`, `tailwind.config.js`, `.planning/PROJECT.md` — backend deps, dark palette tokens, locked decisions.
+
 ---
-
-## Confidence Assessment
-
-| Area | Level | Basis |
-|------|-------|-------|
-| Basecoat as substrate choice | HIGH | Verified license, version, JS deps against primary sources (GitHub, install docs, component docs) |
-| Basic Components rejection | HIGH | Archive status confirmed in upstream GitHub |
-| argon2-cffi over Passlib | HIGH | Release dates and maintenance issue are primary-source verified |
-| Tailwind v3 vs v4 choice | MEDIUM | Both are supportable; v3 recommended for migration-risk reduction, but v4 is workable for a team comfortable with the breaking changes |
-| Staged-entry "no new deps" | HIGH | Read the existing executor/trade_manager; the pattern slots in cleanly |
-| Login via SessionMiddleware | HIGH | Primary Starlette/FastAPI docs |
-
-## Gaps / Open Questions for Later Phases
-
-- **Tailwind v3 vs v4 final call** — a one-line decision the user/orchestrator should confirm before the UI phase starts; no downstream research needed.
-- **Whether to promote DBE-01 (alembic) into v1.1** — scope call, not research.
-- **Password-hash migration path** — one-shot "first login writes the hash" vs. an out-of-band `hash-password` CLI script. Implementation detail for the login phase.
-
----
-
-*Stack research defined: 2026-04-18 for milestone v1.1.*
+*Stack research for: React 19 + Vite SPA over same-origin FastAPI JSON API (internal live-trading dashboard)*
+*Researched: 2026-06-01*

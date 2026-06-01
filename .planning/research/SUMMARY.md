@@ -1,19 +1,17 @@
 # Project Research Summary
 
-**Project:** Telebot v1.1 — "Improved trade executions and UI"
-**Domain:** Live-money MT5 trading bot (Telegram signal copier) + single-admin FastAPI/HTMX ops dashboard
-**Researched:** 2026-04-18
-**Confidence:** HIGH on stack/architecture/pitfalls (all grounded in the actual codebase); MEDIUM on one load-bearing feature question (staging trigger model — see Open Questions).
-
----
+**Project:** Telebot v1.2 — React/Vite dashboard rewrite
+**Domain:** Internal single-operator live-money trading control surface (React 19 + Vite SPA over same-origin FastAPI JSON API)
+**Researched:** 2026-06-01
+**Confidence:** HIGH
 
 ## Executive Summary
 
-Telebot v1.1 bolts four features onto the shipped v1.0 core without a substrate rewrite: (1) **staged-entry execution** to stop missing text-only "Gold buy now" signals, (2) a **per-account runtime settings page** for risk_mode / fixed_lot / max_stages, (3) a **shadcn-styled dashboard redesign** that keeps FastAPI + Jinja + HTMX and adds Basecoat UI + a real Tailwind build, and (4) a **styled login form** replacing the v1.0 HTTPBasic prompt. The substrate question flagged in PROJECT.md resolves cleanly: **no SPA rewrite** — `basecoat-css@0.3.3` gives the shadcn visual language on top of HTMX with a single new Python dependency (`argon2-cffi==25.1.0`).
+This is a substrate migration, not a product expansion. The goal is to replace a FastAPI + HTMX + Jinja2 dashboard with a React 19 + Vite SPA, eliminating a well-understood class of refresh-race bugs (input clobbering, flicker, broken modal mounting) that recurred throughout v1.1. The rewrite is bounded to parity plus one deliberate upgrade — SEED-001 settings UX — and must leave the bot core (executor, trade_manager, db, mt5_connector) completely untouched. All four research streams agree on this scope discipline: adding trading capability or new analytics here is an explicit anti-feature.
 
-The recommended approach is to land this milestone as **five dependency-honest phases** (settings foundation → staged entries → UI substrate swap → login form → settings/stages UI), with **Phase 1 (settings foundation)** as the de-risking prerequisite since every later phase reads from a `SettingsStore` abstraction, not from the frozen `AccountConfig` dataclass. The staged-entry phase is the trickiest — it touches every v1.0 safety primitive (kill switch, reconnect/position-sync, daily limits, stale re-check, duplicate-direction guard) and each of those hooks must be explicitly extended, not bypassed.
+The recommended approach builds in four phases: (A) JSON API foundation, curl/pytest-testable before any UI exists; (B) SPA scaffold with auth, CSRF, design tokens, and TanStack Query wired up but no pages yet; (C) page-migration waves from lowest to highest risk — analytics pilot first, live-money mutation pages last; (D) parallel-run cutover with page-by-page HTMX decommission gated on MT5-demo-verified parity. The parallel-run architecture is structurally reversible at every step: legacy and SPA run simultaneously behind the same nginx instance sharing the same session cookie, and rolling back a page is one nginx edit.
 
-The safety bar from v1.0 remains the dominant constraint: **real money, no regressions on live trading**. The biggest risk in v1.1 is an orphaned text-only position carrying `sl=0.0` because a follow-up signal never arrived — this is why Pitfall 1 (mandatory default SL + follow-up watchdog timeout + orphan cap) is the single most important requirement to lock into Phase 1/2. The second-biggest risk is behavioural: the duplicate-direction guard in `trade_manager.py:187-190` will silently reject stages 2..N unless it is explicitly signal-id-aware, making the feature look "done" while being broken. Mitigations for all 18 identified pitfalls are enumerated in PITFALLS.md and mapped to phases.
+The two dominant risks are both about the live-money mutation surface. First, optimistic UI updates must not be used on close/modify/partial-close/kill-switch — UI must only change state after the server confirms success from the MT5 connector, not on user intent. Second, the HTMX-coupled CSRF mechanism (HX-Request header check) will silently break for the SPA, and the naive fix is to delete the check entirely; the correct fix is to replace it with a proper double-submit cookie (X-CSRF-Token header) and add a regression test before any page goes live. Both must be established as conventions in Phase B before Phase C begins, so every migration wave inherits them.
 
 ---
 
@@ -21,121 +19,210 @@ The safety bar from v1.0 remains the dominant constraint: **real money, no regre
 
 ### Recommended Stack
 
-Additions only — the v1.0 core (Python 3.12, FastAPI 0.115, asyncpg, Jinja2, HTMX 2, Telethon 1.42, PostgreSQL 16, Docker) stays in place. See STACK.md for full rationale.
+All versions verified against npm registry on 2026-06-01. shadcn/ui now defaults to Tailwind v4 + React 19 — this is a hard compatibility boundary. Using Tailwind v3 in the SPA produces broken styling and OKLCH color mismatches. The backend already vendors Tailwind v4.2.2 CLI, so alignment is natural; the SPA uses @tailwindcss/vite (the Vite plugin form) instead of the standalone CLI. Vite 8 is the current supported line; Vite 7 is end-of-life. No tailwind.config.js, no postcss.config.js — v4 configuration lives entirely in CSS via @theme tokens.
 
-**Core technologies being added:**
-- **Basecoat UI (`basecoat-css@0.3.3`, vendored)** — framework-agnostic shadcn/ui visual port; pairs natively with HTMX + Jinja; no SPA rewrite required. MIT-licensed, pre-1.0 but the least-bad substrate option (Basic Components is archived, everything else isn't shadcn).
-- **Tailwind CSS v3.4 standalone CLI** — replaces the `cdn.tailwindcss.com` Play-CDN script currently in `templates/base.html:7` (a production blocker in v1.0 that v1.1 must fix). v3 over v4 for migration-risk reduction during an already-large UI phase; v4 migration is a v1.2 candidate.
-- **`argon2-cffi==25.1.0`** — password-at-rest hashing for the new login form. Chosen over Passlib (unmaintained, 2020-dormant) and fastapi-users/authlib/JWT (overkill for single-admin).
-- **`starlette.middleware.sessions.SessionMiddleware`** (already transitive via FastAPI) — signed-cookie session for the login form. `itsdangerous` is already present transitively. No new auth library.
-- **Staged-entry execution + per-account settings** — **zero new Python dependencies**. Pure in-repo code: new `_zone_watch_loop` in `executor.py` mirroring the existing `_heartbeat_loop` pattern, new `SettingsStore` in-process cache, two new hand-written DDL tables (`account_settings`, `staged_entries`).
+TanStack Query v5 is the structural fix for the input-clobber bug: server state lives in a cache, form/UI state lives in React local state, and background refetch via refetchInterval never touches an open input or modal. This is an architectural guarantee, not a workaround. placeholderData: keepPreviousData replaces the existing _last_positions_by_account stale-while-revalidate hack. react-hook-form with uncontrolled inputs provides the same guarantee on the form side.
 
-**Files to delete:** stray `drizzle.config.json` at repo root (unused JS ORM config).
+**Core technologies:**
+
+| Technology | Version | Purpose | Rationale |
+|------------|---------|---------|-----------|
+| react / react-dom | 19.2.7 | UI runtime | Locked. Eliminates HTMX refresh-race bug class. |
+| vite | 8.0.16 | Build tool + dev server | Current stable line; Vite 7 unsupported. Static dist/ — no Node runtime in prod. |
+| @vitejs/plugin-react | 6.0.2 | React Fast Refresh + JSX | v6 pairs with Vite 8; Oxc-based (Babel-free, faster). |
+| tailwindcss + @tailwindcss/vite | 4.3.0 | Styling | Locked. Mandatory for shadcn; backend already on v4. No tailwind.config.js. |
+| shadcn CLI | 4.10.0 | Component scaffolding | Owns source in src/components/ui/; targets Tailwind v4 + React 19 by default. |
+| @tanstack/react-query | 5.100.14 | Server-state + live polling | The structural fix. refetchInterval + placeholderData: keepPreviousData. |
+| react-router-dom | 7.16.0 | Client-side routing | Declarative mode (createBrowserRouter) for 9-view flat SPA. |
+| react-hook-form + zod + @hookform/resolvers | 7.77.0 + 4.4.3 + 5.4.0 | Forms + validation | Uncontrolled inputs (refetch-immune); zod mirrors server hard-caps for instant feedback. |
+| sonner | 2.0.7 | Toast notifications | shadcn current default; replaces hand-rolled _render_toast_oob OOB-swap hack. |
+| recharts | 3.8.1 | Charting (analytics only) | shadcn Chart wrapper; React 19 peer dep verified. Defer install to analytics wave. |
+| typescript | 6.0.3 | Type safety | Catches API-shape drift between FastAPI JSON layer and SPA at compile time. |
+
+**What NOT to use:** Next.js/Remix (Node runtime in prod), Tailwind v3 (shadcn incompatibility), Redux/Zustand for server data (double-caches server state), Axios (native fetch sufficient), localStorage/JWT tokens (XSS risk, locked decision), WebSocket (no bidirectional need), SSE for v1.2 (polling meets one-operator needs).
 
 ### Expected Features
 
-Feature landscape is organised by the four target areas (FEATURES.md §1–4). The following is an opinionated MVP cut.
+This is a parity rewrite. Nearly everything is P1 — prioritization is about ordering, not dropping features. The one scope expansion is SEED-001 settings UX, which rides the rewrite at no additional blast-radius cost.
 
-**Must have (table stakes — v1.1 launch):**
-- **Staged entry core mechanic** — text-only signal opens stage 0 immediately (market, default SL from new `default_text_only_sl_pips` knob — *never* `sl=0.0`); follow-up signal with zone/SL/TP promotes stage 0 and queues stages 1..N; per-account `max_stages`, `risk_mode` (percent|fixed), `stage_allocation`.
-- **All v1.0 safety hooks extended to staged paths** — kill switch drains the pending-stages queue *before* closing positions; reconnect reconciles staged_entries against MT5 by comment-based idempotency key; daily-limit and stale re-check fire per stage; duplicate-direction guard bypassed for same-signal stages only.
-- **Per-account settings page** — CRUD for risk_mode, risk_percent, fixed_lot, max_open_trades, max_stages, max_daily_trades_per_account, enable/disable; hard server-side bounds; dangerous-change two-step confirmation (mirrors v1.0 kill-switch UX); audit log of every change; "changes apply to next signal only" copy in UI.
-- **Dashboard redesign** — Tailwind build migration (remove Play CDN from `base.html:7`); Basecoat substrate across all templates; mobile-responsive layout with collapsible sidebar; pending-stages panel on Overview; positions/history row drilldowns; per-source analytics breakdown. **Zero functional regression** — every existing HTMX endpoint keeps its contract.
-- **Login form** — styled `/login` page using Basecoat primitives; signed session cookie via SessionMiddleware (8h default, 30-day "remember me"); logout button; argon2 hash; CSRF via double-submit cookie on `/login` only; rate-limit at nginx + app-level lockout after N failures; `SESSION_SECRET` fail-fast at startup; one-release backwards-compat fallback from `DASHBOARD_PASS` plaintext with startup refusal when both env vars are set post-migration.
+**Must have — parity (table stakes):**
+- All 9 views re-implemented: overview, positions, history, signals, staged, settings, analytics, login, root redirect
+- Live positions/overview refresh with no input/modal clobbering (TanStack Query refetchInterval + local form-state separation)
+- Close / modify SL+TP / partial close with confirm dialog, disabled-while-pending, pending row state, rollback on error, sonner toast
+- Two-step kill switch (preview count -> confirm) with resume; confirm disabled-while-pending
+- Position drilldown (fill history, signal attribution, live P/L) — per-row expanded state immune to background refetch
+- History and analytics filters reflected in URL (React Router search params)
+- Settings: per-account tabs, two-step confirm with diff + dry-run, audit timeline, revert, zod mirror of server hard-caps, sonner toasts, per-field help/tooltips, SEED-001 copywriting
+- Session-cookie auth, double-submit CSRF on all mutations, global 401 -> login redirect
+- Responsive desktop table + mobile card layouts on all list pages
+- TRADING PAUSED banner; DRY-RUN/LIVE/DISABLED status indicators
 
-**Should have (differentiators, v1.1.x or v1.2):**
-- Adaptive zone reshape on update signals (move unfilled stages to new zone).
-- Trailing activation of later stages (stage N only arms after stage N-1 fills).
-- Settings-page bulk apply / copy-from-account / diff-from-seed view.
-- Command palette (Cmd/Ctrl+K), toast notifications, light-mode toggle, per-account color tag.
-- Login: last-login timestamp displayed post-auth.
+**Should have — UX upgrades riding the rewrite:**
+- Viewport-level error toasts on broker rejections (biggest safety gain; replaces 12px inline span)
+- isFetching subtle refresh indicator without full-table flicker
+- disabled={isPending} on all destructive buttons (prevents double-fire)
+- Bookmarkable filtered history/analytics URLs
+- Live compounded-exposure warning in settings (risk_value x max_stages) — prevents 30%-per-signal footgun
 
-**Defer (v2+ / explicit anti-features):**
-- **Martingale / averaging-down / grid trading** — explicitly rejected; these are the failure modes a staged-entry feature is commonly conflated with.
-- **Dynamic max_stages from signal confidence scoring** — NLP/ML; out of scope.
-- **SPA rewrite to React/Vue/Nuxt** — explicitly rejected by STACK.md §1.
-- **WebSocket live updates, candlestick charts, shareable dashboard links** — HTMX polling is adequate; TradingView is the chart tool.
-- **User registration, password reset, 2FA, OAuth, SSO, role-based access, passkey/WebAuthn** — all out of scope for single-admin; passkey is the strongest v1.2+ candidate if threat model escalates.
-- **DBE-01 alembic migration tooling** — stays deferred to v1.2 per STACK.md §5; v1.1 keeps hand-written DDL with strict additive-only discipline.
+**Defer to v2+:**
+- New analytics, new trading capability, signal-log filtering, fixing v1.1 staged-data approximations, SSE/WebSocket push, multi-user/roles
+
+**Two highest-complexity pages:**
+- Positions — live table + 4 destructive actions + drilldown + edit modal; canonical no-clobber test surface
+- Settings — SEED-001 forms + zod + dynamic per-account/mode caps + two-step confirm + audit + revert + toasts + tooltips
 
 ### Architecture Approach
 
-Single Python process (`bot.py`), single asyncio event loop, FastAPI + uvicorn launched as a task inside `bot.py:main`. Telethon handler, Executor background tasks, and dashboard routes share state via direct object references (`_executor`, `_notifier` in `dashboard.py:27-30`). v1.1 keeps this topology — no second process, no IPC, no message bus — and adds three new things: a `SettingsStore` in-process cache with write-through to `account_settings`, a new `_zone_watch_loop` asyncio.Task that peers with the existing `_heartbeat_loop` and `_cleanup_loop` inside `Executor`, and a `SessionMiddleware`-fronted login layer that replaces `HTTPBasic` without touching the rest of the route layer.
+The dashboard already runs in-process with the bot (init_dashboard() injects live _executor/_settings/_notifier). JSON routes call the same live objects with zero IPC — "don't touch bot core" is trivially satisfied because the JSON API is purely a serialization change: wrap the existing dict-returning helpers in Pydantic v2 response models. No logic moves, no new imports land in executor.py, trade_manager.py, db.py, or mt5_connector.py.
 
-**Major components (v1.1 delta):**
-1. **`SettingsStore`** — single owner of `AccountSettings` lookups; `.effective(name)` merges `accounts.json` bootstrap with DB overrides; `.reload(name)` invalidates the in-memory dict on dashboard POST. Passed to `TradeManager` and `Executor` from `bot.py:main`. `AccountConfig` is effectively frozen and becomes the bootstrap/seed layer; DB wins at runtime.
-2. **`Executor._zone_watch_loop` + `_trigger_stage`** — new background task, 10s default cadence (configurable via `GlobalConfig.zone_watch_interval_seconds`); polls MT5 price once per (account, symbol) pair; respects `_trading_paused` AND `_reconnecting` per tick, not only at loop entry; runs daily-limit + stale + max_open_trades checks per fill; uses comment-based idempotency key `telebot-{signal_id}-s{stage}` to survive reconnect without duplicating positions.
-3. **`Executor.emergency_close` (modified)** — now calls `db.cancel_all_active_stages()` **before** closing positions, so the watcher can't race a kill-switch window. `_sync_positions` extended to reconcile staged_entries against MT5 by comment.
-4. **DB schema additions (hand-written DDL)** — `account_settings` (one row per account, overrides accounts.json), `staged_entries` (per-signal pending stages with zone + status + expires_at), `settings_audit` (append-only change log), `failed_login_attempts` (for lockout). No `ALTER TABLE` on existing v1.0 tables — additive only.
-5. **Dashboard auth / UI layer** — `SessionMiddleware` added to the FastAPI app; `_verify_auth` swapped from `HTTPBasic` to session-cookie read with `RedirectResponse("/login?next=…")` on miss; existing `_verify_csrf` HTMX-header check unchanged for authenticated routes; double-submit-cookie CSRF on `/login` only. Templates migrate from Play-CDN Tailwind + handwritten `.card`/`.btn-*` to Basecoat classes + built `static/css/app.css`; new templates: `login.html`, `staged.html` + partial; rewritten: `settings.html` (now editable).
+The JSON API mounts as APIRouter(prefix="/api/v2") added to the existing app in one line. Auth reuses the telebot_session httpOnly cookie unchanged; _verify_auth already 401s on /api/-prefixed paths. CSRF replaces the HTMX-coupled HX-Request check with a double-submit cookie: a non-httpOnly telebot_csrf cookie the SPA reads and echoes as X-CSRF-Token header, verified server-side with secrets.compare_digest.
 
-See ARCHITECTURE.md §3 for the staged-entry data-flow diagram and §7 for the full recommended build order.
+nginx during parallel-run: /api/ proxies to uvicorn, /app/ serves the SPA bundle with try_files .../app/index.html fallback, and / continues proxying all legacy HTMX routes to uvicorn. The catch-all fallback must NOT be try_files during parallel-run or it swallows still-HTMX routes, the API, SSE, and /login. Recommended serving mechanism for v1.2: uvicorn StaticFiles mount at /app (simpler, no Docker volume change).
+
+**Major components:**
+
+| Component | Responsibility | Status |
+|-----------|---------------|--------|
+| api/ package (~10 modules) | JSON contract: auth, positions, accounts, history, signals, stages, analytics, settings, actions, meta | New |
+| api/schemas.py | Pydantic v2 response models wrapping existing dict helpers | New |
+| api/deps.py | require_user (reuses _verify_auth 401 branch), verify_csrf_token (double-submit) | New |
+| frontend/ Vite project | React 19 SPA: 9 views, TanStack Query, shadcn/ui, Tailwind v4, react-hook-form | New |
+| dashboard.py | Legacy HTMX routes (shrinks to nothing in Phase D); receives include_router + accessor functions | Modified |
+| nginx/telebot.conf | + /app/ SPA location; + /api/v2/auth/login rate-limit; SSE block preserved until HTMX gone | Modified |
+| Dockerfile | + Node spa-build stage; + COPY --from=spa-build; Tailwind CLI stage removed in Phase D | Modified |
+| Bot core | executor, trade_manager, db, mt5_connector — untouched | Untouched |
 
 ### Critical Pitfalls
 
-1. **Text-only signal opens an unbounded-risk orphan (Pitfall 1)** — avoid by mandating a default protective SL at stage 0 open (`default_text_only_sl_pips`, e.g. 100), a follow-up watchdog that auto-closes or force-sets heuristic SL/TP after N minutes (default 30), a `(symbol, direction, account, window_seconds)` correlation rule, and a hard `max_orphan_text_only` per-account cap. Never submit `sl=0.0`.
-2. **Duplicate-direction guard silently rejects stages 2..N (Pitfall 2)** — `trade_manager.py:187-190` was written to prevent double-filling duplicate signals; staged entries are intentional multiple fills. Tag the call with `signal.staged_entry_id` and skip the guard for same-signal stages; keep it for unrelated same-direction signals.
-3. **Kill switch fires mid-stage and leaves a partial state (Pitfall 4)** — `emergency_close` must execute `UPDATE staged_entries SET status='cancelled_by_kill_switch' WHERE status='pending'` **before** closing positions; zone-watcher loop must check `_trading_paused` *inside* each per-stage tick, not only at loop entry; `resume_trading()` must NOT un-cancel the drained rows.
-4. **Reconnect produces duplicates or orphaned stages (Pitfall 5)** — use comment-based idempotency keys (`telebot-{signal_id}-s{stage}`); on reconnect, query MT5 by comment before resubmitting; extend `_sync_positions` into a true reconciler against DB `staged_entries`.
-5. **Tailwind purge strips classes used in Python-string HTMX responses (Pitfall 10)** — `dashboard.py` has multiple `HTMLResponse(f'<span class="text-green-400">…</span>')` sites; the Tailwind `content` glob must include `./**/*.py` and a safelist must be pinned for the critical status classes; belt-and-suspenders with a CI check grepping the built CSS.
+1. **No optimistic updates on money operations** — onSuccess (server-confirmed) is the only trigger that clears/updates UI for close/modify/partial-close/kill-switch. An optimistic clear before broker confirmation leaves the operator believing a position is closed when it is still live. Use useMutation with row/modal in pending state until onSuccess; onError keeps the modal open with typed values preserved and surfaces result.error inline.
 
-Other must-mitigate pitfalls (see PITFALLS.md for the full 18): daily-limit accounting model for staged fills (Pitfall 3 — needs explicit up-front decision), zone-watcher cadence fills outside the zone on fast-moving instruments (Pitfall 6 — pre-flight price re-check + tolerance band), runtime settings mutation mid-stage gives inconsistent risk (Pitfall 7 — snapshot `AccountSettings` into `staged_entries` row at creation), Basecoat JS loses bindings after HTMX swap (Pitfall 11 — `htmx:afterSwap` re-init hook), stale CSS cached across a live-hours deploy (Pitfall 12 — hashed filename + deploy during market-closed window), login CSRF strategy conflicts with existing HTMX-header CSRF (Pitfall 13 — double-submit-cookie on `/login` only), schema ALTER without alembic (Pitfall 17 — hard rule: additive-only, new tables only, pre-commit lint for `ALTER TABLE`).
+2. **CSRF will silently break for the SPA** — _verify_csrf requires HX-Request header; the SPA cannot send it; the naive fix is deleting _verify_csrf. Replace with double-submit telebot_csrf cookie + X-CSRF-Token header using secrets.compare_digest. Add a regression test asserting POST without the header returns 403 before any page goes live.
+
+3. **Partial close is non-idempotent at the server** — close_partial computes pos.volume * percent/100 from live volume, so a double-fire closes 50% then 50%-of-remainder = 75% total. Fix: switch to absolute target volume + a client request-id for server-side deduplication. disabled={isPending} is the minimum mitigation.
+
+4. **nginx try_files catch-all must NOT cover the whole origin during parallel-run** — the SPA catch-all applies only to the /app/ prefix. The proxy_buffering off / proxy_read_timeout 86400s SSE directives must be preserved until HTMX overview/staged are decommissioned.
+
+5. **Number formatting and precision must stay server-side** — XAUUSD pip-size has already bitten this project (quick task 260501-i7u). The JSON API must return both display-ready formatted strings and machine-precise numeric values. The SPA submits the exact server-provided numeric value for mutations, never a re-rounded JS value. Timestamps: ISO-8601 with UTC offset; date-range filtering stays server-side.
 
 ---
 
 ## Implications for Roadmap
 
-Based on the architecture-honest dependency chain in ARCHITECTURE.md §7 and the pitfall-to-phase mapping in PITFALLS.md, the following five-phase structure is recommended. Phases 1+2 can overlap on DB-schema work; Phase 3 can run in parallel with Phase 2 (they touch different files); the serial chains are **1 → 2 → 5** and **3 → 4 → 5**.
+All four research streams converge on the same four-phase structure. The ordering is dependency-driven: JSON API gates everything; auth/CSRF conventions must precede page migration; read-only pages validate the pipeline safely; live-money pages come last and are decommissioned only after MT5-demo-verified parity.
 
-### Phase 1: Settings Foundation (no UI yet)
-**Rationale:** Every later phase reads from runtime-mutable settings. Building staged entries against hardcoded `AccountConfig` would require a second pass. Also the cheapest place to lock in the "additive-only schema" discipline (Pitfall 17) and the per-signal settings snapshot mechanism (Pitfall 7).
-**Delivers:** `AccountSettings` dataclass + `SettingsStore` write-through cache; `account_settings` + `settings_audit` tables (hand-written DDL); `accounts.json` becomes bootstrap seed; `TradeManager` and `risk_calculator` read effective settings (including new `risk_mode="fixed"` branch); bot.py wires `SettingsStore` before `TradeManager`.
-**Addresses (FEATURES.md §2):** "table stakes — per-account settings" backend layer.
-**Avoids:** Pitfalls 7 (snapshot mechanism), 9 (JSON-vs-DB authority logged at startup), 17 (additive-only schema discipline established in phase plan).
+### Phase A: JSON API Foundation
 
-### Phase 2: Staged Entries (server-side, no UI)
-**Rationale:** Server-side behaviour must be correct and test-covered before we give operators a button. This is the trickiest phase — every v1.0 safety primitive must be extended, not bypassed. Must ship behind integration tests before Phase 5 exposes any UI control. **Requires the staging-trigger-model ambiguity to be resolved before kickoff** (see Open Questions).
-**Delivers:** `staged_entries` table + DB helpers; `Executor._zone_watch_loop` + `_trigger_stage`; `TradeManager` persists stages on multi-stage OPEN; `emergency_close` drains the queue before closing positions; `_reconnect_account` reconciles stages by comment; `_cleanup_loop` expires old stages; default protective SL at text-only stage 0 open + follow-up watchdog timeout + orphan cap; duplicate-direction guard signal-id-aware.
-**Addresses (FEATURES.md §1):** full staged-entry table-stakes set.
-**Avoids:** Pitfalls 1 (text-only orphan with no SL), 2 (duplicate-direction guard), 3 (daily-limit accounting — **must be decided in Phase 2 planning**), 4 (kill switch drains queue), 5 (reconnect idempotency), 6 (zone-watcher cadence + pre-flight re-check).
+**Rationale:** Everything else is blocked on this. The computation already exists in dashboard.py helpers; this is only a serialization change. Must be independently testable via curl/pytest before any UI exists.
 
-### Phase 3: UI Substrate Swap (isolated, no logic changes)
-**Rationale:** Visual layer change that must land before Phase 4 so the login form is styled with the same tokens as the dashboard. Can run in parallel with Phase 2 since files don't overlap. Removes a v1.0 production blocker (Play-CDN Tailwind) as a side effect.
-**Delivers:** Dockerfile Tailwind v3.4 standalone CLI build stage; Basecoat CSS + JS vendored to `static/`; `base.html` swaps Play CDN for built `/static/css/app.css`; all partials and pages restyled to Basecoat primitives; mobile-responsive layout; `drizzle.config.json` deleted.
-**Uses (STACK.md §1–2):** basecoat-css@0.3.3, Tailwind v3.4 standalone.
-**Avoids:** Pitfalls 10 (Tailwind purge — `content` glob must include `./**/*.py` + safelist + CI check), 11 (HTMX `htmx:afterSwap` re-init hook for Basecoat JS), 12 (hashed filenames + market-closed deploy window), 18 (optimistic-UI kill-switch feedback).
+**Delivers:**
+- api/ package with APIRouter(prefix="/api/v2") mounted on the existing app (one line in dashboard.py)
+- All read endpoints wrapped in Pydantic v2 response models (accounts, positions, history, signals, stages, analytics, overview meta)
+- All mutation endpoints returning structured JSON, not toast HTML (close, modify-levels, close-partial, emergency preview/close, resume, trading-status)
+- deps.py: require_user + verify_csrf_token (double-submit cookie + X-CSRF-Token, secrets.compare_digest)
+- auth.py: JSON login/logout/me/csrf + telebot_csrf non-httpOnly cookie
+- Standardized error envelope: bare resource on success, {error: {code, message, fields}} on failure
+- Timestamp contract: ISO-8601 with UTC offset + configured display zone in every response
+- Number contract: display-ready formatted strings + machine-precise numeric values in every response
+- Accessor functions in dashboard.py (get_executor(), get_settings(), get_notifier()) so api/ never imports rebindable globals
+- Regression test: POST to any mutation without X-CSRF-Token returns 403
 
-### Phase 4: Login Form
-**Rationale:** Settings-edit is the first truly sensitive dashboard action introduced in v1.1 — it writes DB state that affects live trading. Shipping it behind HTTPBasic then upgrading later is asking for an accidental-prod-change window. Must land before Phase 5.
-**Delivers:** `SESSION_SECRET` + `DASHBOARD_PASS_HASH` config with fail-fast validation; `SessionMiddleware` added to FastAPI app; `/login`, `/logout` routes; `_verify_auth` swapped to session-cookie dependency with `RedirectResponse("/login?next=…")` on miss; `login.html` on Basecoat primitives; double-submit-cookie CSRF on `/login` only; app-level lockout + nginx `limit_req` rate limit; backwards-compat fallback from plaintext `DASHBOARD_PASS` with startup refusal when both env vars are set post-migration; `scripts/hash_password.py` CLI helper.
-**Implements:** ARCHITECTURE.md §5 login layering.
-**Avoids:** Pitfalls 13 (CSRF strategy split), 14 (session-secret rotation runbook), 15 (plaintext env lingering), 16 (brute-force rate limiting).
+**Bot core:** Zero imports changed in executor/trade_manager/db/mt5_connector
+**Avoids:** CSRF breakage (Pitfall 4), number precision (Pitfall 7), timezone bugs (Pitfall 8)
+**Research flag:** Standard patterns — no additional research needed.
 
-### Phase 5: Settings UI + Stages UI
-**Rationale:** Integrates all prior phases — needs `SettingsStore` (1), staged_entries (2), Basecoat components (3), session auth for sensitive POSTs (4). Last on the chain.
-**Delivers:** `/settings` page rewrite (editable forms, HTMX `hx-post`, dangerous-change confirmations, audit-log timeline, server-side validators, dry-run preview); `/api/settings/{account}` endpoints calling `settings_store.reload(name)` after write; `/staged` page + partial; SSE `/stream` payload extended with staged_entries.
-**Addresses:** FEATURES.md §2 UI layer + §3 pending-stages panel on Overview.
-**Avoids:** Pitfall 8 (invalid settings values — hard server-side bounds + dry-run preview + audit log + rollback), Pitfall 7 (UI copy makes "next signal only" explicit).
+---
+
+### Phase B: SPA Scaffold + Auth + Design System
+
+**Rationale:** Establishes the conventions every page migration wave inherits. Auth, CSRF header injection, 401 redirect, QueryClient defaults, and design tokens must be in place before any page is built.
+
+**Delivers:**
+- frontend/ Vite 8 + React 19 + Tailwind v4 (@tailwindcss/vite) + shadcn init at correct versions
+- Dark palette tokens (#252542/#1a1a2e/#0f0f1a) as @theme CSS variables in src/index.css
+- Fetch wrapper (relative URLs, credentials: "same-origin", X-CSRF-Token on mutations, throws HttpError(status) on non-2xx)
+- QueryClient with global QueryCache/MutationCache onError: 401 -> window.location.assign("/app/login")
+- Login view (JSON POST /api/v2/auth/login; reads/submits telebot_csrf cookie)
+- /app/me boot guard (SPA calls GET /api/v2/auth/me on startup; 401 -> login)
+- App shell + createBrowserRouter under /app/*; vite.config.ts with base: "/app/", @tailwindcss/vite plugin, @/ alias, dev proxy (/api, /login, /logout -> FastAPI)
+- uvicorn StaticFiles mount at /app (or nginx alias — must be locked here per Open Question 3)
+- Verify gate: login works in vite dev with cookie intact; authed shell renders; expired session redirects to login exactly once
+
+**Avoids:** Dev proxy/401 loop (Pitfall 3), CSRF dropped (Pitfall 4), Tailwind/shadcn version mismatch (Pitfall 9), Vite base path (Pitfall 10)
+**Research flag:** Standard patterns — no additional research needed.
+
+---
+
+### Phase C: Page Migration Waves
+
+**Rationale:** Ordered by blast radius — lowest to highest. Each wave: implement fetch hook + view + verify against the live legacy page before proceeding. The "no optimistic updates on money ops" and disabled={isPending} conventions from Phase B apply to every mutation surface.
+
+**Wave C1 — Analytics (read-only pilot):**
+/app/analytics — useQuery, recharts via shadcn Chart, range/source filter state in URL search params. No mutations, no live-money risk. Validates the full API + SPA + auth + nginx pipeline. Cut over only after numbers verified against /analytics on live data.
+
+**Wave C2 — Read-only pages:**
+/app/signals (on-mount fetch, LOW complexity), /app/history (filter state in URL, queryKey: ['history', filters], placeholderData: keepPreviousData), /app/staged (live refetchInterval: 2000-3000, elapsed timer display). Verify against legacy page numbers before decommissioning each.
+
+**Wave C3 — Live polling pages:**
+/app/overview (composes positions table + stages card + kill-switch entry + TRADING PAUSED banner, refetchInterval: 3000) and /app/positions (full positions table, per-row drilldown state, edit-levels modal, 3s polling). Shared components built here (positions table, pending-stages card, edit-levels modal) reused by overview. Canonical no-clobber verification: open drilldown + wait two refetch cycles; open edit-levels modal + wait two cycles; verify state unaffected.
+
+**Wave C4 — Live-money mutation pages + settings:**
+Full destructive action surface (close, modify SL/TP, partial close with absolute volume + request-id, kill switch confirm). /app/settings (SEED-001: zod mirror of hard-caps, dynamic caps per risk_mode + max_lot_size per account, two-step confirm rendering diff JSON from POST .../validate, audit timeline, revert, sonner toasts, per-field tooltips, live compounded-exposure computation). Each must pass MT5-demo broker-reject QA and the "looks-done-but-isn't" checklist before HTMX twin is decommissioned.
+
+**Avoids:** Optimistic-clear (Pitfall 1), double-fire (Pitfall 2), stale cache (Pitfall 6), float/precision (Pitfall 7), timezone (Pitfall 8), parallel-run drift (Pitfall 11)
+**Research flags:**
+- C4 (partial-close idempotency): storage mechanism needs a decision before C4 planning (Open Question 4)
+- C4 (partial-close API shape): switching from percent to absolute-volume changes the endpoint signature; needs an explicit design note before coding
+
+---
+
+### Phase D: Parallel-Run Cutover + HTMX Decommission
+
+**Rationale:** Final gate is MT5-demo-verified parity, not "looks done." Decommissioning is one route deletion per page, each gated on a short parity checklist.
+
+**Delivers:**
+- Per page: legacy HTMX route deleted + template removed + optional 301 redirect from /page to /app/page
+- After all pages cut: /stream SSE endpoint deleted; nginx proxy_buffering off / proxy_read_timeout 86400s removed
+- Legacy Tailwind CLI Dockerfile stage removed; templates/ directory removed
+- Legacy /login decommissioned after JSON login is the sole path; telebot_login_csrf cookie decommissioned
+- dashboard.py reduced to wiring (accessors + include_router + shared middleware)
+
+**Decommission gate per page:** SPA numbers match legacy page on live data; destructive actions verified against MT5 demo; CSRF regression test passes; HTMX twin kept until gate is cleared.
+**Avoids:** nginx catch-all breaking live routes (Pitfall 5), premature decommission (Pitfall 11)
+**Research flag:** No research needed — discipline is the constraint.
+
+---
 
 ### Phase Ordering Rationale
 
-- **Phase 1 before Phase 2** because staged entries need runtime-mutable `AccountSettings` (risk_mode, fixed_lot, max_stages, stage_allocation) and the snapshot-into-staged_entries mechanism that Phase 1 defines.
-- **Phase 2 before Phase 5** because server-side staged-entry behaviour must be correct and test-covered before any UI button can trigger it — real money.
-- **Phase 3 before Phase 4** because the login form must use the same design tokens as the rest of the dashboard; styling it twice is wasteful.
-- **Phase 4 before Phase 5** because the settings-edit POST is the first truly sensitive dashboard action introduced in v1.1; shipping it behind HTTPBasic and upgrading later is an accidental-prod-change window.
-- **Phases 1+2 overlap on DB-schema work** (both define new hand-written DDL tables; shared discipline of additive-only).
-- **Phase 3 runs in parallel with Phase 2** — different files, different review surface.
+- Phase A must precede all others: every page depends on the JSON API contract; the contract also locks number-formatting and timestamp conventions that prevent precision bugs project-wide.
+- Phase B must precede Phase C: auth, CSRF, 401 handling, and QueryClient defaults are inherited by every page; building them after 9 pages exist means fixing across 9 views.
+- Phase C waves ordered read-only -> live-data -> live-money to minimize blast radius. Analytics pilot validates the full stack integration in the safest possible context.
+- Positions (C3) and Settings (C4) are the two HIGH-complexity pages; they land in the later waves deliberately. Building shared components in C3 means Overview in C3 composes them. Settings in C4 gets the fully-established mutation safety pattern.
+- Phase D is last: parallel-run is the safety mechanism for the entire migration; decommissioning removes it page-by-page only after each page passes the demo gate.
 
 ### Research Flags
 
-Phases likely needing deeper research via `/gsd-research-phase` during planning:
-- **Phase 2 (staged entries)** — deepest novel-behaviour phase; needs confirmation of: MT5 REST connector price-streaming vs polling support; exact `signal_parser` regex surface for text-only "buy now"; Basecoat v0.3.3 JS re-init API for the pending-stages panel (deferred to Phase 5 in practice). *This phase must run `/gsd-discuss-phase` first to resolve the staging-trigger-model ambiguity — see Open Questions.*
-- **Phase 3 (UI substrate swap)** — needs Basecoat-v0.3.3 specific verification of the 6 interactive components' JS init API, exhaustive audit of Tailwind class names in `*.py` HTMLResponse call sites, and deploy-strategy review (hashed filename, market-closed window).
+**Phases needing deeper planning research:**
+- Phase A — idempotency storage (Open Question 4): needs a concrete decision before Phase A coding
+- Phase C4 — partial-close API shape change: needs an explicit design note before coding
 
-Phases with standard patterns (can skip `/gsd-research-phase`):
-- **Phase 1 (settings foundation)** — plain CRUD + in-memory cache; well-trodden.
-- **Phase 4 (login form)** — standard FastAPI/Starlette auth pattern already well-documented; STACK.md §3 is authoritative; one open UX question (username visible vs hidden) is a scope call, not research.
-- **Phase 5 (settings/stages UI)** — integrates existing pieces; feature work built on established Phase 3 substrate.
+**Phases with standard, well-documented patterns (skip research-phase):**
+- Phase A: FastAPI APIRouter + Pydantic v2 + double-submit CSRF
+- Phase B: Vite 8 + React 19 + Tailwind v4 + TanStack Query scaffold
+- Phase C1-C2: pure useQuery + URL filter state
+- Phase D: nginx config edits + file deletion
+
+---
+
+## Open Questions the Roadmapper Must Resolve
+
+1. **Exact CSRF cookie and header names** — ARCHITECTURE.md proposes telebot_csrf (cookie, non-httpOnly) + X-CSRF-Token (header). Must be locked before Phase A deps.py is written so the Phase B fetch wrapper and the Phase A regression test agree. Verify against dashboard.py:128-135 and config.py for any existing cookie names that must not collide.
+
+2. **SPA URL strategy: /app/ subpath vs whitelisted legacy-path redirects** — ARCHITECTURE.md recommends /app/ subpath. This drives vite.config.ts base, the nginx location /app/ block, all createBrowserRouter route paths, and the redirect strategy for legacy paths. Must be locked at Phase B scaffold start; changing it later requires rebuilding the bundle and rewriting nginx.
+
+3. **Serving mechanism: uvicorn StaticFiles mount vs nginx alias + volume** — ARCHITECTURE.md recommends uvicorn StaticFiles (simpler, no Docker volume change). Determines how the Dockerfile COPY --from=spa-build step lands and what the nginx /app/ block does. Must be decided before Dockerfile and nginx config are modified in Phase B.
+
+4. **Idempotency storage for money-op deduplication** — In-memory dict (simple, lost on restart), Redis (already on VPS — check docker-compose.yml for existing telebot/Redis wiring), or PostgreSQL (no new dependency). Affects actions.py design in Phase A. The choice determines whether idempotency keys survive a process restart during an in-flight request.
 
 ---
 
@@ -143,66 +230,48 @@ Phases with standard patterns (can skip `/gsd-research-phase`):
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Basecoat v0.3.3 install/JS/license verified against primary sources; argon2-cffi 25.1.0 verified on PyPI; Passlib rejection grounded in its own maintenance issue; Tailwind v3 vs v4 is MEDIUM-within-HIGH (both viable; v3 is the migration-risk call) |
-| Features | HIGH | Derived from direct read of `trade_manager.py`, `executor.py`, `risk_calculator.py`, `signal_parser.py`, and `dashboard.py`; competitor comparison is directional (MEDIUM) but not load-bearing |
-| Architecture | HIGH | Every component boundary points to specific existing code (line ranges in ARCHITECTURE.md §1); SettingsStore design is simple because we're single-process and single-writer |
-| Pitfalls | HIGH | All 18 pitfalls anchored to specific code lines or named v1.0 requirements; not a generic list |
+| Stack | HIGH | All versions verified against npm registry 2026-06-01. shadcn v4/React 19 compatibility verified against official shadcn docs. Version compatibility matrix (shadcn/Tailwind, plugin-react/Vite, resolvers/zod) verified. |
+| Features | HIGH | Derived directly from dashboard.py routes + templates + SEED-001 seed doc. TanStack Query v5 patterns verified via Context7. |
+| Architecture | HIGH | Grounded in actual repo (dashboard.py, bot.py, nginx/telebot.conf, Dockerfile, config.py). In-process coupling verified at bot.py:409-420. Auth/CSRF/401 branch logic verified in dashboard.py:99-135. |
+| Pitfalls | HIGH/MEDIUM | FastAPI/auth/nginx/Vite specifics: HIGH (verified against this codebase). Live-money optimistic-update failure modes: MEDIUM (synthesized from codebase behavior + TanStack Query official defaults — sound reasoning, not empirically tested yet). |
 
-**Overall confidence:** HIGH — with one specific, high-stakes ambiguity flagged below that must be resolved before Phase 2 planning begins.
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Two-signal correlation vs one-signal zone-watcher** — see Open Questions #1. **Blocking for Phase 2.** The user's own words in PROJECT.md are authoritative: two-signal. STACK.md §4 and earlier FEATURES framing described a one-signal-with-N-stages zone-watcher model, which is a different feature architecturally. Resolve via `/gsd-discuss-phase` before Phase 2 planning starts.
-- **Daily-limit accounting** — 1 signal = 1 slot (Option A) vs 1 stage = 1 slot (Option B). Must be decided up-front because it changes the DB schema (Option A needs `signal_id` attribution on `daily_stats.trades_count`).
-- **Staging-band semantics** — if the zone-watcher model is partially retained, how are stage N target bands derived from the signal's zone (equal slices? full re-entry? single re-entry triggers all)? Belongs in the Phase 2 discussion.
-- **Text-only → follow-up correlation window duration** — suggested 10 minutes; user confirmation needed.
-- **Default `stage_allocation` when `max_stages=N` is set but allocation is unspecified** — suggested equal split.
-- **Username field on login form visible or hidden** — suggested hidden (password-only), matches single-admin model.
-- **Tailwind v3 vs v4 final call** — recommended v3.4 for migration-risk reduction; one-line decision; not research.
-
-### Open Questions / Must Resolve Before Planning
-
-1. **[BLOCKING] STAGING TRIGGER MODEL — two-signal correlation vs one-signal zone-watcher.**
-   PROJECT.md's milestone goal and the user's original brief describe a **two-signal correlation model**: an initial text-only signal ("Gold buy now") opens 1 immediate market position, then a **follow-up signal** with zone/SL/TP arrives later and opens additional positions as price enters the zone. STACK.md §4 and earlier FEATURES framing described a **one-signal zone-watcher model**: one OPEN signal with a zone produces N stages, a watcher polls price and fires stages 2..N as price enters pre-declared bands. **These are architecturally different features.**
-   - Two-signal correlation requires: `signal_parser` correlation heuristic (same symbol + direction, within N minutes), `signals.parent_signal_id` linkage, staged_entries might collapse into a simple parent-ticket column on `trades`, the zone watcher simplifies or disappears (stages 2..N become N-1 new OPEN executions triggered by the follow-up).
-   - One-signal zone-watcher requires: full `staged_entries` table, `_zone_watch_loop` polling, per-band target zones, reconnect/kill-switch queue drain semantics.
-   - **The user's own words in PROJECT.md are authoritative: two-signal correlation is the intended model.**
-   - **Action:** resolve via `/gsd-discuss-phase` before Phase 2 planning starts. This is the #1 blocker for Phase 2.
-
-2. **Tailwind Play CDN in production is a blocker that Phase 3 MUST fix.** `templates/base.html:7` loads `cdn.tailwindcss.com` which Tailwind labels development-only (JIT-compiles classes in-browser on every request). This compounds every UI change we layer on top. Not optional; belongs as the first deliverable of Phase 3.
-
-3. **Basecoat UI (`basecoat-css@0.3.3`, vendored) is the chosen shadcn-substrate for HTMX — no SPA rewrite.** The substrate question flagged in PROJECT.md is resolved. Phase 3 plan should explicitly pin the version and vendor both `basecoat.css` and `basecoat.min.js` into `static/`.
-
-4. **Daily-limit accounting — 1 signal = 1 slot vs 1 stage = 1 slot — is blocking for Phase 1 schema.** Recommendation: Option A (1 signal = 1 slot; stages beyond stage 1 do not increment `daily_stats.trades_count`) — but this requires `signal_id` attribution on the daily-stats increment path. Decide in Phase 1 planning, not later.
-
-5. **Alembic / DBE-01 stays deferred to v1.2.** v1.1 keeps hand-written `CREATE TABLE IF NOT EXISTS` DDL with strict additive-only discipline: no `ALTER TABLE` on tables that existed in v1.0. Pre-commit lint for `ALTER TABLE` recommended. DBE-01 is a v1.2 candidate once v1.1 adds its 3-4 new tables.
+- **Idempotency storage** (Open Question 4): check docker-compose.yml for existing telebot/Redis wiring before committing. If Redis is already in-network, it is the cleanest choice with no new infrastructure.
+- **Exact v1.0 CSRF cookie name** (Open Question 1): dashboard.py:142 uses telebot_login_csrf for the login form. Verify the proposed telebot_csrf API mutation cookie does not collide with any existing cookie before Phase A.
+- **_verify_auth path-prefix check**: the existing code branches on /api/ prefix. Confirm /api/v2/ is caught by this check (it should be, as a prefix match) so Phase A routes automatically get 401 behavior without server changes.
 
 ---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- Existing codebase: `bot.py`, `executor.py`, `trade_manager.py`, `dashboard.py`, `db.py`, `models.py`, `risk_calculator.py`, `signal_parser.py`, `config.py`, `templates/*`, `accounts.json`
-- `.planning/PROJECT.md` (v1.0 shipped state + v1.1 milestone goal and safety bar)
-- `.planning/milestones/v1.0-REQUIREMENTS.md` (REL-01..04, EXEC-01..04, SEC-01..04, DBE-01 deferral)
-- [basecoatui.com](https://basecoatui.com/) — Basecoat home, install, component docs
-- [github.com/hunvreus/basecoat](https://github.com/hunvreus/basecoat) — v0.3.3 release, license, JS surface
-- [argon2-cffi.readthedocs.io](https://argon2-cffi.readthedocs.io/) — 25.1.0 API (hash/verify/check_needs_rehash)
-- [pypi.org/project/argon2-cffi/](https://pypi.org/project/argon2-cffi/) — release date, Python-version matrix
-- [tailwindcss.com/blog/standalone-cli](https://tailwindcss.com/blog/standalone-cli) — standalone CLI behaviour
-- [tailwindcss.com/docs/upgrade-guide](https://tailwindcss.com/docs/upgrade-guide) — v3 to v4 breaking changes
-- [fastapi.tiangolo.com/advanced/response-cookies/](https://fastapi.tiangolo.com/advanced/response-cookies/) — cookie docs
-- [starlette.dev/middleware/](https://starlette.dev/middleware/) — SessionMiddleware
+- dashboard.py (1,510 lines) — all routes, auth logic (_verify_auth, _verify_csrf), mutation endpoints, helpers (_get_all_positions, _get_accounts_overview, _enrich_stage_for_ui), _last_positions_by_account stale cache, _render_toast_oob, validate_settings_form, _SETTINGS_HARD_CAPS_INT
+- bot.py:409-420 — init_dashboard(), in-process coupling of live objects
+- nginx/telebot.conf — existing proxy + SSE directives + login rate-limit
+- Dockerfile — existing multi-stage build (Tailwind CLI stage)
+- config.py — session_cookie_secure, timezone, SessionMiddleware config
+- .planning/PROJECT.md v1.2 section — locked stack decisions, parallel-run strategy, anti-Next.js/anti-localStorage rationale
+- .planning/seeds/SEED-001-settings-ux-polish.md — toasts, inline help, copywriting requirements; hard-cap source-of-truth
+- npm registry (2026-06-01) — exact latest versions for all SPA dependencies
+- https://ui.shadcn.com/docs/tailwind-v4 — shadcn defaults to Tailwind v4; v3 backward-compatible only for existing apps
+- https://ui.shadcn.com/docs/installation/vite — Vite + Tailwind v4 setup
+- https://vite.dev/releases — Vite 8 current stable; v7 unsupported
+- https://tanstack.com/query/latest/docs/framework/react/guides/polling — refetchInterval semantics
+- https://tanstack.com/query/latest/docs/framework/react/guides/important-defaults — staleTime:0, refetchOnWindowFocus, mutations do not auto-invalidate
+- https://fastapi.tiangolo.com/tutorial/bigger-applications/ — APIRouter + include_router + response_model
 
 ### Secondary (MEDIUM confidence)
-- [news.ycombinator.com/item?id=43971688](https://news.ycombinator.com/item?id=43971688) — Basecoat Show HN context
-- [x.com/htmx_org/status/1920526787710497263](https://x.com/htmx_org/status/1920526787710497263) — htmx.org endorsement of Basecoat
-- [github.com/basicmachines-co/basic-components](https://github.com/basicmachines-co/basic-components) — archived status confirmation (2026-04-05)
-- [github.com/pypi/warehouse/issues/15454](https://github.com/pypi/warehouse/issues/15454) — Passlib maintenance tracking
+- Double-submit-cookie CSRF for cookie-auth SPAs — OWASP CSRF cheat-sheet pattern; consistent with this codebase's existing double-submit on /login
+- TanStack Query QueryCache/MutationCache global onError 401 handler — documented pattern verified via Context7
+- https://github.com/tailwindlabs/tailwindcss/discussions/17137 — Tailwind v4 + Radix transparent dropdown/select regression; documented workaround exists
 
-### Tertiary (LOW confidence — directional only)
-- MT5 signal-copier competitor landscape (MQL5.com, scattered GitHub projects) — no dominant public feature matrices; competitor comparison in FEATURES.md is directional, not authoritative
+### Memory context
+- project_lot_semantics.md — fixed_lot risk_value is TOTAL across max_stages, not per-trade (operator-confirmed 2026-05-01); SEED-001 settings copywriting must not contradict this
 
 ---
-*Research completed: 2026-04-18*
-*Ready for roadmap: yes — after resolving Open Question #1 via `/gsd-discuss-phase`*
+
+*Research completed: 2026-06-01*
+*Ready for roadmap: yes*
