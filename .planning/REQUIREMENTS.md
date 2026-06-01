@@ -1,136 +1,100 @@
-# Requirements: Telebot v1.1 — Improved trade executions and UI
+# Requirements: Telebot v1.2 — React/Vite dashboard rewrite
 
-**Defined:** 2026-04-18
-**Milestone:** v1.1 (focused — 3 phases)
+**Defined:** 2026-06-01
+**Milestone:** v1.2
 **Core Value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
 
 **Source material:**
-- Research synthesis: `.planning/research/SUMMARY.md` (commit `80f716e`)
+- Research synthesis: `.planning/research/SUMMARY.md` (commit `235bd53`)
 - User brief (captured in PROJECT.md Current Milestone section)
+- Folded seed: `.planning/seeds/SEED-001-settings-ux-polish.md`
 
-**Lock-down items that will be resolved in `/gsd-discuss-phase` before planning:**
-1. **Two-signal correlation model** — user brief is authoritative: initial text-only signal ("Gold buy now") opens 1 immediate market position; follow-up signal with zone/SL/TP opens additional positions as price enters the zone. Research temporarily explored a one-signal zone-watcher alternative; it's out.
-2. **Daily-limit accounting rule** — 1 signal = 1 limit slot (recommended) vs. 1 stage = 1 slot.
-3. **Schema discipline** — alembic (DBE-01) stays deferred to v1.2; v1.1 uses additive-only hand-written DDL.
-4. **UI substrate** — Basecoat UI (`basecoat-css@0.3.3`) + Tailwind v3.4 standalone CLI on existing HTMX + Jinja (no SPA rewrite).
+**Locked stack decisions (FINAL — not for re-litigation):** React 19 · Vite 8 · shadcn/ui · Tailwind CSS v4. Vite SPA (static behind nginx) chosen over Next.js to avoid a Node runtime in production. Research corrected two version assumptions the roadmap absorbs: **Vite 8** (not 7) + `@vitejs/plugin-react` 6, and **Tailwind v4 is mandatory** for shadcn/ui + React 19 (no `tailwind.config.js`; use `@tailwindcss/vite` + `@theme` tokens — aligns with the backend's existing Tailwind v4.2.2).
 
-## v1.1 Requirements
+**Open questions resolved during phase planning (not requirements scope):**
+1. Exact CSRF cookie/header names — verify against `dashboard.py:128-135` (collision with existing `telebot_login_csrf`).
+2. SPA URL strategy — `/app/` subpath (recommended) vs whitelisted paths — drives Vite `base` + nginx config; lock before SPA scaffold.
+3. Static-serving mechanism — uvicorn `StaticFiles` mount (recommended) vs nginx `alias` + volume — lock before Dockerfile/nginx changes.
+4. Idempotency storage for money-op dedupe (API-05) — in-memory vs Redis vs PostgreSQL — decide before the API actions layer.
 
-### Staged Entry Execution
+---
 
-- [ ] **STAGE-01**: Signal parser recognizes text-only "now" signals (e.g. "Gold buy now", "XAU sell now") and emits a distinct signal type that does not require entry/SL/TP numerics
-- [ ] **STAGE-02**: On a text-only "now" signal, bot opens exactly 1 market position per enabled account using that account's configured lot size or risk percentage, with a mandatory default SL (per-account setting) to prevent orphan exposure
-- [ ] **STAGE-03**: Bot correlates a subsequent zone/SL/TP signal (same symbol, same direction, within a configurable correlation window — default 10 minutes) to the prior text-only signal and treats them as one trade sequence
-- [ ] **STAGE-04**: On the correlated follow-up signal, bot opens up to `max_stages - 1` additional positions as price enters the declared zone, subject to per-account max positions, daily limits, and kill-switch state
-- [ ] **STAGE-05**: The v1.0 duplicate-direction guard in `trade_manager.py` is bypassed for follow-up stages of the same correlated signal sequence (and only those)
-- [ ] **STAGE-06**: Staged-entry state is persisted (`staged_entries` or equivalent table) and reconciled after MT5 reconnect so no stage is lost or duplicated across reconnect events
-- [ ] **STAGE-07**: Kill switch drains all pending staged-entry rows (cancels watchers) before closing positions; no stage fills after a kill-switch trigger
-- [ ] **STAGE-08**: Dashboard shows currently pending stages per account (symbol, direction, stages filled / total, price target band, elapsed time)
-- [ ] **STAGE-09**: Each staged fill is attributed to its originating signal in the trades table so analytics can group by signal sequence
+## v1.2 Requirements
 
-### Per-Account Settings
+### API — JSON API Layer
 
-- [ ] **SET-01**: Per-account settings are persisted in the database (`account_settings` or equivalent table), editable at runtime, and supersede static `accounts.json` values at lookup time
-- [ ] **SET-02**: Settings include at minimum: `risk_mode` (`percent` | `fixed_lot`), `risk_value` (percent of equity or fixed lot size like 0.04 / 0.1 / 0.5), `max_stages` per signal, `default_sl_pips` for text-only signals, `max_daily_trades`
-- [ ] **SET-03**: Dashboard exposes a settings page with one form per account; changes require confirmation and are validated against server-side hard caps
-- [ ] **SET-04**: Settings changes are recorded in an audit log (timestamp, field, old → new value, user identity from session)
-- [ ] **SET-05**: Settings read by an in-flight staged-entry sequence are snapshotted at signal receipt; later settings edits do not mutate already-enqueued stages
+- [ ] **API-01**: All dashboard data is available via a versioned JSON API (`/api/v2`, `APIRouter`) with Pydantic response models that wrap the existing in-process helpers (`_get_all_positions`, `_get_accounts_overview`, `db.get_*`, etc.) — bot core (`executor.py`, `trade_manager.py`, `db.py`, `mt5_connector.py`) and the MT5 REST bridge are not modified
+- [ ] **API-02**: Mutating endpoints (close, modify levels, partial-close, kill switch, settings confirm/revert) return a structured JSON result (`{success, error, ...}`) instead of HTML fragments
+- [ ] **API-03**: CSRF protection on JSON mutations uses a double-submit cookie (readable `X-CSRF-Token` echoed from a cookie, `secrets.compare_digest`), independent of the HTMX `HX-Request` heuristic; login's existing double-submit flow is preserved verbatim; covered by a regression test
+- [ ] **API-04**: Numbers, prices, and timestamps are formatted server-side and sent display-ready plus machine-precise (ISO-8601 + timezone for times); the SPA never re-derives precision (guards the XAUUSD pip-size class of bug)
+- [ ] **API-05**: Partial-close is made safe against double-fire / retry — switched from percent-of-current-volume to an absolute volume, with a request-id idempotency guard so a duplicate submit cannot close the wrong amount
 
-### UI Foundation
+### SPA — Frontend Foundation
 
-- [ ] **UI-01**: Tailwind CSS is compiled via the standalone CLI at Docker image build time; the Tailwind Play CDN script is removed from `templates/base.html`
-- [ ] **UI-02**: Basecoat UI (`basecoat-css`) is vendored into `static/` and provides shadcn-faithful components for buttons, forms, dialogs, tabs, and tables used by the dashboard
-- [ ] **UI-03**: Tailwind content globs include `*.py` files that emit inline class strings (e.g. `dashboard.py` HTMLResponse fragments) so no class names are purged
-- [ ] **UI-04**: CSS asset is deployed with a content-hashed filename to defeat browser cache on redeploy
-- [ ] **UI-05**: Basecoat JS re-initializes after HTMX swaps so interactive components remain wired up on partial replacement
+- [ ] **SPA-01**: A Vite 8 + React 19 single-page app is scaffolded and served same-origin behind nginx as static files, with no Node runtime in production
+- [ ] **SPA-02**: Styling uses Tailwind v4 (`@tailwindcss/vite` + `@theme`) with shadcn/ui components; the existing dark palette (`#252542` / `#1a1a2e` / `#0f0f1a`) is mapped to theme tokens
+- [ ] **SPA-03**: Operator can log in through the SPA; the httpOnly session cookie auth is retained; no auth tokens are stored in `localStorage`
+- [ ] **SPA-04**: Expired or unauthenticated sessions are detected globally (401 handler) and redirect to the login view without redirect loops
+- [ ] **SPA-05**: Server-state (TanStack Query background polling) is kept separate from form/UI state so a background refetch can never clobber an open input or modal — the structural fix for the HTMX refresh-race bug class
 
-### Dashboard Redesign
+### PAGE — Page Migration (parity)
 
-- [ ] **DASH-01**: Every existing dashboard view (overview, positions, analytics, kill-switch control, daily-limit indicators) is restyled using Basecoat components; zero regressions in existing functionality
-- [x] **DASH-02**: Layout is mobile-responsive (usable on a phone for on-the-go monitoring) with a slide-over nav for small screens
-- [x] **DASH-03**: Positions view supports an inline drilldown per position showing fill history (initial fill + each staged fill), current P/L, and per-stage SL/TP
-- [x] **DASH-04**: Analytics view supports per-source deep-dive (win rate, profit factor, avg stages filled) and a time-range filter (7d, 30d, all)
-- [x] **DASH-05**: Trade history view supports filters by account, source, symbol, and date range
+- [ ] **PAGE-01**: Analytics page (read-only pilot) reaches parity on the SPA — win rate, profit factor, per-source deep-dive
+- [ ] **PAGE-02**: Signals page reaches parity on the SPA
+- [ ] **PAGE-03**: History page reaches parity on the SPA, including trade-history filters
+- [ ] **PAGE-04**: Staged-entries page reaches parity on the SPA (pending stages per account)
+- [ ] **PAGE-05**: Overview page reaches parity on the SPA with live polling
+- [ ] **PAGE-06**: Positions page reaches parity with safe live-money actions — close, modify SL+TP, partial-close — using server-confirmed mutations only (no optimistic clear), disabled-while-pending, and error toasts
+- [ ] **PAGE-07**: Emergency kill switch reaches parity on the SPA with its two-step preview → confirm flow
+- [ ] **PAGE-08**: Settings page reaches parity on the SPA — per-account form, two-step dangerous-change confirmation with diff, audit timeline, and revert
 
-### Authentication
+### SUX — Settings UX (folds SEED-001)
 
-- [ ] **AUTH-01**: Dashboard is gated by a proper login page (styled form) that replaces HTTPBasic on all existing protected routes
-- [ ] **AUTH-02**: Passwords are verified against an argon2 hash (`argon2-cffi`); plaintext `DASHBOARD_PASS` is migrated once and the plaintext env var is removed after migration
-- [ ] **AUTH-03**: Sessions use Starlette `SessionMiddleware` with a server-generated `SESSION_SECRET`; bot refuses to start if `SESSION_SECRET` is unset or below 32 bytes of entropy
-- [ ] **AUTH-04**: Login POST is CSRF-protected via double-submit cookie; existing HTMX routes continue to use the header-based CSRF pattern
-- [ ] **AUTH-05**: Login has rate limiting (per-IP lockout after N failed attempts) with constant-time credential comparison to avoid username enumeration
-- [ ] **AUTH-06**: Logout endpoint clears the session and redirects to the login page
+- [ ] **SUX-01**: Settings actions surface viewport-level save and error toasts (sonner) — success on confirm, explicit rejection on validation failure, revert confirmation
+- [ ] **SUX-02**: Each settings field has inline help/tooltip describing what it controls, its units, recommended range, and its footgun (e.g. live compounded-exposure warning when `max_stages` × `risk_value` is high)
+- [ ] **SUX-03**: Client-side validation (react-hook-form + zod) mirrors the server hard-caps, including the mode-dependent and per-account `risk_value` caps
+- [ ] **SUX-04**: Copywriting pass on labels, placeholders, and confirmation-modal text for operator legibility (DB-column names → operator mental models with units)
 
-## Future Requirements (v1.2+)
+### CUT — Cutover
 
-### Schema Evolution
+- [ ] **CUT-01**: The SPA and the legacy HTMX dashboard run in parallel behind nginx (e.g. `/app` for the SPA, `/` for legacy) so cutover is incremental and reversible
+- [ ] **CUT-02**: Each page is cut over individually; a legacy HTMX route is decommissioned only after its React replacement is verified at parity against the MT5 demo
+- [ ] **CUT-03**: After full cutover, the HTMX/Jinja templates, Tailwind standalone-CLI build stage, and Basecoat vendor assets are removed
 
-- **DBE-01** (carried from v1.0 v2 section): Alembic migration tooling — v1.1 adds two tables via hand-written additive DDL; alembic becomes mandatory before any ALTER on live tables
-- **SESSION-ROTATE**: `SESSION_SECRET` rotation with dual-key grace window so secret rotation doesn't log everyone out mid-action
+---
 
-### Monitoring (carried from v1.0 v2 section)
+## Carried Forward from v1.1
 
-- **MON-01**: Structured JSON logging (structlog) for production debugging
-- **MON-02**: Connection uptime metrics tracked and displayed on dashboard
-- **MON-03**: Trade execution latency metrics (signal received → order placed)
+These are not v1.2 requirements but remain open outstanding items (tracked in STATE.md, not mapped to v1.2 phases):
 
-## Out of Scope
+- **Phase 6 (staged-entry execution, STAGE-01..09 + SET-03)** — code complete, awaiting live VPS UAT with MT5 demo (`.planning/phases/06-staged-entry-execution/06-HUMAN-UAT.md`). Backend-only; unaffected by the frontend rewrite. Full v1.1 requirement detail archived at `.planning/milestones/v1.1-REQUIREMENTS.md`.
+- **Phase 7 (HTMX dashboard redesign, DASH-01)** — SUPERSEDED by v1.2; remaining HTMX work descoped, not completed.
 
-| Feature | Reason |
-|---------|--------|
-| Full SPA rewrite (React/Vue/Next/Nuxt) | Violates v1.0's "minimize new dependencies" constraint; Basecoat on HTMX meets the shadcn aesthetic goal |
-| Martingale / averaging-down strategy | Staged entries fill pre-declared zones from a signal — they are NOT "open more on loss"; explicitly prohibited |
-| Multi-user / role-based auth | Single admin user is sufficient; defer until there's a real second operator |
-| Automated password reset flow | Single admin uses env-driven hash rotation; formal reset flow is overkill |
-| Tailwind v4 migration | v4 introduced breaking changes; v1.1 locks on v3.4 for risk reduction |
-| Live WebSocket market-data streaming inside the dashboard | Current HTMX polling is sufficient; streaming is a v1.2 nice-to-have |
-| Signal-source auto-disable for low performers | Out of this milestone — analytics first, enforcement later |
+---
+
+## Future Requirements (deferred)
+
+- **alembic migrations (DBE-01)** — still deferred; v1.2 backend changes are additive JSON-API surface, no schema migration framework needed yet.
+- **Real-time push (SSE/WebSocket)** — explicitly rejected for v1.2 (3s TanStack Query polling suffices for a single operator); revisit only if polling load becomes a problem.
+- **Scoped OpenAPI docs for `/api/v2`** — `docs_url` is app-disabled; could be re-enabled scoped for internal use. Not load-bearing; deferred.
+
+## Out of Scope (explicit exclusions)
+
+| Excluded | Reason |
+|----------|--------|
+| Any new analytics, charts, or metrics beyond current parity | v1.2 is a substrate migration, not a feature expansion |
+| Any new trading capability or signal-handling change | Bot core is untouched by design |
+| Signal filtering / new dashboard views | New capability — belongs in a future milestone |
+| Next.js / SSR / Node production runtime | Deliberately rejected — minimize-deps, internal single-operator tool |
+| Auth tokens in `localStorage` / JWT | Security — httpOnly session cookie retained |
+| Redux / external client-state store | TanStack Query covers server-state; React local state covers UI |
+| Tailwind v3 | shadcn/ui + React 19 require v4; backend already on v4 |
 
 ## Traceability
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| STAGE-01 | Phase 6 | Pending |
-| STAGE-02 | Phase 6 | Pending |
-| STAGE-03 | Phase 6 | Pending |
-| STAGE-04 | Phase 6 | Pending |
-| STAGE-05 | Phase 6 | Pending |
-| STAGE-06 | Phase 6 | Pending |
-| STAGE-07 | Phase 6 | Pending |
-| STAGE-08 | Phase 6 | Pending |
-| STAGE-09 | Phase 6 | Pending |
-| SET-01 | Phase 5 | Pending |
-| SET-02 | Phase 5 | Pending |
-| SET-03 | Phase 6 | Pending |
-| SET-04 | Phase 5 | Pending |
-| SET-05 | Phase 5 | Pending |
-| UI-01 | Phase 5 | Pending |
-| UI-02 | Phase 5 | Pending |
-| UI-03 | Phase 5 | Pending |
-| UI-04 | Phase 5 | Pending |
-| UI-05 | Phase 5 | Pending |
-| DASH-01 | Phase 7 | Pending |
-| DASH-02 | Phase 7 | Complete (07-01) |
-| DASH-03 | Phase 7 | Complete (07-03) |
-| DASH-04 | Phase 7 | Complete (07-05) |
-| DASH-05 | Phase 7 | Complete (07-04) |
-| AUTH-01 | Phase 5 | Pending |
-| AUTH-02 | Phase 5 | Pending |
-| AUTH-03 | Phase 5 | Pending |
-| AUTH-04 | Phase 5 | Pending |
-| AUTH-05 | Phase 5 | Pending |
-| AUTH-06 | Phase 5 | Pending |
-
-**Coverage:**
-- v1.1 requirements: 30 total
-- Mapped to phases: 30
-- Unmapped: 0
-
-**Distribution:**
-- Phase 5 (Foundation — UI, auth, settings data): 15 requirements (UI-01..05, AUTH-01..06, SET-01, SET-02, SET-04, SET-05)
-- Phase 6 (Staged entry execution): 10 requirements (STAGE-01..09, SET-03)
-- Phase 7 (Dashboard redesign): 5 requirements (DASH-01..05)
+| _(filled by roadmapper)_ | | |
 
 ---
-*Requirements defined: 2026-04-18*
-*Roadmap traceability filled: 2026-04-18 — 30/30 mapped.*
+*Requirements defined: 2026-06-01 — milestone v1.2.*
