@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.1
-milestone_name: — Improved trade executions and UI
-status: executing
-last_updated: "2026-04-20T20:12:39Z"
-last_activity: 2026-04-20 -- Phase 07 Plan 07 complete (signals + staged pages restyle)
+milestone: v1.2
+milestone_name: React/Vite dashboard rewrite
+status: planning
+last_updated: "2026-06-01T19:38:20.615Z"
+last_activity: 2026-06-01
 progress:
-  total_phases: 3
-  completed_phases: 1
-  total_plans: 18
-  completed_plans: 12
-  percent: 67
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 
 ## Current Position
 
-Phase: 07 (dashboard-redesign) — EXECUTING
-Plan: 7 of 8 complete
-Status: Plan 07 shipped — signals + staged pages restyle. Wave 4 next.
-Last activity: 2026-04-20 -- Phase 07 Plan 07 complete (2 tasks, 3 files)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-01 — Milestone v1.2 started
 
 ## Pending UAT
 
