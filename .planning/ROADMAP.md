@@ -128,8 +128,14 @@ Plans:
   3. A `POST` to any mutation endpoint **without** a valid `X-CSRF-Token` (double-submit cookie, `secrets.compare_digest`) returns `403`, proven by an automated regression test; the existing login double-submit flow is unchanged and the new CSRF cookie name does not collide with `telebot_login_csrf`
   4. Every numeric/price/time field is returned both display-ready (server-formatted string) and machine-precise (raw numeric; times as ISO-8601 with UTC offset); a curl of a XAUUSD position shows correct pip-sized formatting with no client re-derivation required
   5. A duplicate partial-close submit (same request-id, absolute target volume) closes the position exactly once — the second submit is deduplicated server-side and cannot close the wrong amount
-**Plans**: TBD
-**Research flag**: Idempotency storage mechanism (in-memory vs Redis vs PostgreSQL) must be decided before the actions layer is coded — check `docker-compose.yml` for existing Redis wiring (Open Question 4).
+**Plans**: 5 plans (3 waves)
+Plans:
+- [ ] 08-01-PLAN.md — Foundation: api/ package skeleton + router assembly, double-submit CSRF dep, shared formatter, Postgres idempotency module, full Pydantic schemas, dashboard wiring + accessors, Dockerfile COPY, Wave-0 test scaffolds (API-01, API-03, API-04)
+- [ ] 08-02-PLAN.md — Auth JSON contract: /auth/{login,logout,me,csrf}, telebot_csrf cookie, reused rate-limit, + the mandatory CSRF regression test (D-16 hard gate) (API-02, API-03)
+- [ ] 08-03-PLAN.md — Read endpoints: accounts/positions/drilldown/history/signals/stages/analytics/overview/trading-status/emergency-preview wrapping existing helpers with dual-value _display fields, + contract test (API-01, API-04)
+- [ ] 08-04-PLAN.md — Mutation actions: close/modify-levels/emergency/resume JSON envelopes + idempotent absolute-volume partial-close (replay/conflict/422), + idempotency regression test (API-02, API-05)
+- [ ] 08-05-PLAN.md — Settings mutations: GET settings + validate/confirm/revert as JSON with server-side hard caps + audit, + settings contract test (API-02)
+**Research flag**: RESOLVED — idempotency storage = new PostgreSQL `idempotency_keys` table (D-01; Redis confirmed absent in both compose files); DDL lives in api/idempotency.py, NOT db.py.
 **UI hint**: no
 
 ### Phase 9: SPA Scaffold + Auth + Design System
@@ -195,7 +201,7 @@ Plans:
 | 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
-| 8. JSON API Foundation | 0/TBD | Not started | - |
+| 8. JSON API Foundation | 0/5 | Planned | - |
 | 9. SPA Scaffold + Auth + Design System | 0/TBD | Not started | - |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
