@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: roadmap_complete
-last_updated: "2026-06-01T20:15:00.000Z"
-last_activity: 2026-06-01
+status: completed
+last_updated: "2026-06-01T20:45:23.915Z"
+last_activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12), 25/25 requirements mapped
 progress:
-  total_phases: 5
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 8
+  completed_phases: 3
+  total_plans: 17
+  completed_plans: 18
+  percent: 38
 ---
 
 # Project State
@@ -44,6 +44,7 @@ Last activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12), 25/25 requir
 **Execution order:** 8 -> 9 -> 10 -> 11 -> 12
 
 **Phases needing planning-phase research:**
+
 - Phase 8 — idempotency storage decision (in-memory / Redis / PostgreSQL) before the actions layer; check `docker-compose.yml` for existing Redis wiring (Open Question 4).
 - Phase 9 — lock CSRF cookie/header names (OQ1), SPA URL strategy `/app/` (OQ2), static-serving mechanism (OQ3) before scaffold coding.
 - Phase 11 — partial-close API shape note (percent → absolute volume) before coding.
@@ -141,5 +142,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12); REQUIREMENTS.md traceability filled (25/25); v1.1 transition status recorded (Phase 6 carried forward, Phase 7 superseded)
-Resume file: .planning/ROADMAP.md (v1.2 section)
+Resume file: .planning/phases/08-json-api-foundation/08-CONTEXT.md
 Next action: `/gsd:plan-phase 8` — JSON API Foundation (resolve idempotency-storage Open Question 4 during planning)
