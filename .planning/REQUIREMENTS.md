@@ -94,7 +94,34 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| _(filled by roadmapper)_ | | |
+| API-01 | Phase 8 | Pending |
+| API-02 | Phase 8 | Pending |
+| API-03 | Phase 8 | Pending |
+| API-04 | Phase 8 | Pending |
+| API-05 | Phase 8 | Pending |
+| SPA-01 | Phase 9 | Pending |
+| SPA-02 | Phase 9 | Pending |
+| SPA-03 | Phase 9 | Pending |
+| SPA-04 | Phase 9 | Pending |
+| SPA-05 | Phase 9 | Pending |
+| PAGE-01 | Phase 10 | Pending |
+| PAGE-02 | Phase 10 | Pending |
+| PAGE-03 | Phase 10 | Pending |
+| PAGE-04 | Phase 10 | Pending |
+| PAGE-05 | Phase 11 | Pending |
+| PAGE-06 | Phase 11 | Pending |
+| PAGE-07 | Phase 11 | Pending |
+| PAGE-08 | Phase 11 | Pending |
+| SUX-01 | Phase 11 | Pending |
+| SUX-02 | Phase 11 | Pending |
+| SUX-03 | Phase 11 | Pending |
+| SUX-04 | Phase 11 | Pending |
+| CUT-01 | Phase 12 | Pending |
+| CUT-02 | Phase 12 | Pending |
+| CUT-03 | Phase 12 | Pending |
+
+**Coverage:** 25/25 v1.2 requirements mapped, no orphans, no duplicates.
 
 ---
 *Requirements defined: 2026-06-01 — milestone v1.2.*
+*Traceability filled by roadmapper: 2026-06-01 — Phases 8–12.*

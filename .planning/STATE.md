@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: planning
-last_updated: "2026-06-01T19:38:20.615Z"
+status: roadmap_complete
+last_updated: "2026-06-01T20:15:00.000Z"
 last_activity: 2026-06-01
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,39 +17,58 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-18)
+See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 06 — staged-entry-execution
+**Current focus:** Phase 8 — JSON API Foundation (v1.2 roadmap just created)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (v1.2 roadmap created; ready to plan Phase 8)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-01 — Milestone v1.2 started
+Status: Roadmap complete — awaiting `/gsd:plan-phase 8`
+Last activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12), 25/25 requirements mapped
 
-## Pending UAT
+## v1.2 Milestone Map
 
-- `.planning/phases/06-staged-entry-execution/06-HUMAN-UAT.md` — 6 live-infra tests (text-only signal, correlated follow-up, kill-switch drain, reconnect reconcile, SSE price flash, settings form UX) — run on VPS with MT5 demo + real Telegram channel after Phase 07 ships.
-
-## Seeds Planted
-
-- SEED-001 — settings UX polish (toasts, inline help, copywriting) — surfaces at Phase 07 discuss-phase.
-
-## v1.1 Milestone Map
+5 phases (coarse granularity). Dependency-forced order: JSON API first, live-money pages + settings late, parallel-run cutover last.
 
 | Phase | Name | Requirements | Depends on |
 |-------|------|--------------|------------|
-| 5 | Foundation — UI substrate, auth, and settings data model | 15 (UI-01..05, AUTH-01..06, SET-01/02/04/05) | Phase 4 (v1.0 complete) |
-| 6 | Staged entry execution | 10 (STAGE-01..09, SET-03) | Phase 5 |
-| 7 | Dashboard redesign | 5 (DASH-01..05) | Phase 5, Phase 6 |
+| 8 | JSON API Foundation | 5 (API-01..05) | Phase 5 (auth + settings data shipped); independent of 6/7 |
+| 9 | SPA Scaffold + Auth + Design System | 5 (SPA-01..05) | Phase 8 (JSON contract + CSRF + number/time contract) |
+| 10 | Read-only Page Migration (analytics pilot → signals → history → staged) | 4 (PAGE-01..04) | Phase 9 |
+| 11 | Live-money Pages + Settings | 8 (PAGE-05..08, SUX-01..04) | Phases 10 + 8 |
+| 12 | Parallel-run Cutover + HTMX Decommission | 3 (CUT-01..03) | Phases 10 + 11 |
+
+**Execution order:** 8 -> 9 -> 10 -> 11 -> 12
+
+**Phases needing planning-phase research:**
+- Phase 8 — idempotency storage decision (in-memory / Redis / PostgreSQL) before the actions layer; check `docker-compose.yml` for existing Redis wiring (Open Question 4).
+- Phase 9 — lock CSRF cookie/header names (OQ1), SPA URL strategy `/app/` (OQ2), static-serving mechanism (OQ3) before scaffold coding.
+- Phase 11 — partial-close API shape note (percent → absolute volume) before coding.
+
+## v1.1 Milestone Map (closing)
+
+| Phase | Name | Requirements | Status |
+|-------|------|--------------|--------|
+| 5 | Foundation — UI substrate, auth, settings data model | 15 (UI-01..05, AUTH-01..06, SET-01/02/04/05) | In progress (3/5 plans) |
+| 6 | Staged entry execution | 10 (STAGE-01..09, SET-03) | CARRIED FORWARD into v1.2 (code complete; awaiting VPS UAT) |
+| 7 | Dashboard redesign (HTMX) | 5 (DASH-01..05) | SUPERSEDED / DESCOPED by v1.2 |
+
+## Pending UAT
+
+- `.planning/phases/06-staged-entry-execution/06-HUMAN-UAT.md` — 6 live-infra tests (text-only signal, correlated follow-up, kill-switch drain, reconnect reconcile, SSE price flash, settings form UX) — Phase 6 carried forward into v1.2; run on VPS with MT5 demo + real Telegram channel. NOT gated on the v1.2 frontend rewrite (backend-only).
+
+## Seeds Planted
+
+- SEED-001 — settings UX polish (toasts, inline help, copywriting) — FOLDED into v1.2 Phase 11 (SUX-01..04). Was previously slated for the now-superseded Phase 7.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
+- Total plans completed: 0 (v1.2)
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -59,7 +78,7 @@ Last activity: 2026-06-01 — Milestone v1.2 started
 |-------|-------|-------|----------|
 | - | - | - | - |
 
-**Recent Trend (v1.0 carryover):**
+**Recent Trend (v1.0/v1.1 carryover):**
 
 | Phase 01 P03 | 1min | 1 tasks | 1 files |
 | Phase 01 P01 | 2min | 2 tasks | 4 files |
@@ -87,37 +106,29 @@ Last activity: 2026-06-01 — Milestone v1.2 started
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- [v1.1 Init]: Focused milestone — 3 phases (not 5); consolidate UI + auth + settings data into one foundation phase
-- [v1.1 Init]: Staged-entry isolated in its own phase (Phase 6) because it's the highest-risk live-money logic
-- [v1.1 Init]: Two-signal correlation model (text-only signal + follow-up with zone/SL/TP), NOT one-signal zone-watcher
-- [v1.1 Init]: UI substrate — Basecoat UI (`basecoat-css@0.3.3`) + Tailwind v3.4 standalone CLI on HTMX + Jinja; no SPA rewrite
-- [v1.1 Init]: Auth — argon2-cffi + Starlette SessionMiddleware; no fastapi-users / JWT
-- [v1.1 Init]: Schema — hand-written additive-only DDL; alembic (DBE-01) stays deferred to v1.2
-- [v1.0 Phase 01]: Password cleared to empty string (not None) for type consistency; retained on failed connection for retry
-- [v1.0 Phase 01]: Removed dashboard.py hardcoded changeme fallback to fully eliminate default credentials (SEC-02)
-- [v1.0 Phase 01]: Pool sizing min=2, max=5 for asyncpg — conservative for single-process trading bot
-- [v1.0 Phase 03]: FastAPI lifespan used instead of deprecated on_event pattern for ASGI lifecycle
-- [v1.0 Phase 03]: Stay on Telethon 1.42.0 — 2.x alpha with breaking changes; re-evaluate when stable
-- [v1.0 Phase 03]: Docker external networks (proxy-net, data-net) with no direct port exposure
-- [v1.0 Phase 04]: Session-scoped event loop for DB-dependent tests to share asyncpg pool
-- [Quick]: Single container with isolated Wine prefixes per account instead of one container per account
-- [v1.1 Phase 05-05]: Bump Tailwind standalone CLI v3.4.19 → v4.2.2 (Basecoat v0.3.3 is v4-native; v4 resolves @import natively; kept tailwind.config.js alive via v4 @config directive — minimum-churn migration)
-- [v1.1 Phase 05-05]: Dockerfile TARGETARCH-aware binary selection (linux-x64 on amd64, linux-arm64 on arm64) — v4's native Rust binary doesn't tolerate Rosetta/qemu emulation where v3's did
+- [v1.2 Roadmap]: 5 phases (coarse) — page migration split at the read-only/live-money safety boundary (Phase 10 read-only, Phase 11 live-money) rather than one monolithic page phase
+- [v1.2 Roadmap]: JSON API foundation (Phase 8) precedes all UI; it locks the CSRF double-submit contract + server-side number/timestamp formatting that every page inherits
+- [v1.2 Roadmap]: Live-money pages (overview, positions, kill switch) + settings land LAST (Phase 11) — highest blast radius; settings + positions are the two HIGH-complexity pages
+- [v1.2 Roadmap]: Phase 6 staged-entry carried forward (not part of v1.2); Phase 7 HTMX redesign superseded/descoped, not completed
+- [v1.2 Init]: Rewrite dashboard as React 19 + Vite SPA — HTMX refresh-race bugs recurred; client-side state model eliminates the class
+- [v1.2 Init]: Vite SPA (static behind nginx) over Next.js — no Node runtime in prod (minimize-deps)
+- [v1.2 Init]: FastAPI dashboard → JSON API; bot core untouched (confine blast radius to presentation layer)
+- [v1.2 Init]: Keep httpOnly session-cookie auth, same-origin; no localStorage tokens; preserve CSRF
+- [v1.1 Phase 05-05]: Bump Tailwind standalone CLI v3.4.19 → v4.2.2 (backend already on Tailwind v4 — SPA alignment natural)
 
 ### Pending Todos
 
-None yet.
+- [Phase 8 prep]: Decide idempotency storage for partial-close dedupe (check `docker-compose.yml` for Redis); verify `telebot_csrf` cookie name does not collide with `telebot_login_csrf` (dashboard.py:142); confirm `/api/v2/` is caught by the `_verify_auth` `/api/` prefix 401 branch
+- [Phase 9 prep]: Lock SPA URL strategy (`/app/`) and static-serving mechanism (uvicorn StaticFiles vs nginx alias) before Dockerfile/nginx edits
 
 ### Blockers/Concerns
 
-- [Phase 6]: Live-money staged-entry logic is the highest-risk phase — isolate it and gate on thorough integration tests before enabling
-- [Phase 6]: Text-only signal must open with non-zero default SL; `sl=0.0` is never an acceptable submit (Pitfall 1)
-- [Phase 6]: Duplicate-direction guard in `trade_manager.py:187-190` must be signal-id-aware or stages 2..N silently fail (Pitfall 2)
-- [Phase 6]: Kill switch must drain `staged_entries` BEFORE closing positions (Pitfall 4)
-- [Phase 6]: Reconnect must reconcile `staged_entries` against MT5 by comment-based idempotency key (Pitfall 5)
-- [Phase 5]: Tailwind `content` glob must include `*.py` files; classes inlined in `dashboard.py` HTMLResponse fragments will otherwise be purged (Pitfall 10)
-- [Phase 5]: Login CSRF uses double-submit cookie on `/login` ONLY; existing HTMX-header CSRF preserved elsewhere (Pitfall 13)
-- [Phase 5]: Login form must land before any editable settings UI is exposed — avoid editable settings under HTTPBasic
+- [v1.2 — all live-money phases]: NO optimistic updates on close/modify/partial-close/kill-switch — UI changes state only on server-confirmed success (Pitfall 1)
+- [v1.2 — Phase 8]: HTMX-coupled CSRF (`HX-Request` check) silently breaks for the SPA; correct fix is double-submit cookie + `X-CSRF-Token`, NOT deleting the check; regression test required before any page goes live (Pitfall 2)
+- [v1.2 — Phase 8/11]: Partial-close non-idempotent server-side (percent-of-remaining double-fire = 75%); switch to absolute volume + request-id (Pitfall 3)
+- [v1.2 — Phase 12]: nginx `try_files` catch-all must NOT cover the whole origin during parallel-run; SSE `proxy_buffering off` / `proxy_read_timeout 86400s` preserved until HTMX overview/staged decommissioned (Pitfall 4)
+- [v1.2 — Phase 8]: Number/timestamp formatting stays server-side (XAUUSD pip-size already bit this project — quick task 260501-i7u); SPA submits exact server-provided numeric value, never a re-rounded JS value (Pitfall 5)
+- [Phase 6 — carried forward]: Live-money staged-entry logic still the highest-risk backend; gate on VPS UAT before enabling on real channel
 
 ### Quick Tasks Completed
 
@@ -129,6 +140,6 @@ None yet.
 
 ## Session Continuity
 
-Last activity: 2026-05-01 — Quick task 260501-mrw: stage-1 SL/TP alignment on correlated follow-up (awaiting live MT5 verification)
-Resume file: .planning/quick/260501-mrw-align-stage-1-sl-tp-with-correlated-foll/260501-mrw-SUMMARY.md
-Next action: Operator runs live UAT on Vantage Demo-10k (text-only → structured follow-up; confirm stage-1 SL+TP both update)
+Last activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12); REQUIREMENTS.md traceability filled (25/25); v1.1 transition status recorded (Phase 6 carried forward, Phase 7 superseded)
+Resume file: .planning/ROADMAP.md (v1.2 section)
+Next action: `/gsd:plan-phase 8` — JSON API Foundation (resolve idempotency-storage Open Question 4 during planning)

@@ -4,27 +4,53 @@
 
 - **v1.0 — Hardening** (2026-03-22 → 2026-03-23): PostgreSQL migration, MT5 resilience, kill switch, execution correctness, observability, test suite. 4 phases, 13 plans, 30 requirements. [Details](milestones/v1.0-ROADMAP.md)
 
-## Active Milestone
+## Closing Milestone
 
-### v1.1 — Improved trade executions and UI
+### v1.1 — Improved trade executions and UI (closing — partially shipped)
 
 **Started:** 2026-04-18
 **Goal:** Stop missing trades via staged-entry strategy, modernize the dashboard with Basecoat + Tailwind, and replace HTTPBasic with a proper login form — without regressing v1.0 live-trading safety.
 **Granularity:** coarse (3 phases, consolidated from 5 logical areas to respect the focused-milestone constraint)
 **Coverage:** 30/30 v1.1 requirements mapped
 
+**Transition status (set at v1.2 start):**
+- **Phase 5** — shipped (UI substrate, auth, settings data model).
+- **Phase 6 (staged entry)** — code complete; **CARRIED FORWARD** into v1.2 as an outstanding item (awaiting live VPS UAT with MT5 demo). Backend-only; unaffected by the frontend rewrite. NOT part of v1.2 scope.
+- **Phase 7 (HTMX dashboard redesign)** — **SUPERSEDED / DESCOPED by v1.2.** The HTMX substrate proved glitchy (recurring refresh-race bugs: input clobbering, flicker, modal-mount issues). Remaining HTMX work is descoped (not completed); replaced wholesale by the React/Vite rewrite in v1.2.
+
+## Active Milestone
+
+### v1.2 — React/Vite dashboard rewrite
+
+**Started:** 2026-06-01
+**Goal:** Replace the FastAPI + HTMX + Jinja server-rendered dashboard with a separate React 19 + Vite SPA, eliminating the HTMX refresh-race bug class and moving to a stack the operator is fluent in — with zero regression to live-money controls.
+**Locked stack (final):** React 19 · Vite 8 · @vitejs/plugin-react 6 · Tailwind CSS v4 (`@tailwindcss/vite` + `@theme`) · shadcn/ui · TanStack Query v5 · react-hook-form + zod · sonner · recharts · TypeScript.
+**Granularity:** coarse (5 phases — JSON API → SPA scaffold → read-only page waves → live-money pages + settings → cutover; page migration split at the read-only/live-money safety boundary)
+**Coverage:** 25/25 v1.2 requirements mapped
+
 ## Phases
 
 **Phase Numbering:**
 - Integer phases (1, 2, 3, 4): v1.0 milestone (complete)
-- Integer phases (5, 6, 7): v1.1 milestone (this milestone)
-- Decimal phases (e.g. 5.1): reserved for urgent insertions (marked with INSERTED)
+- Integer phases (5, 6, 7): v1.1 milestone (closing — Phase 6 carried forward, Phase 7 superseded)
+- Integer phases (8, 9, 10, 11, 12): v1.2 milestone (this milestone)
+- Decimal phases (e.g. 8.1): reserved for urgent insertions (marked with INSERTED)
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 5: Foundation — UI substrate, auth, and settings data model** - Replace Play-CDN Tailwind with standalone-CLI build, vendor Basecoat UI, ship a styled login form backed by argon2 + sessions, and land the `account_settings` data layer with audit log. No staged-entry execution yet — just the prerequisites.
-- [~] **Phase 6: Staged entry execution** — UNDER REVIEW (code complete 2026-04-20; awaiting VPS UAT with MT5 demo after Phase 7 ships)
-- [ ] **Phase 7: Dashboard redesign** - Full restyle of every dashboard view on Basecoat components, mobile-responsive layout, positions drilldown, per-source analytics deep-dive, and trade-history filters.
+### v1.1 (closing)
+
+- [x] **Phase 5: Foundation — UI substrate, auth, and settings data model** - Replace Play-CDN Tailwind with standalone-CLI build, vendor Basecoat UI, ship a styled login form backed by argon2 + sessions, and land the `account_settings` data layer with audit log.
+- [~] **Phase 6: Staged entry execution** — CARRIED FORWARD into v1.2 (code complete 2026-04-20; awaiting VPS UAT with MT5 demo). Backend-only; unaffected by the frontend rewrite.
+- [-] **Phase 7: Dashboard redesign (HTMX)** — SUPERSEDED / DESCOPED by v1.2. Remaining HTMX work replaced wholesale by the React/Vite rewrite.
+
+### v1.2 (active)
+
+- [ ] **Phase 8: JSON API Foundation** - Refactor `dashboard.py`'s HTML-fragment endpoints into a versioned, curl/pytest-testable JSON API (`/api/v2`) with Pydantic models, double-submit CSRF, server-side number/timestamp formatting, and idempotent partial-close. Bot core untouched.
+- [ ] **Phase 9: SPA Scaffold + Auth + Design System** - Stand up the Vite 8 + React 19 + Tailwind v4 + shadcn SPA served same-origin behind nginx, with session-cookie auth, global 401 redirect, and the TanStack-Query/local-form-state split that structurally kills the refresh-race bug class. No pages yet.
+- [ ] **Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)** - Migrate the four no-live-money-action pages to the SPA at parity, starting with analytics as the read-only pipeline pilot.
+- [ ] **Phase 11: Live-money Pages + Settings** - Migrate overview, positions (4 destructive actions), kill switch, and settings (folds SEED-001) using server-confirmed mutations only, disabled-while-pending, CSRF on every mutation, and client-side zod hard-cap mirroring.
+- [ ] **Phase 12: Parallel-run Cutover + HTMX Decommission** - Run SPA and legacy HTMX in parallel behind nginx; cut over page-by-page gated on MT5-demo-verified parity; then remove HTMX/Jinja templates, the Tailwind standalone-CLI stage, and Basecoat vendor assets.
 
 ## Phase Details
 
@@ -48,6 +74,7 @@ Plans:
 **UI hint**: yes
 
 ### Phase 6: Staged entry execution
+**Status**: CARRIED FORWARD into v1.2 (code complete; awaiting VPS UAT with MT5 demo). Backend-only; not part of v1.2 frontend scope; requirement mappings unchanged.
 **Goal**: A text-only "Gold buy now" signal opens exactly one protected position immediately, and a correlated follow-up signal with zone/SL/TP opens additional positions as price enters the zone — without regressing any v1.0 safety primitive (kill switch, reconnect sync, daily limits, stale re-check, duplicate guard).
 **Depends on**: Phase 5 (settings data model is a hard prerequisite — stages snapshot settings at signal receipt)
 **Requirements**: STAGE-01, STAGE-02, STAGE-03, STAGE-04, STAGE-05, STAGE-06, STAGE-07, STAGE-08, STAGE-09, SET-03
@@ -66,7 +93,8 @@ Plans:
 - [ ] 06-04-PLAN.md — Safety hooks: _zone_watch_loop peer task + emergency_close drain + _sync_positions reconnect reconciliation + idempotency probe (STAGE-04, STAGE-06, STAGE-07)
 - [ ] 06-05-PLAN.md — Pending-stages panel: SSE payload extension + /staged page + /partials/pending_stages polling fallback + overview.html include + templates + price-flash JS helper (STAGE-08)
 
-### Phase 7: Dashboard redesign
+### Phase 7: Dashboard redesign (HTMX)
+**Status**: SUPERSEDED / DESCOPED by v1.2. The HTMX substrate proved glitchy (recurring refresh-race bugs); remaining HTMX work is replaced wholesale by the React/Vite rewrite (Phases 8–12). Completed plans (07-01..07-07) remain as historical record; this phase is NOT marked complete and its remaining work is not carried forward.
 **Goal**: Every dashboard view is restyled on Basecoat components with richer drilldowns, the layout is usable on a phone, and operators can filter/analyze trade history by account, source, symbol, and date range — with zero regressions in any v1.0 or v1.1 functionality.
 **Depends on**: Phase 5 (UI substrate) and Phase 6 (staged-entry data to display)
 **Requirements**: DASH-01, DASH-02, DASH-03, DASH-04, DASH-05
@@ -85,16 +113,90 @@ Plans:
 - [x] 07-05-PLAN.md — Analytics time/source filters: get_analytics_with_filters() query, pill tabs for time range, clickable source rows, per-source metrics (DASH-04)
 - [x] 07-06-PLAN.md — Settings UX polish: toast notifications via OOB swap, inline help text, operator-legible labels (DASH-01, SEED-001)
 - [x] 07-07-PLAN.md — Signals + staged pages restyle: responsive table-to-card, empty states, Basecoat components (DASH-01)
-- [ ] 07-08-PLAN.md — Compat shim removal + verification: remove _compat.css, rebuild CSS, human verify all pages (DASH-01, DASH-02)
+- [-] 07-08-PLAN.md — Compat shim removal + verification: SUPERSEDED — HTMX teardown now handled by v1.2 Phase 12 (CUT-03)
+**UI hint**: yes
+
+---
+
+### Phase 8: JSON API Foundation
+**Goal**: Every piece of dashboard data and every dashboard mutation is available as a versioned, curl/pytest-testable JSON contract (`/api/v2`) — display-ready and machine-precise — with double-submit CSRF and idempotent money operations, while the bot core (`executor.py`, `trade_manager.py`, `db.py`, `mt5_connector.py`) and the MT5 REST bridge stay byte-for-byte untouched.
+**Depends on**: Phase 5 (auth + settings data layer shipped). Independent of Phases 6 and 7 — operates purely on the presentation/serialization layer.
+**Requirements**: API-01, API-02, API-03, API-04, API-05
+**Success Criteria** (what must be TRUE):
+  1. Every read view (accounts, positions, history, signals, stages, analytics, overview meta) is retrievable via `GET /api/v2/...` returning Pydantic-modeled JSON; a `git diff` shows zero changes to `executor.py`, `trade_manager.py`, `db.py`, `mt5_connector.py`, and the MT5 bridge
+  2. Every mutation (close, modify-levels, partial-close, kill-switch preview/confirm, resume, settings validate/confirm/revert) returns a structured `{success|error}` JSON envelope instead of an HTML fragment
+  3. A `POST` to any mutation endpoint **without** a valid `X-CSRF-Token` (double-submit cookie, `secrets.compare_digest`) returns `403`, proven by an automated regression test; the existing login double-submit flow is unchanged and the new CSRF cookie name does not collide with `telebot_login_csrf`
+  4. Every numeric/price/time field is returned both display-ready (server-formatted string) and machine-precise (raw numeric; times as ISO-8601 with UTC offset); a curl of a XAUUSD position shows correct pip-sized formatting with no client re-derivation required
+  5. A duplicate partial-close submit (same request-id, absolute target volume) closes the position exactly once — the second submit is deduplicated server-side and cannot close the wrong amount
+**Plans**: TBD
+**Research flag**: Idempotency storage mechanism (in-memory vs Redis vs PostgreSQL) must be decided before the actions layer is coded — check `docker-compose.yml` for existing Redis wiring (Open Question 4).
+**UI hint**: no
+
+### Phase 9: SPA Scaffold + Auth + Design System
+**Goal**: A Vite 8 + React 19 + Tailwind v4 + shadcn/ui single-page app is served same-origin behind nginx with no Node runtime in production, the operator can log in through it on the retained httpOnly session cookie, expired sessions redirect to login exactly once, and the server-state-vs-form-state separation (TanStack Query polling + local form state) is established as the convention every later page inherits — structurally eliminating the HTMX refresh-race bug class.
+**Depends on**: Phase 8 (the JSON API contract, auth/CSRF endpoints, and number/time contracts the SPA consumes).
+**Requirements**: SPA-01, SPA-02, SPA-03, SPA-04, SPA-05
+**Success Criteria** (what must be TRUE):
+  1. The Vite-built SPA is served as static files same-origin behind nginx (locked URL strategy + serving mechanism) and the production deployment runs with no Node process — only the built `dist/` is shipped
+  2. The app renders with shadcn/ui components themed from the existing dark palette (`#252542` / `#1a1a2e` / `#0f0f1a`) mapped to Tailwind v4 `@theme` tokens; no `tailwind.config.js` exists
+  3. Operator logs in through the SPA against the retained httpOnly session cookie; a browser check confirms no auth token is present in `localStorage`
+  4. With an expired/cleared session, any authed view triggers a single global 401-handler redirect to the login view — no redirect loop, no repeated bounces
+  5. A demonstrably wired TanStack Query background poll on a scaffold/probe view runs through ≥2 refetch cycles without clobbering an open input or modal, proving the server-state/form-state split before any real page is built
+**Plans**: TBD
+**Research flag**: Lock CSRF cookie/header names (Open Question 1), SPA URL strategy `/app/` vs whitelist (Open Question 2), and static-serving mechanism — uvicorn StaticFiles vs nginx alias (Open Question 3) — before scaffold coding.
+**UI hint**: yes
+
+### Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)
+**Goal**: The four pages that take no live-money action reach SPA parity, in ascending pipeline-validation order — analytics first as the read-only pilot that proves the full API + SPA + auth + nginx stack, then signals, history (with filters), and staged-entries — each verified against its live legacy page before that legacy route is eligible for decommission.
+**Depends on**: Phase 9 (SPA scaffold, auth, QueryClient defaults, design tokens).
+**Requirements**: PAGE-01, PAGE-02, PAGE-03, PAGE-04
+**Success Criteria** (what must be TRUE):
+  1. The SPA analytics page reaches parity — win rate, profit factor, per-source deep-dive — with numbers matching the legacy `/analytics` page on live data, validating the end-to-end pipeline in a no-live-money context
+  2. The SPA signals page reaches parity with the legacy signals view
+  3. The SPA history page reaches parity including all trade-history filters, with filter state reflected in the URL (bookmarkable) and `keepPreviousData` preventing flicker on refetch
+  4. The SPA staged-entries page reaches parity (pending stages per account with live polling and elapsed-time display), matching the legacy staged view
+  5. For each of the four pages, SPA output is verified equal to the live legacy page before that page is considered ready for cutover (no live-money action exists on any of these pages, so cutover risk is read-only)
+**Plans**: TBD
+**UI hint**: yes
+
+### Phase 11: Live-money Pages + Settings
+**Goal**: The highest-blast-radius surfaces — overview, positions (4 destructive actions), the two-step kill switch, and the SEED-001 settings page — reach SPA parity using the money-safe mutation discipline established in Phase 9: the UI changes state only after the server confirms success, every mutation carries CSRF, destructive buttons are disabled-while-pending, and client-side zod validation mirrors the server hard caps.
+**Depends on**: Phase 10 (validated read-only pipeline + shared list/table patterns) and Phase 8 (idempotent partial-close API + structured mutation envelopes).
+**Requirements**: PAGE-05, PAGE-06, PAGE-07, PAGE-08, SUX-01, SUX-02, SUX-03, SUX-04
+**Success Criteria** (what must be TRUE):
+  1. **Safety invariant — server-confirmed mutations only**: on positions, close / modify SL+TP / partial-close update or clear the UI **only** on server-confirmed success (no optimistic clear); on error the modal stays open with typed values preserved and surfaces the error toast; every destructive button is disabled-while-pending so a position can never appear closed while still live at the broker
+  2. **Safety invariant — CSRF on every mutation**: every live-money POST (close, modify, partial-close, kill-switch confirm, settings confirm/revert) carries the `X-CSRF-Token` double-submit header and is rejected `403` without it — verified against the Phase 8 regression test
+  3. Overview reaches parity with live polling (positions table + pending-stages card + kill-switch entry + TRADING PAUSED banner), and a background refetch through ≥2 cycles never clobbers an open positions drilldown or edit-levels modal
+  4. The emergency kill switch reaches parity with its two-step preview → confirm flow (confirm disabled-while-pending), and partial-close uses absolute target volume + request-id so a double-fire cannot close the wrong amount
+  5. Settings reaches parity — per-account form, two-step dangerous-change confirmation rendering a diff, audit timeline, and revert — with viewport-level sonner save/error/revert toasts (SUX-01), per-field help/tooltips including the live compounded-exposure footgun warning (SUX-02), react-hook-form + zod client validation mirroring the server hard-caps including mode-dependent and per-account `risk_value` caps (SUX-03), and operator-legible copywriting on labels/placeholders/confirmation text (SUX-04)
+**Plans**: TBD
+**Research flag**: Partial-close API shape change (percent → absolute volume) needs an explicit design note before coding (depends on the idempotency-storage decision locked in Phase 8).
+**UI hint**: yes
+
+### Phase 12: Parallel-run Cutover + HTMX Decommission
+**Goal**: The SPA and the legacy HTMX dashboard run simultaneously behind one nginx instance sharing the session cookie, cutover happens one page at a time and is reversible at every step, each legacy route is removed only after its React replacement passes an MT5-demo parity gate, and after full cutover all HTMX/Jinja templates, the Tailwind standalone-CLI build stage, and Basecoat vendor assets are deleted.
+**Depends on**: Phases 10 and 11 (every SPA page must exist and pass parity before its legacy twin can be decommissioned).
+**Requirements**: CUT-01, CUT-02, CUT-03
+**Success Criteria** (what must be TRUE):
+  1. The SPA (`/app`) and the legacy HTMX dashboard (`/`) run in parallel behind nginx sharing the same session cookie, and rolling a single page back to legacy is one nginx edit (reversible at every step); the SSE/`proxy_buffering off` directives stay intact while any HTMX live page remains
+  2. **Safety invariant — parity gate before decommission**: each legacy HTMX route is removed only after its React replacement is verified at parity against the MT5 demo (SPA numbers match legacy on live data; destructive actions confirmed against the demo broker; CSRF regression test green) — no page is decommissioned on "looks done"
+  3. After full cutover the HTMX/Jinja templates directory, the legacy Tailwind standalone-CLI Dockerfile stage, the Basecoat vendor assets, and the `/stream` SSE endpoint (plus its nginx directives) are all removed, and `dashboard.py` is reduced to wiring (accessors + `include_router` + shared middleware)
+**Plans**: TBD
 **UI hint**: yes
 
 ## Progress
 
 **Execution Order:**
-v1.1 phases execute in numeric order: 5 -> 6 -> 7
+- v1.1 phases execute in numeric order: 5 -> 6 -> 7 (Phase 6 carried forward; Phase 7 superseded)
+- v1.2 phases execute in numeric order: 8 -> 9 -> 10 -> 11 -> 12
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
-| 6. Staged entry execution | 5/5 | Under review | - |
-| 7. Dashboard redesign | 7/8 | In progress | - |
+| 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
+| 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
+| 8. JSON API Foundation | 0/TBD | Not started | - |
+| 9. SPA Scaffold + Auth + Design System | 0/TBD | Not started | - |
+| 10. Read-only Page Migration | 0/TBD | Not started | - |
+| 11. Live-money Pages + Settings | 0/TBD | Not started | - |
+| 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
