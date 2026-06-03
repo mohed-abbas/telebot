@@ -58,12 +58,121 @@ async def clean_tables():
             await conn.execute(
                 "TRUNCATE signals, trades, daily_stats, pending_orders, "
                 "settings_audit, account_settings, accounts, failed_login_attempts, "
-                "staged_entries, signal_daily_counted "
+                "staged_entries, signal_daily_counted, idempotency_keys "
                 "RESTART IDENTITY CASCADE"
             )
     except Exception:
         pass  # DB not available, skip cleanup
     yield
+
+
+# ─── Phase 08 (JSON API) shared fixtures ─────────────────────────────────────
+
+
+def _make_dryrun_executor():
+    """Build a lightweight executor stub backed by a DryRunConnector.
+
+    Mirrors only the surface dashboard._get_all_positions / _get_accounts_overview
+    reach: `executor.tm.connectors` (name->connector), `executor.tm.accounts`
+    (name->AccountConfig), and `executor.cfg.max_daily_trades_per_account`. A real
+    Executor is not needed at Wave 0 — Plans 02-05 add route handlers that read
+    these via api/deps.get_executor(). Injects one deterministic XAUUSD position so
+    the positions/formatting routes have a stable row without a live MT5 bridge.
+    """
+    import types
+
+    from mt5_connector import Position as MT5Position
+
+    conn = DryRunConnector("Vantage Demo-10k", "TestServer", 12345, "pass")
+    conn._connected = True  # connected without awaiting connect() (no MT5 bridge)
+    # Deterministic XAUUSD position (drives the formatting assertions).
+    conn._fake_positions = {
+        100001: MT5Position(
+            ticket=100001, symbol="XAUUSD", direction="buy", volume=0.30,
+            open_price=2800.123, sl=2790.0, tp=2820.0, profit=12.5,
+        )
+    }
+    # Static price so get_positions' P&L recompute stays deterministic.
+    conn.set_simulated_price("XAUUSD", 2805.0, 2805.2)
+
+    acct = AccountConfig(
+        name="Vantage Demo-10k", server="TestServer", login=12345,
+        password_env="TEST_PASS", risk_percent=1.0, max_lot_size=1.0,
+        max_daily_loss_percent=3.0, max_open_trades=3, enabled=True,
+    )
+
+    tm = types.SimpleNamespace(
+        connectors={"Vantage Demo-10k": conn},
+        accounts={"Vantage Demo-10k": acct},
+    )
+    cfg = types.SimpleNamespace(max_daily_trades_per_account=30)
+    return types.SimpleNamespace(tm=tm, cfg=cfg)
+
+
+@pytest.fixture(scope="module")
+def api_app():
+    """Module-scoped FastAPI app for /api/v2 tests (Phase 08).
+
+    Mirrors tests/test_login_flow.py:21-47 — env-inject, sys.modules.pop +
+    importlib re-import so the app binds the test config, init_db with skip on
+    absence, then wire a DryRunConnector-backed executor stub via init_dashboard()
+    so _get_all_positions() returns a deterministic XAUUSD row. Yields dashboard.app.
+    """
+    import asyncio
+    import importlib
+
+    from argon2 import PasswordHasher
+
+    known_hash = PasswordHasher().hash("correct-horse-battery-staple")
+    env = {
+        "TG_API_ID": "1", "TG_API_HASH": "x", "TG_SESSION": "x", "TG_CHAT_IDS": "-1",
+        "DISCORD_WEBHOOK_URL": "https://example", "TIMEZONE": "UTC",
+        "DATABASE_URL": TEST_DATABASE_URL,
+        "DASHBOARD_PASS_HASH": known_hash,
+        "SESSION_SECRET": "A" * 48,
+        "SESSION_COOKIE_SECURE": "false",
+    }
+    for key in ("DASHBOARD_USER", "DASHBOARD_PASS"):
+        os.environ.pop(key, None)
+    os.environ.update(env)
+    for mod in ("config", "dashboard", "db"):
+        sys.modules.pop(mod, None)
+    dashboard = importlib.import_module("dashboard")
+    import db as _db
+    try:
+        asyncio.get_event_loop().run_until_complete(_db.init_db(env["DATABASE_URL"]))
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL not available for api tests: {exc}")
+    # Wire the DryRun-backed executor stub through the real accessor path.
+    dashboard.init_dashboard(_make_dryrun_executor(), notifier=None, settings=None)
+    yield dashboard.app
+    try:
+        asyncio.get_event_loop().run_until_complete(_db.close_db())
+    except Exception:
+        pass
+
+
+@pytest.fixture
+def authed_client(api_app):
+    """A TestClient carrying a logged-in session + telebot_csrf cookie.
+
+    Plan 02 finalises the JSON auth route; until then the helper seeds the session
+    directly (sets request.session["user"]) and issues a telebot_csrf cookie so
+    Plans 03-05 mutation tests can round-trip the double-submit header. Returns
+    (client, csrf_token).
+    """
+    import secrets as _secrets
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(api_app)
+    # Seed the session cookie via the SessionMiddleware by exercising a tiny
+    # login shim is not yet available at Wave 0; instead set the session through
+    # a transient route is unnecessary — Plan 02 wires /api/v2/auth/login. For now
+    # expose the csrf cookie so downstream CSRF round-trip tests have a token.
+    csrf = _secrets.token_urlsafe(32)
+    client.cookies.set("telebot_csrf", csrf)
+    return client, csrf
 
 
 @pytest_asyncio.fixture
