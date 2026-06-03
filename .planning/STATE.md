@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-02T20:38:13.038Z"
-last_activity: 2026-06-02 -- Phase 08 planning complete
+last_updated: "2026-06-03T16:54:46.966Z"
+last_activity: 2026-06-03 -- Phase 08 execution started
 progress:
   total_phases: 8
   completed_phases: 3
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 8 — JSON API Foundation (v1.2 roadmap just created)
+**Current focus:** Phase 08 — json-api-foundation
 
 ## Current Position
 
-Phase: Not started (v1.2 roadmap created; ready to plan Phase 8)
-Plan: —
-Status: Ready to execute
-Last activity: 2026-06-02 -- Phase 08 planning complete
+Phase: 08 (json-api-foundation) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 08
+Last activity: 2026-06-03 -- Phase 08 execution started
 
 ## v1.2 Milestone Map
 
