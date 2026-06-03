@@ -96,6 +96,26 @@ def init_dashboard(executor, notifier, settings):
     _settings = settings
 
 
+# ─── Phase 08 (JSON API) read-only accessors ─────────────────────────────────
+# api/ depends on these instead of importing the rebindable module globals
+# directly: init_dashboard() rebinds _executor/_notifier/_settings AFTER import,
+# so `from dashboard import _executor` would capture a stale None (Pattern 1).
+def get_executor():
+    return _executor
+
+
+def get_notifier():
+    return _notifier
+
+
+def get_settings():
+    return _settings
+
+
+def get_settings_store():
+    return _get_settings_store()
+
+
 def _verify_auth(request: Request) -> str:
     """Session-based auth (AUTH-01 consumer contract).
 
@@ -181,11 +201,23 @@ def _render_login(
 async def lifespan(app: FastAPI):
     """ASGI lifespan: manages startup/shutdown lifecycle."""
     logger.info("Dashboard ASGI lifespan: startup")
+    # Phase 08 (JSON API): create the idempotency_keys table at startup.
+    # DDL lives in api/idempotency.py (NOT db.py — bot core stays untouched).
+    from api.idempotency import ensure_table
+    await ensure_table()
     yield
     logger.info("Dashboard ASGI lifespan: shutdown")
 
 
 app = FastAPI(title="Telebot Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+# Phase 08 (JSON API): mount the /api/v2 router and install enveloped-error
+# handlers. Additive only — the legacy HTML/HTMX routes are unaffected.
+from api import api_router  # noqa: E402
+from api.errors import register_error_handlers  # noqa: E402
+
+app.include_router(api_router)
+register_error_handlers(app)
 
 # Phase 5 AUTH-03: SessionMiddleware — must be added before first request.
 # D-11: 30-day cookie. Pitfall 3: https_only config-driven for dev/tests.

@@ -41,6 +41,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY *.py *.json ./
+COPY api/ ./api/
 COPY templates/ ./templates/
 COPY static/ ./static/
 COPY scripts/ ./scripts/
