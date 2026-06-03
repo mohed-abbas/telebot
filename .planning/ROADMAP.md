@@ -151,7 +151,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 08-01-PLAN.md — Foundation: api/ package skeleton + router assembly, double-submit CSRF dep, shared formatter, Postgres idempotency module, full Pydantic schemas, dashboard wiring + accessors, Dockerfile COPY, Wave-0 test scaffolds (API-01, API-03, API-04)
+- [x] 08-01-PLAN.md — Foundation: api/ package skeleton + router assembly, double-submit CSRF dep, shared formatter, Postgres idempotency module, full Pydantic schemas, dashboard wiring + accessors, Dockerfile COPY, Wave-0 test scaffolds (API-01, API-03, API-04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -242,7 +242,7 @@ Plans:
 | 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
-| 8. JSON API Foundation | 0/5 | Planned | - |
+| 8. JSON API Foundation | 1/5 | In Progress|  |
 | 9. SPA Scaffold + Auth + Design System | 0/TBD | Not started | - |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |

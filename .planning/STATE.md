@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-03T16:54:46.966Z"
-last_activity: 2026-06-03 -- Phase 08 execution started
+last_updated: "2026-06-03T17:05:12.894Z"
+last_activity: 2026-06-03 -- Phase 08 Plan 01 complete (JSON API foundation)
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 22
-  completed_plans: 18
-  percent: 38
+  completed_plans: 19
+  percent: 86
 ---
 
 # Project State
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-06-01)
 ## Current Position
 
 Phase: 08 (json-api-foundation) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 08
-Last activity: 2026-06-03 -- Phase 08 execution started
+Plan: 2 of 5
+Status: Plan 01 complete (api/ foundation + contracts); ready to execute Plan 02
+Last activity: 2026-06-03 -- Phase 08 Plan 01 complete
 
 ## v1.2 Milestone Map
 
@@ -99,6 +99,7 @@ Last activity: 2026-06-03 -- Phase 08 execution started
 | Phase 07 P05 | 2min | 3 tasks | 4 files |
 | Phase 07 P06 | 2min | 3 tasks | 5 files |
 | Phase 07 P07 | 2min | 2 tasks | 3 files |
+| Phase 08 P01 | 4min | - tasks | - files |
 
 ## Accumulated Context
 
@@ -116,6 +117,9 @@ Recent decisions affecting current work:
 - [v1.2 Init]: FastAPI dashboard → JSON API; bot core untouched (confine blast radius to presentation layer)
 - [v1.2 Init]: Keep httpOnly session-cookie auth, same-origin; no localStorage tokens; preserve CSRF
 - [v1.1 Phase 05-05]: Bump Tailwind standalone CLI v3.4.19 → v4.2.2 (backend already on Tailwind v4 — SPA alignment natural)
+- [Phase ?]: Phase 08-01: api/ mounts at /api/v2; router.py single-owns ten resource sub-routers (Plans 02-05 add handlers only)
+- [Phase ?]: Phase 08-01: idempotency_keys DDL lives in api/idempotency.py via db._pool accessor — db.py byte-for-byte untouched (D-01..D-04)
+- [Phase ?]: Phase 08-01: double-submit CSRF (telebot_csrf vs X-CSRF-Token, compare_digest) replaces HX-Request heuristic for /api/v2 (D-15)
 
 ### Pending Todos
 
@@ -142,5 +146,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12); REQUIREMENTS.md traceability filled (25/25); v1.1 transition status recorded (Phase 6 carried forward, Phase 7 superseded)
-Resume file: .planning/phases/08-json-api-foundation/08-CONTEXT.md
+Resume file: None
 Next action: `/gsd:plan-phase 8` — JSON API Foundation (resolve idempotency-storage Open Question 4 during planning)

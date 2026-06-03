@@ -23,10 +23,10 @@
 
 ### API — JSON API Layer
 
-- [ ] **API-01**: All dashboard data is available via a versioned JSON API (`/api/v2`, `APIRouter`) with Pydantic response models that wrap the existing in-process helpers (`_get_all_positions`, `_get_accounts_overview`, `db.get_*`, etc.) — bot core (`executor.py`, `trade_manager.py`, `db.py`, `mt5_connector.py`) and the MT5 REST bridge are not modified
+- [x] **API-01**: All dashboard data is available via a versioned JSON API (`/api/v2`, `APIRouter`) with Pydantic response models that wrap the existing in-process helpers (`_get_all_positions`, `_get_accounts_overview`, `db.get_*`, etc.) — bot core (`executor.py`, `trade_manager.py`, `db.py`, `mt5_connector.py`) and the MT5 REST bridge are not modified
 - [ ] **API-02**: Mutating endpoints (close, modify levels, partial-close, kill switch, settings confirm/revert) return a structured JSON result (`{success, error, ...}`) instead of HTML fragments
-- [ ] **API-03**: CSRF protection on JSON mutations uses a double-submit cookie (readable `X-CSRF-Token` echoed from a cookie, `secrets.compare_digest`), independent of the HTMX `HX-Request` heuristic; login's existing double-submit flow is preserved verbatim; covered by a regression test
-- [ ] **API-04**: Numbers, prices, and timestamps are formatted server-side and sent display-ready plus machine-precise (ISO-8601 + timezone for times); the SPA never re-derives precision (guards the XAUUSD pip-size class of bug)
+- [x] **API-03**: CSRF protection on JSON mutations uses a double-submit cookie (readable `X-CSRF-Token` echoed from a cookie, `secrets.compare_digest`), independent of the HTMX `HX-Request` heuristic; login's existing double-submit flow is preserved verbatim; covered by a regression test
+- [x] **API-04**: Numbers, prices, and timestamps are formatted server-side and sent display-ready plus machine-precise (ISO-8601 + timezone for times); the SPA never re-derives precision (guards the XAUUSD pip-size class of bug)
 - [ ] **API-05**: Partial-close is made safe against double-fire / retry — switched from percent-of-current-volume to an absolute volume, with a request-id idempotency guard so a duplicate submit cannot close the wrong amount
 
 ### SPA — Frontend Foundation
@@ -94,10 +94,10 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| API-01 | Phase 8 | Pending |
+| API-01 | Phase 8 | Complete |
 | API-02 | Phase 8 | Pending |
-| API-03 | Phase 8 | Pending |
-| API-04 | Phase 8 | Pending |
+| API-03 | Phase 8 | Complete |
+| API-04 | Phase 8 | Complete |
 | API-05 | Phase 8 | Pending |
 | SPA-01 | Phase 9 | Pending |
 | SPA-02 | Phase 9 | Pending |
