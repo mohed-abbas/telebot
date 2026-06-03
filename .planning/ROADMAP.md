@@ -48,7 +48,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 ### v1.2 (active)
 
-- [ ] **Phase 8: JSON API Foundation** - Refactor `dashboard.py`'s HTML-fragment endpoints into a versioned, curl/pytest-testable JSON API (`/api/v2`) with Pydantic models, double-submit CSRF, server-side number/timestamp formatting, and idempotent partial-close. Bot core untouched.
+- [x] **Phase 8: JSON API Foundation** - Refactor `dashboard.py`'s HTML-fragment endpoints into a versioned, curl/pytest-testable JSON API (`/api/v2`) with Pydantic models, double-submit CSRF, server-side number/timestamp formatting, and idempotent partial-close. Bot core untouched. (completed 2026-06-03)
 - [ ] **Phase 9: SPA Scaffold + Auth + Design System** - Stand up the Vite 8 + React 19 + Tailwind v4 + shadcn SPA served same-origin behind nginx, with session-cookie auth, global 401 redirect, and the TanStack-Query/local-form-state split that structurally kills the refresh-race bug class. No pages yet.
 - [ ] **Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)** - Migrate the four no-live-money-action pages to the SPA at parity, starting with analytics as the read-only pipeline pilot.
 - [ ] **Phase 11: Live-money Pages + Settings** - Migrate overview, positions (4 destructive actions), kill switch, and settings (folds SEED-001) using server-confirmed mutations only, disabled-while-pending, CSRF on every mutation, and client-side zod hard-cap mirroring.
@@ -160,8 +160,8 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 08-04-PLAN.md — Mutation actions: close/modify-levels/emergency/resume JSON envelopes + idempotent absolute-volume partial-close (replay/conflict/422), + idempotency regression test (API-02, API-05)
-- [ ] 08-05-PLAN.md — Settings mutations: GET settings + validate/confirm/revert as JSON with server-side hard caps + audit, + settings contract test (API-02)
+- [x] 08-04-PLAN.md — Mutation actions: close/modify-levels/emergency/resume JSON envelopes + idempotent absolute-volume partial-close (replay/conflict/422), + idempotency regression test (API-02, API-05)
+- [x] 08-05-PLAN.md — Settings mutations: GET settings + validate/confirm/revert as JSON with server-side hard caps + audit, + settings contract test (API-02)
 
 **Research flag**: RESOLVED — idempotency storage = new PostgreSQL `idempotency_keys` table (D-01; Redis confirmed absent in both compose files); DDL lives in api/idempotency.py, NOT db.py.
 **UI hint**: no
@@ -242,7 +242,7 @@ Plans:
 | 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
-| 8. JSON API Foundation | 3/5 | In Progress|  |
+| 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 0/TBD | Not started | - |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
