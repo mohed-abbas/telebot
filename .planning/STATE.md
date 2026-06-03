@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: executing
-last_updated: "2026-06-03T17:05:12.894Z"
+status: ready_to_plan
+last_updated: 2026-06-03T18:23:37.241Z
 last_activity: 2026-06-03 -- Phase 08 Plan 01 complete (JSON API foundation)
 progress:
   total_phases: 8
   completed_phases: 3
   total_plans: 22
-  completed_plans: 19
-  percent: 86
+  completed_plans: 36
+  percent: 38
+stopped_at: Phase 08 complete (5/5) — ready to discuss Phase 9
 ---
 
 # Project State
@@ -20,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 08 — json-api-foundation
+**Current focus:** Phase 9 — spa scaffold + auth + design system
 
 ## Current Position
 
-Phase: 08 (json-api-foundation) — EXECUTING
-Plan: 2 of 5
-Status: Plan 01 complete (api/ foundation + contracts); ready to execute Plan 02
-Last activity: 2026-06-03 -- Phase 08 Plan 01 complete
+Phase: 9
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-03
 
 ## v1.2 Milestone Map
 
@@ -69,7 +70,7 @@ Last activity: 2026-06-03 -- Phase 08 Plan 01 complete
 
 **Velocity:**
 
-- Total plans completed: 0 (v1.2)
+- Total plans completed: 5 (v1.2)
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -77,7 +78,7 @@ Last activity: 2026-06-03 -- Phase 08 Plan 01 complete
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| - | - | - | - |
+| 08 | 5 | - | - |
 
 **Recent Trend (v1.0/v1.1 carryover):**
 
