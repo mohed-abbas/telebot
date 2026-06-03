@@ -192,11 +192,31 @@ class EmergencyResult(BaseModel):
 
 
 class SettingsView(BaseModel):
-    """Effective settings for an account (Plan 05 fills the field set)."""
+    """Effective settings for an account + its audit timeline (Plan 05).
+
+    `values` carries the effective AccountSettings as a JSON dict (risk_mode,
+    risk_value, max_stages, default_sl_pips, max_daily_trades, max_open_trades,
+    max_lot_size). `audit` is the newest-first settings_audit timeline, each row
+    carrying machine + display timestamps (D-06/D-07).
+    """
 
     account: str
     values: dict
+    audit: list[dict] = []
     diff: dict | None = None
+
+
+class SettingsValidateResult(BaseModel):
+    """JSON result of POST /settings/{account}/validate (replaces the HTML modal).
+
+    Mirrors validate_settings_form's outputs: `valid`, per-field `errors`, the
+    `diff` (changed fields old->new), and the `dry_run_text` preview string.
+    """
+
+    valid: bool
+    errors: dict = {}
+    diff: list[dict] = []
+    dry_run_text: str | None = None
 
 
 # ─── Request bodies (mutations) ──────────────────────────────────────────────
