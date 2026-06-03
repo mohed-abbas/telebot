@@ -1,10 +1,61 @@
-"""api/stages.py — resource router stub (Phase 08 Plan 01).
+"""api/stages.py — staged-entries read route (Phase 08 Plan 03).
 
-Owns `router` for the stages resource. Plan 01 creates this empty stub so
-api/router.py can import + include_router it ONCE. Later plans (02-05) add
-`@router` handlers here only — they never edit api/router.py.
+Composes the SAME helpers the HTML /staged page uses, VERBATIM:
+  * active   = [_enrich_stage_for_ui(s, positions) for s in get_pending_stages()]
+  * resolved = get_recently_resolved_stages(50)
+
+`_enrich_stage_for_ui` (dashboard.py:456) produces the UI display shape; this
+route reaches it through the dashboard module (accessor-safe) and adds D-05
+`_display` twins on price/timestamp fields. The enriched stage shape differs
+from the flat schemas.Stage model, so the route returns an active+resolved
+JSON payload (each list a dict-of-fields) rather than coercing to Stage.
+Session-gated via require_user.
 """
 
-from fastapi import APIRouter
+from __future__ import annotations
+
+from datetime import datetime
+
+from fastapi import APIRouter, Depends
+
+import dashboard
+import db
+from api.deps import require_user
+from api.formatting import price_display, ts_display, ts_machine
 
 router = APIRouter()
+
+
+def _enrich_active(stage: dict) -> dict:
+    """Add price `_display` twins to an _enrich_stage_for_ui() output dict."""
+    symbol = stage.get("symbol") or ""
+    out = dict(stage)
+    for key in ("band_low", "band_high", "current_price"):
+        val = stage.get(key)
+        if val is not None:
+            out[f"{key}_display"] = price_display(symbol, val)
+    return out
+
+
+def _enrich_resolved(row: dict) -> dict:
+    """Add timestamp `_display` twins to a recently-resolved stage row."""
+    out = dict(row)
+    for key in ("created_at", "filled_at"):
+        val = row.get(key)
+        if isinstance(val, datetime):
+            out[key] = ts_machine(val)
+            out[f"{key}_display"] = ts_display(val)
+    return out
+
+
+@router.get("/stages")
+async def list_stages(_user: str = Depends(require_user)) -> dict:
+    """Active + recently-resolved staged entries (wraps the /staged helpers)."""
+    positions = await dashboard._get_all_positions()
+    raw_active = await db.get_pending_stages()
+    active = [dashboard._enrich_stage_for_ui(s, positions) for s in raw_active]
+    resolved = await db.get_recently_resolved_stages(50)
+    return {
+        "active": [_enrich_active(s) for s in active],
+        "resolved": [_enrich_resolved(r) for r in resolved],
+    }
