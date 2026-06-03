@@ -155,8 +155,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 08-02-PLAN.md — Auth JSON contract: /auth/{login,logout,me,csrf}, telebot_csrf cookie, reused rate-limit, + the mandatory CSRF regression test (D-16 hard gate) (API-02, API-03)
-- [ ] 08-03-PLAN.md — Read endpoints: accounts/positions/drilldown/history/signals/stages/analytics/overview/trading-status/emergency-preview wrapping existing helpers with dual-value _display fields, + contract test (API-01, API-04)
+- [x] 08-02-PLAN.md — Auth JSON contract: /auth/{login,logout,me,csrf}, telebot_csrf cookie, reused rate-limit, + the mandatory CSRF regression test (D-16 hard gate) (API-02, API-03)
+- [x] 08-03-PLAN.md — Read endpoints: accounts/positions/drilldown/history/signals/stages/analytics/overview/trading-status/emergency-preview wrapping existing helpers with dual-value _display fields, + contract test (API-01, API-04)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -242,7 +242,7 @@ Plans:
 | 5. Foundation — UI, auth, settings data | 3/5 | In progress | - |
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
-| 8. JSON API Foundation | 1/5 | In Progress|  |
+| 8. JSON API Foundation | 3/5 | In Progress|  |
 | 9. SPA Scaffold + Auth + Design System | 0/TBD | Not started | - |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
