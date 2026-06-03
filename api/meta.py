@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-import dashboard
 from api.accounts import _enrich_account
 from api.deps import require_executor, require_user
 from api.schemas import EmergencyPreview, OverviewMeta, TradingStatus
@@ -29,6 +28,8 @@ router = APIRouter()
 @router.get("/overview", response_model=OverviewMeta)
 async def overview(_user: str = Depends(require_user)) -> OverviewMeta:
     """Top-of-overview composite (accounts + open count + paused flag)."""
+    import dashboard  # deferred: keep `import api.meta` side-effect-free
+
     executor = require_executor()
     accounts = await dashboard._get_accounts_overview()
     positions = await dashboard._get_all_positions()
@@ -50,6 +51,8 @@ async def trading_status(_user: str = Depends(require_user)) -> TradingStatus:
 @router.get("/emergency/preview", response_model=EmergencyPreview)
 async def emergency_preview(_user: str = Depends(require_user)) -> EmergencyPreview:
     """What a kill-switch would close (wraps _get_all_positions + pending orders)."""
+    import dashboard  # deferred: keep `import api.meta` side-effect-free
+
     executor = require_executor()
     positions = await dashboard._get_all_positions()
 

@@ -25,8 +25,13 @@ import secrets as _secrets
 
 from fastapi import HTTPException, Request
 
-# Accessor imports (NOT the rebindable globals — Pattern 1 / Pitfall 6).
-from dashboard import get_executor, get_settings_store
+# NOTE: the dashboard accessor imports (get_executor / get_settings_store — NOT
+# the rebindable globals, Pattern 1 / Pitfall 6) are deferred into the functions
+# below. A top-level `from dashboard import ...` makes `import api.deps`
+# side-effecting: dashboard -> config._load_settings() SystemExits at import when
+# DATABASE_URL is unset, crashing pytest collection of even DB-free unit tests
+# (every route module imports api.deps for require_user). Deferral keeps
+# `import api.deps` pure while preserving the late-rebind accessor semantics.
 
 # Double-submit CSRF cookie name. MUST be telebot_csrf — must NOT collide with
 # the legacy login-form cookie telebot_login_csrf (dashboard.py:142) — D-13.
@@ -66,6 +71,8 @@ def require_executor():
 
     Uses the dashboard accessor so init_dashboard()'s late global rebind is seen.
     """
+    from dashboard import get_executor  # deferred (see module note)
+
     executor = get_executor()
     if executor is None:
         raise HTTPException(status_code=503, detail="Trading not initialized")
@@ -74,6 +81,8 @@ def require_executor():
 
 def require_settings_store():
     """Return the live SettingsStore or 503 (mirrors dashboard.py:749-751)."""
+    from dashboard import get_settings_store  # deferred (see module note)
+
     store = get_settings_store()
     if store is None:
         raise HTTPException(status_code=503, detail="SettingsStore not initialised")

@@ -18,7 +18,6 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends
 
-import dashboard
 import db
 from api.deps import require_user
 from api.formatting import price_display, ts_display, ts_machine
@@ -51,6 +50,8 @@ def _enrich_resolved(row: dict) -> dict:
 @router.get("/stages")
 async def list_stages(_user: str = Depends(require_user)) -> dict:
     """Active + recently-resolved staged entries (wraps the /staged helpers)."""
+    import dashboard  # deferred: keep `import api.stages` side-effect-free
+
     positions = await dashboard._get_all_positions()
     raw_active = await db.get_pending_stages()
     active = [dashboard._enrich_stage_for_ui(s, positions) for s in raw_active]

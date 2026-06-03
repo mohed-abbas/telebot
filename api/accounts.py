@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-import dashboard
 from api.deps import require_user
 from api.formatting import money_display
 from api.schemas import AccountOverview
@@ -46,5 +45,7 @@ def _enrich_account(row: dict) -> AccountOverview:
 @router.get("/accounts", response_model=list[AccountOverview])
 async def list_accounts(_user: str = Depends(require_user)) -> list[AccountOverview]:
     """Per-account overview (wraps dashboard._get_accounts_overview)."""
+    import dashboard  # deferred: keep `import api.accounts` side-effect-free
+
     rows = await dashboard._get_accounts_overview()
     return [_enrich_account(r) for r in rows]

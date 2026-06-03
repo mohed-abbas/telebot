@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 
-import dashboard
 import db
 from api.deps import require_user
 from api.formatting import money_display, price_display, volume_display
@@ -44,6 +43,8 @@ def _enrich_position(row: dict) -> Position:
 @router.get("/positions", response_model=list[Position])
 async def list_positions(_user: str = Depends(require_user)) -> list[Position]:
     """All open positions across accounts (wraps dashboard._get_all_positions)."""
+    import dashboard  # deferred: keep `import api.positions` side-effect-free
+
     rows = await dashboard._get_all_positions()
     return [_enrich_position(r) for r in rows]
 
