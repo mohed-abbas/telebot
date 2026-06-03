@@ -124,6 +124,26 @@ async def store(
         )
 
 
+async def release(request_id: str) -> None:
+    """Drop an unfulfilled placeholder claim (validation failed before `store`).
+
+    `check` claims a request_id with an empty `{}` placeholder before the caller
+    validates the live position. If that validation rejects the request (404/422),
+    the placeholder must be removed so a corrected retry with the SAME request_id
+    is classified `new` again rather than replaying an empty envelope (CR-01/WR-01).
+
+    The `result = '{}'` guard makes this safe to call unconditionally: a row that
+    has already been `store`d with a real payload is NEVER deleted, so a genuine
+    replay can never be destroyed by a late/racing release.
+    """
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            """DELETE FROM idempotency_keys
+                WHERE request_id = $1 AND result = '{}'::jsonb""",
+            request_id,
+        )
+
+
 async def age_out(ttl_hours: int = 24) -> None:
     """Delete idempotency rows older than ttl_hours (D-03, ~24h age-out)."""
     async with db._pool.acquire() as conn:

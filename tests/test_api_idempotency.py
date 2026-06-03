@@ -126,17 +126,61 @@ def test_replay(api_app):
         conn.close_position = orig
 
 
+# ─── Replay after the position shrinks below the request volume (CR-01) ──────
+
+
+def test_replay_after_shrink_below_request_volume(api_app):
+    """A retry whose original close shrank the position below `close_volume`
+    still replays the cached 200 — the idempotency gate runs BEFORE the live
+    range check (CR-01 regression).
+
+    Close 0.20 of the 0.30 position (request R): the position shrinks to 0.10.
+    The 200 is "lost", so the client retries the identical {0.20, R}. The live
+    volume is now 0.10, so a range check (0 < 0.20 < 0.10) would 422 — but the
+    request_id is known, so the cached 200 MUST replay and the broker MUST NOT
+    be called a second time.
+    """
+    c = TestClient(api_app)
+    token = _login(c)
+    hdr = {"X-CSRF-Token": token}
+
+    conn = _connector(api_app)
+    calls: list[float] = []
+    orig = conn.close_position
+
+    async def _spy(ticket, volume=None):
+        calls.append(volume)
+        return await orig(ticket, volume=volume)
+
+    conn.close_position = _spy
+    try:
+        body = {"close_volume": 0.20, "request_id": "shrink-replay-1"}
+        r1 = c.post(CLOSE_PARTIAL, json=body, headers=hdr)
+        assert r1.status_code == 200, r1.text
+        first = r1.json()
+        assert first["ok"] is True
+        assert first["closed_volume"] == 0.20
+
+        # Retry: live volume is now 0.10 < 0.20, but the cached 200 must replay.
+        r2 = c.post(CLOSE_PARTIAL, json=body, headers=hdr)
+        assert r2.status_code == 200, r2.text  # NOT 422 — the gate runs first
+        assert r2.json() == first
+
+        assert len(calls) == 1, f"broker close_position called {len(calls)}x (expected 1)"
+    finally:
+        conn.close_position = orig
+
+
 # ─── Conflict (D-11): same request_id + different params -> 409 ───────────────
 
 
 def test_conflict(api_app):
     """Reusing a request_id with a DIFFERENT close_volume -> 409.
 
-    The first close (0.10) shrinks the 0.30 position to 0.20, so the second
-    request uses 0.05 — still inside (0, 0.20) so the out-of-range 422 guard
-    (which runs BEFORE the idempotency check) cannot mask the conflict. The
-    request_id matches but close_volume differs, so idempotency.check returns
-    "conflict" -> 409 (D-11).
+    The idempotency gate runs first: the first close (0.10) stores a real payload
+    under request_id "conflict-1"; the second request reuses that id with a
+    different close_volume (0.05), so idempotency.check matches the id but not the
+    params and returns "conflict" -> 409 (D-11), without re-hitting the broker.
     """
     c = TestClient(api_app)
     token = _login(c)

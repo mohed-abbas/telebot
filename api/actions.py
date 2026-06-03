@@ -171,38 +171,51 @@ async def close_partial(
     trap) with an absolute `close_volume` (D-09) and a Postgres `request_id`
     guard (D-10/D-11):
 
-      * `cv = round(close_volume, 2)` (symbol lot step); `0 < cv < pos.volume`
-        else 422 (out of range, D-10).
-      * idempotency.check(request_id, account, ticket, cv):
-          new      -> execute `close_position(ticket, volume=cv)` (absolute, D-09),
-                      store the payload, return it.
+      * idempotency.check(request_id, account, ticket, cv) runs FIRST (D-11):
           replay   -> return the cached 200; the broker is NOT called again.
+                      A still-empty placeholder ({}) means a concurrent in-flight
+                      retry -> 409 "request in progress" (never a false 200, WR-01).
           conflict -> 409 (request_id reused with different params, D-11).
+          new      -> validate `0 < cv < pos.volume` against the LIVE position;
+                      on failure release the placeholder and 404/422; on success
+                      execute `close_position(ticket, volume=cv)` (absolute, D-09),
+                      store the payload, return it.
+
+    The gate runs before the range check because a successful prior close shrinks
+    `pos.volume` (mt5_connector.py): validating first would 422 a legitimate retry
+    whose `cv >= remaining` and bypass the cached 200 entirely (CR-01).
 
     The connector already accepts an absolute volume (mt5_connector.py:742) — no
     connector edit. CSRF-guarded like every mutation.
     """
     connector = _connector_or_404(account)
-
-    positions = await connector.get_positions()
-    pos = next((p for p in positions if p.ticket == ticket), None)
-    if pos is None:
-        raise HTTPException(status_code=404, detail="Position no longer open")
-
     cv = round(body.close_volume, 2)  # symbol lot step (2dp)
-    if not (0 < cv < pos.volume):
-        raise HTTPException(status_code=422, detail="close_volume out of range")
 
-    # Idempotency gate (insert-first; closes the check-then-act race).
+    # Idempotency gate FIRST (insert-first; closes the check-then-act race). A
+    # known request_id replays/conflicts regardless of the now-shrunk live volume.
     state, cached = await idempotency.check(body.request_id, account, ticket, cv)
     if state == "replay":
+        if not cached:
+            # Claimed but not yet stored: a concurrent in-flight duplicate (WR-01).
+            raise HTTPException(status_code=409, detail="request in progress")
         return cached  # cached 200 — broker untouched (D-11)
     if state == "conflict":
         raise HTTPException(
             status_code=409, detail="request_id reused with different params"
         )
 
-    # state == "new": execute the absolute-volume close exactly once.
+    # state == "new": validate against the live position. On rejection, release the
+    # placeholder so a corrected same-request_id retry is not poisoned (CR-01/WR-01).
+    positions = await connector.get_positions()
+    pos = next((p for p in positions if p.ticket == ticket), None)
+    if pos is None:
+        await idempotency.release(body.request_id)
+        raise HTTPException(status_code=404, detail="Position no longer open")
+    if not (0 < cv < pos.volume):
+        await idempotency.release(body.request_id)
+        raise HTTPException(status_code=422, detail="close_volume out of range")
+
+    # Execute the absolute-volume close exactly once.
     result = await connector.close_position(ticket, volume=cv)
     payload = {
         "ok": result.success,
