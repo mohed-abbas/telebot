@@ -88,4 +88,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-06-01 — milestone v1.2 (React/Vite dashboard rewrite) started; v1.1 closing with Phase 7 superseded, Phase 6 carried forward.*
+*Last updated: 2026-06-03 — Phase 8 (JSON API Foundation) complete: versioned `/api/v2` JSON contract with Pydantic models, double-submit CSRF, server-side dual-value formatting, and idempotent absolute-volume partial-close (API-01–API-05 all validated); bot core byte-for-byte untouched. Next: Phase 9 (SPA scaffold + auth + design system).*
