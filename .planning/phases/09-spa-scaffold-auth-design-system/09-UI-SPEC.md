@@ -1,10 +1,11 @@
 ---
 phase: 9
 slug: spa-scaffold-auth-design-system
-status: draft
+status: approved
 shadcn_initialized: false
 preset: none
 created: 2026-06-05
+reviewed_at: 2026-06-05
 ---
 
 # Phase 9 — UI Design Contract
@@ -92,6 +93,15 @@ the **active** nav-link label, and the primary CTA label. No other weights.
 ---
 
 ## Color
+
+**Visual hierarchy / focal point (per-view):**
+- **Login view** — primary visual anchor is the centered login card (`--card` `#1a1a2e` on the
+  `#0f0f1a` field) with the "Telebot" title at Display 28px/600; the single cyan **"Log in"** CTA
+  is the only saturated element, so it is the eye's terminus.
+- **App shell** — the dominant focal point is the **sidebar `--primary` cyan wordmark + the active
+  nav indicator** (the only saturated elements in the chrome); the content area is intentionally
+  quiet (empty state or the throwaway probe). The probe widget, when present, is the single content
+  focal point but is explicitly diagnostic/secondary — it must never out-weigh the nav.
 
 Brand palette mapped to shadcn semantic roles (D-10), converted hex→oklch for Tailwind v4
 consistency. 60/30/10 split:
