@@ -563,14 +563,14 @@ app.mount("/app", StaticFiles(directory=str(BASE_DIR / "static" / "app"), html=T
 | A3 | slopcheck-level legitimacy is satisfied by official-doc prescription (slopcheck tool was unavailable) | Package Legitimacy Audit | LOW — every package is named by official shadcn docs or locked REQUIREMENTS; none are search-discovered. Residual risk is transitive-dependency supply chain, mitigable by an optional lockfile checkpoint. |
 | A4 | The nginx `/api/v2/auth/login` rate-limit block is already deployed from Phase 8 | Pitfall 6, Runtime State | MEDIUM — Phase 8 D-14 specified it but it's an nginx (deploy) artifact, not app code; the planner should add a verify-step (don't assume deployed). |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Deep-link fallback implementation shape (subclass vs route)**
+1. **Deep-link fallback implementation shape (subclass vs route)** — **RESOLVED: `StaticFiles` subclass** (overriding `get_response` to fall back to `index.html` on 404), selected in plan 09-02 Task 2 with a Wave-0 deep-link serving test.
    - What we know: `html=True` 404s on deep-links; both a custom `StaticFiles` subclass and a `@app.get("/app/{path:path}")` route work.
    - What's unclear: which interacts most cleanly with the existing mount + `/api/v2` precedence in *this* app.
    - Recommendation: Prefer the `StaticFiles` subclass (overriding `get_response` to fall back to `index.html` on 404) — it's self-contained within the `/app` mount and can't accidentally shadow API routes. Plan a browser hard-reload verification either way.
 
-2. **Exact palette hex → semantic role assignment (Claude's discretion per D-10)**
+2. **Exact palette hex → semantic role assignment (Claude's discretion per D-10)** — **RESOLVED: oklch role map specified in plan 09-01's `<interfaces>` block** (`#0f0f1a → background`, `#1a1a2e → card/popover`, `#252542 → muted/border`, derived `--foreground`/`--primary`/`--destructive`).
    - What we know: three palette values + the full shadcn role set; shadcn defaults oklch.
    - What's unclear: which value maps to `--primary`/`--ring`/`--destructive` and what derived shades (foreground, accent, border) are needed for contrast.
    - Recommendation: planner assigns `#0f0f1a → background`, `#1a1a2e → card/popover`, `#252542 → muted/border`, derives `--foreground` for WCAG contrast, picks an accent for `--primary`, and a red for `--destructive` (ready for Phase 11). Verify a rendered Card/Input/Button before building the shell.
@@ -697,9 +697,9 @@ app.mount("/app", StaticFiles(directory=str(BASE_DIR / "static" / "app"), html=T
 | Architecture | HIGH | Auth contract, probe endpoint, mount point, error envelope read from the shipped codebase. |
 | Pitfalls | HIGH | `html=True` deep-link 404 verified vs FastAPI docs + discussion; rest grounded in codebase + v1.2 PITFALLS.md. |
 
-### Open Questions
-1. Deep-link fallback shape (StaticFiles subclass vs catch-all route) — recommend the subclass; both work, plan a hard-reload verification.
-2. Exact palette hex→semantic-role assignment (D-10 discretion) — recommended mapping provided; verify a rendered Card/Input/Button.
+### Open Questions (RESOLVED)
+1. Deep-link fallback shape (StaticFiles subclass vs catch-all route) — RESOLVED: StaticFiles subclass selected in plan 09-02 Task 2 (Wave-0 deep-link serving test).
+2. Exact palette hex→semantic-role assignment (D-10 discretion) — RESOLVED: oklch role map specified in plan 09-01's `<interfaces>` block; verify a rendered Card/Input/Button.
 
 ### Ready for Planning
 Research complete. Planner can now create PLAN.md files for SPA-01..SPA-05.
