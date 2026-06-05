@@ -179,8 +179,21 @@ Plans:
   4. With an expired/cleared session, any authed view triggers a single global 401-handler redirect to the login view — no redirect loop, no repeated bounces
   5. A demonstrably wired TanStack Query background poll on a scaffold/probe view runs through ≥2 refetch cycles without clobbering an open input or modal, proving the server-state/form-state split before any real page is built
 
-**Plans**: TBD
-**Research flag**: Lock CSRF cookie/header names (Open Question 1), SPA URL strategy `/app/` vs whitelist (Open Question 2), and static-serving mechanism — uvicorn StaticFiles vs nginx alias (Open Question 3) — before scaffold coding.
+**Plans**: 4 plans (3 waves)
+Plans:
+**Wave 1**
+
+- [ ] 09-01-PLAN.md — Scaffold frontend/ (Vite 8 + React 19 + TS, base /app/, dev proxy), Tailwind v4 brand tokens (no config file), shadcn init + minimal component set + render/lockfile verify (SPA-01, SPA-02)
+- [ ] 09-02-PLAN.md — Backend serving: /app StaticFiles mount + deep-link fallback subclass, node:22-slim Dockerfile build stage, .dockerignore, Wave-0 serving test (SPA-01)
+
+**Wave 2** *(blocked on 09-01)*
+
+- [ ] 09-03-PLAN.md — Data/auth layer: http.ts fetch wrapper (CSRF echo + HttpError + same-origin), queryClient global 401 handler + inherited polling defaults, cold-start CSRF seed + LoginView (SPA-03, SPA-04)
+
+**Wave 3** *(blocked on 09-01 + 09-03)*
+
+- [ ] 09-04-PLAN.md — App shell + /app router + boot guard + throwaway polling probe proving the server-state/form-state split (SPA-04, SPA-05)
+**Research flag**: RESOLVED — OQ1 CSRF names = telebot_csrf cookie / X-CSRF-Token header (Phase 8 D-15); OQ2 URL strategy = /app/ subpath (D-01); OQ3 serving = uvicorn StaticFiles + deep-link fallback subclass (D-02).
 **UI hint**: yes
 
 ### Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)
