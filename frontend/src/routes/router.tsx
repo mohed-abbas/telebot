@@ -7,17 +7,17 @@
 //
 // Routes:
 //   /login  → <LoginView/>                       (public; CSRF-seed on mount, no boot guard)
-//   /       → <App/> (boot guard → <AppShell/>)  with an index child rendering the Overview
-//             landing — the THROWAWAY <ProbeView/> from Task 2 (Phase 10 swaps in the real page).
+//   /       → <App/> (boot guard → <AppShell/>)  with an index child that REDIRECTS to the
+//             analytics pilot (Overview is Phase 11 — OQ2). The throwaway ProbeView is removed.
 
-import { createBrowserRouter } from "react-router-dom";
+import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import App from "@/App";
 import { LoginView } from "@/auth/LoginView";
 import { AnalyticsView } from "@/routes/AnalyticsView";
 import { HistoryView } from "@/routes/HistoryView";
-import { ProbeView } from "@/routes/ProbeView";
 import { SignalsView } from "@/routes/SignalsView";
+import { StagedView } from "@/routes/StagedView";
 
 export const router = createBrowserRouter(
   [
@@ -32,12 +32,14 @@ export const router = createBrowserRouter(
       element: <App />,
       children: [
         {
+          // Index landing: redirect /app/ to the shipped analytics pilot (Overview is Phase 11 —
+          // OQ2). `replace` keeps /app/ out of the history stack so Back doesn't bounce.
           index: true,
-          element: <ProbeView />,
+          element: <Navigate to="/analytics" replace />,
         },
         {
           // PAGE-01 analytics pilot. Path written WITHOUT the /app prefix (basename adds it) →
-          // reachable at /app/analytics. Index stays ProbeView (Overview is Phase 11; OQ2).
+          // reachable at /app/analytics.
           path: "analytics",
           element: <AnalyticsView />,
         },
@@ -50,6 +52,12 @@ export const router = createBrowserRouter(
           // PAGE-03 trade history. Reachable at /app/history (basename adds the prefix).
           path: "history",
           element: <HistoryView />,
+        },
+        {
+          // PAGE-04 pending stages. Reachable at /app/stages (basename adds the prefix). The only
+          // background-polling page (D-07).
+          path: "stages",
+          element: <StagedView />,
         },
       ],
     },
