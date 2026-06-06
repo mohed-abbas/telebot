@@ -116,6 +116,10 @@ None - no external service configuration required.
 - `/api/v2/signals` and `/api/v2/history` now expose full legacy column parity (D-12) — Plans 04/05 can build the Signals and History SPA pages against the widened contract.
 - Blocker carried forward (out of scope here): the `tests/conftest.py` `api_app` pool/loop binding must be fixed before the `/api/v2` DB-touching contract tests (Phase 8 + Phase 10 signals/history/analytics/stages) can run green locally. See `deferred-items.md`.
 
+## Self-Check: PASSED
+
+All 6 created/modified files present; all 4 commits (46983d0, 517c466, 9e83df4, ba0114f) exist in git.
+
 ---
 *Phase: 10-read-only-page-migration-analytics-pilot-signals-history-sta*
 *Completed: 2026-06-06*
