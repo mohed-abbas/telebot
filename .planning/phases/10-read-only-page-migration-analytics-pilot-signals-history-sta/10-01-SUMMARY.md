@@ -105,3 +105,9 @@ None — the widening wires real `db.get_analytics_with_filters()` / `db.get_ana
 ## Threat Flags
 
 None — the widening adds response fields only. The route stays `Depends(require_user)` (session-gated, inherited Phase 8/9); no new endpoints, auth paths, or query construction were introduced (T-10-01 mitigation preserved; T-10-02 filter params remain int-coerced / asyncpg-parameterized).
+
+## Self-Check: PASSED
+
+- Files: `api/schemas.py`, `api/analytics.py`, `tests/test_analytics_contract.py`, `10-01-SUMMARY.md` — all FOUND.
+- Commits: `39d07fb`, `1c89069`, `e40b74d`, `e50489c` — all FOUND in git log.
+- Working tree clean; bot core diff empty.
