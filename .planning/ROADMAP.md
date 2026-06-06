@@ -188,7 +188,7 @@ Plans:
 
 **Wave 2** *(blocked on 09-01)*
 
-- [ ] 09-03-PLAN.md — Data/auth layer: http.ts fetch wrapper (CSRF echo + HttpError + same-origin), queryClient global 401 handler + inherited polling defaults, cold-start CSRF seed + LoginView (SPA-03, SPA-04)
+- [x] 09-03-PLAN.md — Data/auth layer: http.ts fetch wrapper (CSRF echo + HttpError + same-origin), queryClient global 401 handler + inherited polling defaults, cold-start CSRF seed + LoginView (SPA-03, SPA-04)
 
 **Wave 3** *(blocked on 09-01 + 09-03)*
 
@@ -256,7 +256,7 @@ Plans:
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
-| 9. SPA Scaffold + Auth + Design System | 2/4 | In Progress|  |
+| 9. SPA Scaffold + Auth + Design System | 3/4 | In Progress|  |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |

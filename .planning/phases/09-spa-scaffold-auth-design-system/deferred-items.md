@@ -22,3 +22,4 @@ outside the current plan's blast radius).
   layer only). Resolve by running the suite against a live PostgreSQL
   (`docker compose -f docker-compose.dev.yml up -d`), or address the DB-absent
   fixture-isolation behaviour in a dedicated test-infra task.
+- [09-03 Task 2] Pre-existing eslint react-refresh/only-export-components error in frontend/src/components/ui/button.tsx:64 (shadcn-generated buttonVariants export). Out of scope for plan 09-03 (Plan 01 artifact); does not affect build. Common to fix by exporting buttonVariants from a separate file, or disabling the rule for shadcn ui/.
