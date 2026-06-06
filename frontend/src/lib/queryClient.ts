@@ -21,14 +21,28 @@ import { HttpError } from "./http";
 
 const LOGIN_PATH = "/app/login";
 
+// WR-01: the login view's session-expired banner only renders when the URL
+// carries ?expired (or ?reason=expired). The 401 redirect MUST set that flag,
+// otherwise the banner is dead code and the user is bounced with no explanation.
+const SESSION_EXPIRED_PATH = `${LOGIN_PATH}?expired=1`;
+
 /**
  * Single global auth-error handler. On a 401, hard-navigate to the login view
  * exactly once — unless we are already on the login view (the loop-break).
+ *
+ * WR-01: redirect to `${LOGIN_PATH}?expired=1` so LoginView's session-expired
+ * banner actually renders (it reads the `expired` query flag).
+ * WR-03: use `window.location.href` to a URL that differs from the current one
+ * by its query string. Assigning to a same-origin SPA path that only differs by
+ * pathname under the same index.html is not guaranteed to reload the document in
+ * every browser; the `?expired=1` query string makes the target unambiguously
+ * different, forcing a real navigation instead of leaving App stuck on
+ * "Redirecting…" with a stale errored query that never refetches.
  */
 const onAuthError = (error: unknown): void => {
   if (error instanceof HttpError && error.status === 401) {
     if (!window.location.pathname.startsWith(LOGIN_PATH)) {
-      window.location.assign(LOGIN_PATH);
+      window.location.href = SESSION_EXPIRED_PATH;
     }
   }
 };
