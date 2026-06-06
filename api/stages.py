@@ -25,14 +25,24 @@ from api.formatting import price_display, ts_display, ts_machine
 router = APIRouter()
 
 
-def _enrich_active(stage: dict) -> dict:
-    """Add price `_display` twins to an _enrich_stage_for_ui() output dict."""
+def _enrich_active(stage: dict, raw: dict) -> dict:
+    """Add price `_display` twins + a machine `started_at` to an _enrich_stage_for_ui() dict.
+
+    `_enrich_stage_for_ui` DROPS the raw `created_at` after building its `elapsed`
+    string (dashboard.py:567-581), so the timestamp lives ONLY in `raw` — the raw
+    get_pending_stages() row. Source `started_at` from there (Pitfall 4 / D-09),
+    mirroring the ts_machine/ts_display twin shape of `_enrich_resolved`.
+    """
     symbol = stage.get("symbol") or ""
     out = dict(stage)
     for key in ("band_low", "band_high", "current_price"):
         val = stage.get(key)
         if val is not None:
             out[f"{key}_display"] = price_display(symbol, val)
+    created_at = raw.get("created_at")
+    if isinstance(created_at, datetime):
+        out["started_at"] = ts_machine(created_at)
+        out["started_at_display"] = ts_display(created_at)
     return out
 
 
@@ -57,6 +67,9 @@ async def list_stages(_user: str = Depends(require_user)) -> dict:
     active = [dashboard._enrich_stage_for_ui(s, positions) for s in raw_active]
     resolved = await db.get_recently_resolved_stages(50)
     return {
-        "active": [_enrich_active(s) for s in active],
+        "active": [
+            _enrich_active(enriched, raw)
+            for enriched, raw in zip(active, raw_active)
+        ],
         "resolved": [_enrich_resolved(r) for r in resolved],
     }
