@@ -213,8 +213,8 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 10-01-PLAN.md — Analytics API widening (D-01): by_source/extremes/avg_stages/sources + contract test (PAGE-01)
-- [ ] 10-02-PLAN.md — Stages API widening (D-09): active started_at epoch (Pitfall-4-safe) + contract test (PAGE-04)
+- [x] 10-01-PLAN.md — Analytics API widening (D-01): by_source/extremes/avg_stages/sources + contract test (PAGE-01)
+- [x] 10-02-PLAN.md — Stages API widening (D-09): active started_at epoch (Pitfall-4-safe) + contract test (PAGE-04)
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -275,6 +275,6 @@ Plans:
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
-| 10. Read-only Page Migration | 0/TBD | Not started | - |
+| 10. Read-only Page Migration | 2/6 | In Progress|  |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
