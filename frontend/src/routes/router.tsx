@@ -15,7 +15,9 @@ import { createBrowserRouter } from "react-router-dom";
 import App from "@/App";
 import { LoginView } from "@/auth/LoginView";
 import { AnalyticsView } from "@/routes/AnalyticsView";
+import { HistoryView } from "@/routes/HistoryView";
 import { ProbeView } from "@/routes/ProbeView";
+import { SignalsView } from "@/routes/SignalsView";
 
 export const router = createBrowserRouter(
   [
@@ -38,6 +40,16 @@ export const router = createBrowserRouter(
           // reachable at /app/analytics. Index stays ProbeView (Overview is Phase 11; OQ2).
           path: "analytics",
           element: <AnalyticsView />,
+        },
+        {
+          // PAGE-02 signal log. Reachable at /app/signals (basename adds the prefix).
+          path: "signals",
+          element: <SignalsView />,
+        },
+        {
+          // PAGE-03 trade history. Reachable at /app/history (basename adds the prefix).
+          path: "history",
+          element: <HistoryView />,
         },
       ],
     },
