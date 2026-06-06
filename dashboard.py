@@ -22,7 +22,9 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import Response
 
 import db
 from config import settings as app_settings
@@ -209,6 +211,26 @@ async def lifespan(app: FastAPI):
     logger.info("Dashboard ASGI lifespan: shutdown")
 
 
+# ─── Phase 09 (SPA serving, SPA-01 / D-01) ───────────────────────────────────
+# StaticFiles(html=True) serves index.html ONLY at the mount root (`/app/`). A
+# hard reload of a client route (`/app/login`, `/app/positions`) has no matching
+# file on disk → 404, NOT index.html (RESEARCH Pitfall 1 — the single
+# highest-risk item: it silently ships a dashboard that 404s on refresh).
+# SpaStaticFiles overrides get_response to fall back to index.html on a 404 so
+# client-side routing resolves. The fallback is self-contained inside the /app
+# mount and is registered AFTER app.include_router(api_router), so it can never
+# shadow /api/v2/* (router-precedence rule; Pitfall 1/4).
+class SpaStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                # Deep-link / client route: serve the SPA shell so the router boots.
+                return await super().get_response("index.html", scope)
+            raise
+
+
 app = FastAPI(title="Telebot Dashboard", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 # Phase 08 (JSON API): mount the /api/v2 router and install enveloped-error
@@ -232,6 +254,18 @@ app.add_middleware(
 )
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+# Phase 09 (SPA-01 / D-01, D-02): serve the built Vite bundle same-origin at
+# /app/ via uvicorn StaticFiles (no nginx, no prod Node). check_dir=False so the
+# app still imports before a build exists (tests / dev before `npm run build`);
+# the directory is provided by the Dockerfile spa-build COPY in production and by
+# the serving-test fixture in CI. Registered AFTER app.include_router(api_router)
+# and the /static mount, so /api/v2/* always wins route precedence (Pitfall 1/4).
+app.mount(
+    "/app",
+    SpaStaticFiles(directory=str(BASE_DIR / "static" / "app"), html=True, check_dir=False),
+    name="spa",
+)
 
 
 @app.get("/health")
