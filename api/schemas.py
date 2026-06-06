@@ -143,6 +143,36 @@ class Stage(BaseModel):
 # ─── Analytics ───────────────────────────────────────────────────────────────
 
 
+class AnalyticsBySource(BaseModel):
+    """Per-source deep-dive row (D-01 legacy parity).
+
+    `win_rate`/`profit_factor` are ratios — kept BARE (no `_display` twin, D-14).
+    Money fields (`net_pnl`/`best_trade`/`worst_trade`) carry `_display` twins.
+    """
+
+    source_name: str
+    total_trades: int
+    wins: int
+    losses: int
+    win_rate: float | None = None  # ratio → NO _display (D-14)
+    profit_factor: float | None = None  # ratio → NO _display (D-14)
+    net_pnl: float
+    net_pnl_display: str  # money → _display (money_display)
+    best_trade: float | None = None
+    best_trade_display: str | None = None
+    worst_trade: float | None = None
+    worst_trade_display: str | None = None
+
+
+class AnalyticsExtremes(BaseModel):
+    """Overall best/worst trade across the filtered window (D-01)."""
+
+    best_trade: float | None = None
+    best_trade_display: str | None = None
+    worst_trade: float | None = None
+    worst_trade_display: str | None = None
+
+
 class Analytics(BaseModel):
     total_trades: int
     wins: int
@@ -155,6 +185,10 @@ class Analytics(BaseModel):
     gross_profit_display: str
     gross_loss: float
     gross_loss_display: str
+    by_source: list[AnalyticsBySource] = []
+    extremes: AnalyticsExtremes
+    avg_stages: float | None = None  # non-null only when a source filter is active
+    sources: list[str] = []
 
 
 # ─── Overview / status meta ──────────────────────────────────────────────────
