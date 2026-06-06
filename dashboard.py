@@ -226,6 +226,16 @@ class SpaStaticFiles(StaticFiles):
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code == 404:
+                # CR-01: a missing built ASSET must stay a 404 — never mask it as the
+                # HTML shell. A request for /app/assets/index-OLDHASH.js (stale HTML,
+                # cache skew, typo'd import) that returned 200 text/html would make the
+                # browser try to execute index.html as a module → silent white screen.
+                # Only NON-asset, NON-file paths (client deep-link ROUTES like
+                # /app/positions) fall back to the shell so the router boots
+                # (RESEARCH Pitfall 1). Predicate: under the Vite assetsDir
+                # ("assets/") OR any path carrying a file extension ⇒ keep the 404.
+                if path.startswith("assets/") or Path(path).suffix:
+                    raise
                 # Deep-link / client route: serve the SPA shell so the router boots.
                 return await super().get_response("index.html", scope)
             raise

@@ -104,3 +104,16 @@ def test_api_not_shadowed_by_spa_mount(client):
     # Either authenticated 200 with the status contract, or 401 JSON envelope —
     # both are JSON, both prove the API route won precedence over the /app mount.
     assert r.status_code in (200, 401)
+
+
+def test_missing_asset_returns_404_not_shell(client):
+    """GET /app/assets/missing-abc.js (no file) -> 404, NOT 200 text/html shell.
+
+    CR-01 guard: the deep-link fallback must serve index.html for client ROUTES
+    only. A missing built ASSET (stale hash, cache skew, typo'd import) must keep
+    its 404 — masking it as the HTML shell makes the browser try to execute
+    index.html as a module and white-screens with a 200 in the network tab.
+    """
+    r = client.get("/app/assets/missing-abc.js")
+    assert r.status_code == 404, r.text
+    assert 'id="root"' not in r.text
