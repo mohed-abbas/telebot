@@ -2,9 +2,9 @@
 //
 // Mirrors templates/base.html EXACT labels so the parallel-run HTMX↔SPA stays legible:
 //   Wordmark "Telebot" (text-primary cyan) + "Trading Dashboard" subtitle (muted-foreground)
-//   Live link:        "Overview"  (the landing route; hosts the throwaway probe)
-//   Disabled-visible: Positions, Trade History, Signal Log, Analytics, Pending Stages, Settings
-//                     (muted-foreground, non-interactive, NOT hidden — Phase 10 enables in place)
+//   Live links:       "Overview", "Trade History", "Signal Log", "Analytics" (Phase 10 read-only pages)
+//   Disabled-visible: Positions, Pending Stages, Settings
+//                     (muted-foreground, non-interactive, NOT hidden — enabled in place as pages ship)
 //   Footer:           "Sign out" → POST /api/v2/auth/logout (http wrapper adds X-CSRF-Token; T-09-12)
 //
 // UI-SPEC §Color (focal point): the cyan --primary accent is RESERVED for the wordmark, the ACTIVE
@@ -18,16 +18,16 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/http";
 
 // Nav entries in legacy order. A `to` ⇒ a live <NavLink>; otherwise a disabled-visible <span>.
-// Phase 10 enables the read-only pages in place: Analytics goes live here (this plan, PAGE-01);
-// Plans 05/06 flip Trade History / Signal Log / Pending Stages in their waves. Live-money pages
-// (Positions, Settings) land in Phase 11. The literal `to="/analytics"` below is the active link.
+// Phase 10 enables the read-only pages in place: Analytics (Plan 04), Trade History + Signal Log
+// (Plan 05, this wave). Pending Stages flips in Plan 06. Live-money pages (Positions, Settings)
+// land in Phase 11. Each `to:` below renders as an active NavLink via the generic branch.
 type NavEntry = { label: string; to?: string; end?: boolean };
 
 const NAV_ENTRIES: readonly NavEntry[] = [
   { label: "Overview", to: "/", end: true },
   { label: "Positions" },
-  { label: "Trade History" },
-  { label: "Signal Log" },
+  { label: "Trade History", to: "/history" },
+  { label: "Signal Log", to: "/signals" },
   { label: "Analytics", to: "/analytics" },
   { label: "Pending Stages" },
   { label: "Settings" },
