@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-06T08:16:21.233Z"
+last_updated: "2026-06-06T08:28:33.933Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 26
-  completed_plans: 24
-  percent: 50
+  completed_plans: 25
+  percent: 96
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-06-01)
 ## Current Position
 
 Phase: 09 (spa-scaffold-auth-design-system) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-06-06
 
@@ -101,6 +101,7 @@ Last activity: 2026-06-06
 | Phase 07 P07 | 2min | 2 tasks | 3 files |
 | Phase 08 P01 | 4min | - tasks | - files |
 | Phase 09 P01 | 15min | 3 tasks | 17 files |
+| Phase 09 P02 | 8min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,7 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 08-01: double-submit CSRF (telebot_csrf vs X-CSRF-Token, compare_digest) replaces HX-Request heuristic for /api/v2 (D-15)
 - [Phase 09-01]: Greenfield frontend/ Vite 8 + React 19 + TS SPA scaffolded; base:/app/ (D-01), Tailwind v4 via @tailwindcss/vite with NO tailwind.config.js (D-10), dark brand palette mapped to shadcn @theme semantic roles (D-10), minimal 5-component set button/input/label/card/sonner (D-11), dev /api proxy to 8090 same-origin cookies (D-12)
 - [Phase 09-01]: Stack adjustments — rolldown binding kept out of package.json (transitive), dropped TS baseUrl, rejected shadcn nova extras (tw-animate-css/next-themes/webfonts), unified radix-ui umbrella package, sonner Toaster theme="dark"
+- [Phase 09-02]: SPA served at /app via uvicorn StaticFiles with SpaStaticFiles 404->index.html deep-link fallback (D-01, Pitfall 1); mount registered AFTER api_router so /api/v2 is never shadowed (D-02); Dockerfile node:22-slim AS spa-build stage builds the bundle, runtime stays python:3.12-slim with no prod Node, css-build coexists (D-03)
 
 ### Pending Todos
 

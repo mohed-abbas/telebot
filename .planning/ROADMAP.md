@@ -184,7 +184,7 @@ Plans:
 **Wave 1**
 
 - [x] 09-01-PLAN.md — Scaffold frontend/ (Vite 8 + React 19 + TS, base /app/, dev proxy), Tailwind v4 brand tokens (no config file), shadcn init + minimal component set + render/lockfile verify (SPA-01, SPA-02)
-- [ ] 09-02-PLAN.md — Backend serving: /app StaticFiles mount + deep-link fallback subclass, node:22-slim Dockerfile build stage, .dockerignore, Wave-0 serving test (SPA-01)
+- [x] 09-02-PLAN.md — Backend serving: /app StaticFiles mount + deep-link fallback subclass, node:22-slim Dockerfile build stage, .dockerignore, Wave-0 serving test (SPA-01)
 
 **Wave 2** *(blocked on 09-01)*
 
@@ -256,7 +256,7 @@ Plans:
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
-| 9. SPA Scaffold + Auth + Design System | 1/4 | In Progress|  |
+| 9. SPA Scaffold + Auth + Design System | 2/4 | In Progress|  |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
