@@ -33,7 +33,19 @@ COPY *.py ./
 COPY scripts/build_css.sh ./scripts/
 RUN bash scripts/build_css.sh
 
-# ── Stage 2: runtime ────────────────────────────────────────────────
+# ── Stage 2: SPA build (Vite/React, Phase 09 SPA-01 / D-03) ─────────
+# Node lives ONLY in this build stage — the runtime image stays python:3.12-slim
+# with no Node (minimize-deps). Coexists with css-build until the HTMX dashboard
+# is decommissioned in Phase 12. Vite emits /spa/dist with base:/app/.
+FROM node:22-slim AS spa-build
+WORKDIR /spa
+# Copy manifests first so `npm ci` layer caches on lockfile changes only.
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ── Stage 3: runtime ────────────────────────────────────────────────
 FROM python:3.12-slim
 WORKDIR /app
 
@@ -49,6 +61,9 @@ COPY scripts/ ./scripts/
 # Overlay the hashed CSS + manifest from the build stage
 COPY --from=css-build /build/static/css/app.*.css ./static/css/
 COPY --from=css-build /build/static/css/manifest.json ./static/css/
+
+# Overlay the built SPA bundle (served at /app by uvicorn StaticFiles — SPA-01)
+COPY --from=spa-build /spa/dist/ ./static/app/
 
 RUN mkdir -p /app/data
 EXPOSE 8080

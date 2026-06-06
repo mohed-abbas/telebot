@@ -11,3 +11,7 @@ mt5-bridge/
 docker-compose*.yml
 requirements-dev.txt
 .planning/
+# SPA build artifacts — the spa-build stage regenerates these via npm ci + build.
+# Keep frontend/ itself in context (the source is needed); exclude only outputs.
+frontend/node_modules
+frontend/dist
