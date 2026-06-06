@@ -4,7 +4,13 @@
 # CLI silently dropped them (UAT Gap #1). Asset name tailwindcss-linux-x64 is
 # identical across v3/v4 releases.
 FROM debian:bookworm-slim AS css-build
-ARG TAILWIND_VERSION=v4.2.2
+# WR-06: keep this pinned to the SAME minor the SPA build resolves via
+# @tailwindcss/vite (frontend/package.json: tailwindcss ^4.3.0 → 4.3.0). The HTMX
+# stylesheet (this standalone CLI) and the SPA stylesheet (Vite plugin) both render
+# the shared brand palette during the parallel-run window; a version skew (4.2.x vs
+# 4.3.x) can drift @theme/@custom-variant semantics and make the two render the
+# palette differently. Bump both together if the npm range moves.
+ARG TAILWIND_VERSION=v4.3.0
 # TARGETARCH is auto-populated by BuildKit (amd64 / arm64). v4's standalone CLI
 # ships native binaries for both — pick the matching one, otherwise the
 # linux-x64 binary trips Rosetta/qemu emulation on Apple Silicon dev machines
