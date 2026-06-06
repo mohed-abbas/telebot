@@ -118,6 +118,28 @@ already-shipped Phase-8 read routes, not new mutation surface.
   Phase-9 logout-failure toast, which is an action-feedback case.) `401` is still
   handled by the inherited global `onAuthError` redirect (D-06 of Phase 9) — unchanged.
 
+### Parity scope (resolved post-research — 2026-06-06)
+- **D-12:** **Signals + History read schemas need parity widening too** (read-only,
+  same category as D-01/D-09). Research found the shipped Phase-8 schemas silently drop
+  fields the legacy templates render: `Signal` drops `entry_zone_low/high`, `sl`, `tp`,
+  `details`, `source_name`; `HistoryTrade` drops `sl`, `tp`, `status`, `source_name`
+  (the underlying `db` queries already return all of these). **Widen both read schemas +
+  routes to full legacy parity** so PAGE-02 (signals) and PAGE-03 (history) actually
+  match their legacy templates. Operator-confirmed: full legacy parity, not shipped-field
+  subset. Follow the Phase-8 dual-value `*_display` rule for money/price fields.
+- **D-13:** **Staged page renders the CORRECT values, not the legacy blank-cell bug.**
+  Research found a pre-existing legacy bug: `partials/pending_stages.html` references
+  `filled_count`/`total_stages`/`distance_to_band` while the enriched dict emits
+  `filled`/`total`/`distance_str`, so the live legacy staged page renders BLANK cells
+  there. The SPA must surface the real `filled`/`total`/`distance` values. For SC#5
+  parity verification, this legacy blank-cell bug is a **documented parity exception**
+  (SPA is correct, legacy is buggy) — do NOT replicate the blanks. Operator-confirmed.
+- **D-14:** **`win_rate` / `profit_factor` stay raw numeric** (no `_display` twin),
+  client-formatted as ratios/percentages — mirroring the already-shipped summary route.
+  D-01's dual-value `*_display` rule applies to **money/price** fields (gross P/L,
+  net_pnl, best/worst extremes), not these ratio metrics. (Researcher recommendation A3,
+  accepted as the discretion default.)
+
 ### Claude's Discretion (planner/researcher decides)
 - Exact column sets / ordering for each table (signals, history, resolved-stages,
   by-source) — match the legacy templates as the parity reference.
