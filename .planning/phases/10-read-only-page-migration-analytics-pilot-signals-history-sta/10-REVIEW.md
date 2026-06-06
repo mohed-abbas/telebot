@@ -27,8 +27,17 @@ findings:
   warning: 6
   info: 4
   total: 11
-status: issues_found
+status: resolved
+resolved_commit: 6838123
 ---
+
+> **RESOLUTION (commit `6838123`):** All 11 findings fixed and verified — backend
+> `py_compile` clean, frontend `tsc -b && vite build` exit 0, contract suite
+> 6 passed / 7 skipped / 0 errors. CR-01 regression-guarded in
+> `test_history_contract.py`; WR-04 behavior change reflected in
+> `test_stages_contract.py`. WR-01 was fixed in `db.get_analytics_with_filters`
+> (read-only analytics aggregator only — the trading path stayed byte-for-byte
+> untouched).
 
 # Phase 10: Code Review Report
 
