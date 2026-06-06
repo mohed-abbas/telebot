@@ -42,6 +42,8 @@ def _enrich_trade(row: dict) -> HistoryTrade:
     volume = row.get("lot_size") or 0.0
     profit = row.get("pnl") or 0.0
     opened_at, opened_at_display = _ts_pair(row.get("timestamp"))
+    sl = row.get("sl")
+    tp = row.get("tp")
     return HistoryTrade(
         account=row.get("account_name") or "",
         ticket=row.get("ticket") or 0,
@@ -59,6 +61,13 @@ def _enrich_trade(row: dict) -> HistoryTrade:
         opened_at_display=opened_at_display,
         closed_at=None,
         closed_at_display=None,
+        # D-12 widened legacy parity (price fields get _display twins).
+        sl=sl,
+        sl_display=price_display(symbol, sl) if sl is not None else None,
+        tp=tp,
+        tp_display=price_display(symbol, tp) if tp is not None else None,
+        status=row.get("status"),  # bare
+        source_name=row.get("source_name") or "Unknown",  # bare
     )
 
 

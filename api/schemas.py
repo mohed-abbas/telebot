@@ -97,6 +97,13 @@ class HistoryTrade(BaseModel):
     opened_at_display: str | None = None  # ts_display ("... UTC")
     closed_at: str | None = None
     closed_at_display: str | None = None
+    # D-12 full legacy column parity (history_table.html SL/TP/Status/Source).
+    sl: float | None = None
+    sl_display: str | None = None
+    tp: float | None = None
+    tp_display: str | None = None
+    status: str | None = None  # bare string (t.status)
+    source_name: str | None = None  # bare string (COALESCE(s.source_name,'Unknown'))
 
 
 class FilterOptions(BaseModel):
@@ -119,6 +126,17 @@ class Signal(BaseModel):
     action_taken: str | None = None
     received_at: str | None = None  # ts_machine
     received_at_display: str | None = None  # ts_display
+    # D-12 full legacy column parity (signals.html Zone/SL/TP/Details).
+    entry_zone_low: float | None = None
+    entry_zone_low_display: str | None = None
+    entry_zone_high: float | None = None
+    entry_zone_high_display: str | None = None
+    sl: float | None = None
+    sl_display: str | None = None
+    tp: float | None = None
+    tp_display: str | None = None
+    details: str | None = None  # bare string (NOT _display)
+    source_name: str | None = None  # bare string
 
 
 # ─── Stages ──────────────────────────────────────────────────────────────────
