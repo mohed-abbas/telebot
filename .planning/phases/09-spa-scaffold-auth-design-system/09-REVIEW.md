@@ -36,7 +36,8 @@ findings:
   warning: 6
   info: 4
   total: 11
-status: issues_found
+status: resolved
+resolution: "Critical + all 6 warnings fixed (commits ee666d7, 9b6678e, 0b4d67b, 9368c03, 4bf487f); 4 Info findings deferred."
 ---
 
 # Phase 9: Code Review Report
@@ -44,7 +45,21 @@ status: issues_found
 **Reviewed:** 2026-06-06
 **Depth:** standard
 **Files Reviewed:** 26 (no structural-findings substrate provided)
-**Status:** issues_found
+**Status:** resolved — CR-01 + WR-01..WR-06 fixed via `/gsd:code-review 9 --fix`; Info findings deferred
+
+## Resolution (2026-06-06)
+
+All Critical + Warning findings fixed and committed atomically; frontend build + Phase 9 serving tests pass (incl. new `test_missing_asset_returns_404_not_shell` locking CR-01):
+
+| Finding | Commit |
+|---------|--------|
+| CR-01 (SPA asset 404 fallback) | `ee666d7` |
+| WR-01 + WR-03 (401 expired flag + forced reload) | `9b6678e` |
+| WR-02 (logout only on confirmed clear) | `0b4d67b` |
+| WR-05 (eslint flat config) | `9368c03` |
+| WR-06 (Dockerfile Tailwind pin → v4.3.0) | `4bf487f` |
+
+Info findings (IN-01..IN-04) deferred — not in `--fix` scope.
 
 ## Summary
 
