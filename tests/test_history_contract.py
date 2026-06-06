@@ -11,21 +11,34 @@ round-trip:
     source values; GET /history?account=&symbol= returns only rows matching ALL
     supplied filters (D-11 AND logic, parameterized asyncpg `$n` — T-10-05).
 
-Reuses the api_app fixture (conftest) + the form-login round-trip. Tolerates an
-empty trades table (TRUNCATE'd by db fixtures): shape + AND assertions run only
-when rows / filter-options exist.
+Tolerates an empty trades table (TRUNCATE'd by db fixtures): shape + AND assertions
+run only when rows / filter-options exist.
+
+Harness mirrors tests/test_analytics_contract.py (the proven single-loop pattern for
+DB-backed /api/v2): `pytest.mark.asyncio(loop_scope="session")` + httpx ASGITransport
+AsyncClient + the session-scoped `db_pool` fixture, so the asyncpg pool and the request
+handler share ONE event loop. This avoids the TestClient blocking-portal loop split
+that raises "another operation is in progress" / "attached to a different loop" for
+pool-touching routes. Auth is seeded by overriding the `require_user` dependency (the
+route is read-only; the 401-without-session contract is covered in
+tests/test_api_contract.py). Skips cleanly when dev Postgres is absent.
 """
 
 from __future__ import annotations
 
-import re
+import importlib
+import os
+import sys
 
 import pytest
-from fastapi.testclient import TestClient
+import pytest_asyncio
+from argon2 import PasswordHasher
+from httpx import ASGITransport, AsyncClient
 
 from api.formatting import price_display
+from tests.conftest import _make_dryrun_executor
 
-KNOWN_PASSWORD = "correct-horse-battery-staple"
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 # Price fields carry a server-formatted `_display` twin.
 PRICE_FIELDS = ("sl", "tp")
@@ -33,32 +46,50 @@ PRICE_FIELDS = ("sl", "tp")
 BARE_STRING_FIELDS = ("status", "source_name")
 
 
-def _login(client: TestClient) -> None:
-    """Drive the form-login route to seed a real session cookie on `client`."""
-    r = client.get("/login")
-    assert r.status_code == 200, r.status_code
-    m = re.search(r'name="csrf_token"\s+value="([^"]+)"', r.text)
-    assert m, "csrf_token missing from /login form"
-    r = client.post(
-        "/login",
-        data={"password": KNOWN_PASSWORD, "csrf_token": m.group(1), "next_path": "/overview"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303, r.status_code
-    assert "telebot_session" in client.cookies
+@pytest.fixture(scope="module")
+def history_app():
+    """Import the dashboard app with a known argon2 hash + a DryRun executor wired."""
+    env = {
+        "TG_API_ID": "1", "TG_API_HASH": "x", "TG_SESSION": "x", "TG_CHAT_IDS": "-1",
+        "DISCORD_WEBHOOK_URL": "https://example", "TIMEZONE": "UTC",
+        "DATABASE_URL": os.environ.get(
+            "TEST_DATABASE_URL",
+            "postgresql://telebot:telebot_dev@localhost:5433/telebot",
+        ),
+        "DASHBOARD_PASS_HASH": PasswordHasher().hash("contract-test-pass"),
+        "SESSION_SECRET": "C" * 48,
+        "SESSION_COOKIE_SECURE": "false",
+    }
+    for key in ("DASHBOARD_USER", "DASHBOARD_PASS"):
+        os.environ.pop(key, None)
+    os.environ.update(env)
+    for mod in ("config", "dashboard"):
+        sys.modules.pop(mod, None)
+    dashboard = importlib.import_module("dashboard")
+    return dashboard
 
 
-@pytest.fixture
-def session_client(api_app):
-    """A TestClient carrying a real logged-in session (form-login round-trip)."""
-    client = TestClient(api_app)
-    _login(client)
-    return client
+@pytest_asyncio.fixture
+async def client(history_app, db_pool):
+    """An httpx AsyncClient with require_user overridden, sharing the session loop."""
+    from api.deps import require_user
+
+    dashboard = history_app
+    dashboard.init_dashboard(_make_dryrun_executor(), notifier=None, settings=None)
+    dashboard.app.dependency_overrides[require_user] = lambda: "test-operator"
+    transport = ASGITransport(app=dashboard.app)
+    try:
+        async with AsyncClient(
+            transport=transport, base_url="http://testserver", follow_redirects=False
+        ) as c:
+            yield c
+    finally:
+        dashboard.app.dependency_overrides.pop(require_user, None)
 
 
-def test_history_widened_columns(session_client):
+async def test_history_widened_columns(client):
     """GET /api/v2/history exposes D-12 widened columns with correct twin discipline."""
-    r = session_client.get("/api/v2/history")
+    r = await client.get("/api/v2/history")
     assert r.status_code == 200, f"{r.status_code}: {r.text[:200]}"
     body = r.json()
     assert isinstance(body, list), "history must be a JSON list"
@@ -79,9 +110,9 @@ def test_history_widened_columns(session_client):
         assert row["source_name"] is None or isinstance(row["source_name"], str)
 
 
-def test_history_price_display_matches_formatter(session_client):
+async def test_history_price_display_matches_formatter(client):
     """A sampled non-null sl/tp row formats its `_display` via price_display(symbol, v)."""
-    body = session_client.get("/api/v2/history").json()
+    body = (await client.get("/api/v2/history")).json()
     assert isinstance(body, list)
 
     sampled = False
@@ -96,9 +127,9 @@ def test_history_price_display_matches_formatter(session_client):
         pytest.skip("no non-null sl/tp row to sample (empty/None-price trades table)")
 
 
-def test_history_five_param_filter_round_trip(session_client):
+async def test_history_five_param_filter_round_trip(client):
     """account+symbol filters round-trip with AND logic over returned rows (D-11)."""
-    opts = session_client.get("/api/v2/history/filter-options").json()
+    opts = (await client.get("/api/v2/history/filter-options")).json()
     assert isinstance(opts, dict)
     for key in ("accounts", "symbols"):
         assert key in opts, f"filter-options missing {key}"
@@ -107,7 +138,7 @@ def test_history_five_param_filter_round_trip(session_client):
     symbols = opts.get("symbols") or []
     if not accounts or not symbols:
         # Empty DB: prove the unfiltered + a benign multi-param call still 200/list.
-        r = session_client.get(
+        r = await client.get(
             "/api/v2/history",
             params={
                 "account": "nope",
@@ -122,7 +153,7 @@ def test_history_five_param_filter_round_trip(session_client):
 
     a = accounts[0]
     sym = symbols[0]
-    r = session_client.get("/api/v2/history", params={"account": a, "symbol": sym})
+    r = await client.get("/api/v2/history", params={"account": a, "symbol": sym})
     assert r.status_code == 200, r.text[:200]
     rows = r.json()
     assert isinstance(rows, list)

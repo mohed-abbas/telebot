@@ -12,7 +12,7 @@ Session-gated via require_user.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends
 
@@ -76,11 +76,18 @@ async def list_history(
     account: str = "",
     source: str = "",
     symbol: str = "",
-    from_date: str = "",
-    to_date: str = "",
+    from_date: date | None = None,
+    to_date: date | None = None,
     _user: str = Depends(require_user),
 ) -> list[HistoryTrade]:
-    """Filtered trade history (wraps db.get_filtered_trades)."""
+    """Filtered trade history (wraps db.get_filtered_trades).
+
+    `from_date`/`to_date` are typed as `date` so FastAPI parses the ISO query
+    strings into real `datetime.date` objects — `db.get_filtered_trades` binds
+    them to a `::date` param, which asyncpg rejects for bare strings
+    (`'str' object has no attribute 'toordinal'`). Falsy (`None`) values skip
+    the filter, preserving the unfiltered default. `db.py` stays untouched.
+    """
     rows = await db.get_filtered_trades(
         account=account,
         source=source,
