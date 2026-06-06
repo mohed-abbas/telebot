@@ -10,6 +10,7 @@ __pycache__/
 DISCORD_IMPLEMENTATION_PLAN.md
 accounts.json
 data/
+!frontend/src/components/data/
 *.db
 
 # Tailwind build outputs (generated at Docker build)

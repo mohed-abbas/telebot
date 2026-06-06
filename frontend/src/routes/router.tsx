@@ -14,6 +14,7 @@ import { createBrowserRouter } from "react-router-dom";
 
 import App from "@/App";
 import { LoginView } from "@/auth/LoginView";
+import { AnalyticsView } from "@/routes/AnalyticsView";
 import { ProbeView } from "@/routes/ProbeView";
 
 export const router = createBrowserRouter(
@@ -31,6 +32,12 @@ export const router = createBrowserRouter(
         {
           index: true,
           element: <ProbeView />,
+        },
+        {
+          // PAGE-01 analytics pilot. Path written WITHOUT the /app prefix (basename adds it) →
+          // reachable at /app/analytics. Index stays ProbeView (Overview is Phase 11; OQ2).
+          path: "analytics",
+          element: <AnalyticsView />,
         },
       ],
     },

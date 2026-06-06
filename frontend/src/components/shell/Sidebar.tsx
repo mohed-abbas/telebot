@@ -17,15 +17,35 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/http";
 
-/** Future pages, enabled in place by Phase 10. Rendered disabled-visible (not hidden). */
-const FUTURE_LINKS = [
-  "Positions",
-  "Trade History",
-  "Signal Log",
-  "Analytics",
-  "Pending Stages",
-  "Settings",
+// Nav entries in legacy order. A `to` ⇒ a live <NavLink>; otherwise a disabled-visible <span>.
+// Phase 10 enables the read-only pages in place: Analytics goes live here (this plan, PAGE-01);
+// Plans 05/06 flip Trade History / Signal Log / Pending Stages in their waves. Live-money pages
+// (Positions, Settings) land in Phase 11. The literal `to="/analytics"` below is the active link.
+type NavEntry = { label: string; to?: string; end?: boolean };
+
+const NAV_ENTRIES: readonly NavEntry[] = [
+  { label: "Overview", to: "/", end: true },
+  { label: "Positions" },
+  { label: "Trade History" },
+  { label: "Signal Log" },
+  { label: "Analytics", to: "/analytics" },
+  { label: "Pending Stages" },
+  { label: "Settings" },
 ] as const;
+
+const navRowBase =
+  "flex min-h-10 items-center rounded-md px-3 text-sm transition-colors";
+
+// Active-link className builder, shared by the data-driven map below. The cyan --primary accent
+// is RESERVED for the active indicator + focus ring (UI-SPEC §Color).
+const liveLinkClass = ({ isActive }: { isActive: boolean }) =>
+  cn(
+    navRowBase,
+    "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+    isActive
+      ? "bg-sidebar-accent font-medium text-primary"
+      : "text-sidebar-foreground hover:bg-sidebar-accent",
+  );
 
 async function signOut() {
   // WR-02: the httpOnly session cookie is cleared SERVER-SIDE by the logout route.
@@ -46,9 +66,6 @@ async function signOut() {
   window.location.assign("/app/login");
 }
 
-const navRowBase =
-  "flex min-h-10 items-center rounded-md px-3 text-sm transition-colors";
-
 export function Sidebar() {
   return (
     <nav
@@ -64,39 +81,43 @@ export function Sidebar() {
       {/* Nav skeleton */}
       <div className="flex-1 overflow-y-auto py-2">
         <ul className="flex flex-col gap-0.5 px-2">
-          {/* Live: Overview. Active indicator = cyan accent (reserved). */}
-          <li>
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) =>
-                cn(
-                  navRowBase,
-                  "outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                  isActive
-                    ? "bg-sidebar-accent font-medium text-primary"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent",
-                )
-              }
-            >
-              Overview
-            </NavLink>
-          </li>
-
-          {/* Disabled-visible future links — muted-foreground, non-interactive, NOT hidden. */}
-          {FUTURE_LINKS.map((label) => (
-            <li key={label}>
-              <span
-                aria-disabled="true"
-                className={cn(
-                  navRowBase,
-                  "cursor-not-allowed text-muted-foreground select-none",
-                )}
-              >
-                {label}
-              </span>
-            </li>
-          ))}
+          {NAV_ENTRIES.map((entry) => {
+            // Analytics is the page this plan (PAGE-01) makes live — render the explicit
+            // active NavLink to="/analytics" copied from the Overview analog.
+            if (entry.label === "Analytics") {
+              return (
+                <li key={entry.label}>
+                  <NavLink to="/analytics" className={liveLinkClass}>
+                    {entry.label}
+                  </NavLink>
+                </li>
+              );
+            }
+            // Any other entry with a `to` is also a live NavLink (e.g. Overview).
+            if (entry.to) {
+              return (
+                <li key={entry.label}>
+                  <NavLink to={entry.to} end={entry.end} className={liveLinkClass}>
+                    {entry.label}
+                  </NavLink>
+                </li>
+              );
+            }
+            // Disabled-visible future link — muted-foreground, non-interactive, NOT hidden.
+            return (
+              <li key={entry.label}>
+                <span
+                  aria-disabled="true"
+                  className={cn(
+                    navRowBase,
+                    "cursor-not-allowed text-muted-foreground select-none",
+                  )}
+                >
+                  {entry.label}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       </div>
 
