@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: verifying
-last_updated: "2026-06-06T09:02:14.237Z"
+status: ready_to_plan
+last_updated: 2026-06-06T09:31:00.542Z
 last_activity: 2026-06-06
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 26
-  completed_plans: 27
+  completed_plans: 40
   percent: 63
+stopped_at: Phase 09 complete (4/4) — ready to discuss Phase 10
 ---
 
 # Project State
@@ -20,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 09 — spa-scaffold-auth-design-system
+**Current focus:** Phase 10 — read only page migration (analytics pilot → signals → history → staged)
 
 ## Current Position
 
-Phase: 09 (spa-scaffold-auth-design-system) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
+Phase: 10
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-06-06
 
 ## v1.2 Milestone Map
@@ -69,7 +70,7 @@ Last activity: 2026-06-06
 
 **Velocity:**
 
-- Total plans completed: 5 (v1.2)
+- Total plans completed: 9 (v1.2)
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -78,6 +79,7 @@ Last activity: 2026-06-06
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 08 | 5 | - | - |
+| 09 | 4 | - | - |
 
 **Recent Trend (v1.0/v1.1 carryover):**
 
