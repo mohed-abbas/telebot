@@ -4,7 +4,8 @@
 //   - Sidebar fixed 224px (w-56). On md+ it is permanently visible (fixed left); the main content
 //     is offset md:ml-56. Below md the sidebar is a drawer, hidden by default and toggled open by
 //     the top-bar button (mirrors templates/base.html's mobile header behavior).
-//   - <Outlet/> renders the routed content (the Overview/ProbeView landing, real pages in Phase 10).
+//   - <Outlet/> renders the routed content (the four Phase-10 read-only pages; /app/ redirects to
+//     the analytics pilot until the Phase-11 Overview lands).
 //
 // This is rendered ONLY after App.tsx's boot guard resolves 200 (T-09-10): the shell never paints
 // before auth is confirmed.

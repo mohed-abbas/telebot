@@ -19,8 +19,9 @@ import { api } from "@/lib/http";
 
 // Nav entries in legacy order. A `to` ⇒ a live <NavLink>; otherwise a disabled-visible <span>.
 // Phase 10 enables the read-only pages in place: Analytics (Plan 04), Trade History + Signal Log
-// (Plan 05, this wave). Pending Stages flips in Plan 06. Live-money pages (Positions, Settings)
-// land in Phase 11. Each `to:` below renders as an active NavLink via the generic branch.
+// (Plan 05), Pending Stages (Plan 06, this wave). Live-money pages (Positions, Settings) land in
+// Phase 11 and stay disabled-visible spans. Each `to:` below renders as an active NavLink via the
+// generic branch.
 type NavEntry = { label: string; to?: string; end?: boolean };
 
 const NAV_ENTRIES: readonly NavEntry[] = [
@@ -29,7 +30,7 @@ const NAV_ENTRIES: readonly NavEntry[] = [
   { label: "Trade History", to: "/history" },
   { label: "Signal Log", to: "/signals" },
   { label: "Analytics", to: "/analytics" },
-  { label: "Pending Stages" },
+  { label: "Pending Stages", to: "/stages" },
   { label: "Settings" },
 ] as const;
 
