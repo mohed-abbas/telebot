@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: ready_to_plan
-last_updated: 2026-06-06T09:31:00.542Z
+status: planning
+last_updated: "2026-06-06T10:25:05.389Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 26
-  completed_plans: 40
+  completed_plans: 27
   percent: 63
-stopped_at: Phase 09 complete (4/4) — ready to discuss Phase 10
 ---
 
 # Project State
@@ -157,5 +156,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-06-06 — Completed 09-04-PLAN.md (app shell + /app router + boot guard + throwaway SC#5 probe). Manual phase gate APPROVED live (all 5 checks passed). Plan 4 of 4 done — Phase 9 complete.
-Resume file: None
+Resume file: .planning/phases/10-read-only-page-migration-analytics-pilot-signals-history-sta/10-CONTEXT.md
 Next action: run phase verification for Phase 09, then plan Phase 10 (read-only page migration).
