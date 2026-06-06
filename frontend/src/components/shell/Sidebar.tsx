@@ -12,6 +12,7 @@
 // Nav rows are min-h-10 (40px) tap targets (UI-SPEC §Spacing).
 
 import { NavLink } from "react-router-dom";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/http";
@@ -27,14 +28,22 @@ const FUTURE_LINKS = [
 ] as const;
 
 async function signOut() {
+  // WR-02: the httpOnly session cookie is cleared SERVER-SIDE by the logout route.
+  // If the POST fails (403 CSRF mismatch, network, 500) the cookie still exists —
+  // so navigating to login anyway would land the user on the login view while the
+  // session is still valid ("I logged out but I'm still in"). Only redirect on a
+  // confirmed server-side clear; on failure surface the error and let the user
+  // retry instead of pretending success.
   try {
     // The only POST in Phase 9. The http wrapper sets X-CSRF-Token from the readable cookie.
     await api("/api/v2/auth/logout", { method: "POST" });
-  } catch {
-    /* Even if logout errors, fall through to the hard-nav: clears in-memory state regardless. */
-  } finally {
-    window.location.assign("/app/login");
+  } catch (err) {
+    console.error("Sign out failed; session may still be active:", err);
+    toast.error("Sign out failed. Please try again.");
+    return;
   }
+  // Confirmed logged out (2xx): hard-nav to login, clearing in-memory state.
+  window.location.assign("/app/login");
 }
 
 const navRowBase =
