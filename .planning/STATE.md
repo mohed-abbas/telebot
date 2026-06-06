@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-05T21:17:36.150Z"
-last_activity: 2026-06-05 -- Phase 09 planning complete
+last_updated: "2026-06-06T08:16:21.233Z"
+last_activity: 2026-06-06
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 26
-  completed_plans: 23
+  completed_plans: 24
   percent: 50
 ---
 
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 9 — spa scaffold + auth + design system
+**Current focus:** Phase 09 — spa-scaffold-auth-design-system
 
 ## Current Position
 
-Phase: 9
-Plan: Not started
+Phase: 09 (spa-scaffold-auth-design-system) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-06-05 -- Phase 09 planning complete
+Last activity: 2026-06-06
 
 ## v1.2 Milestone Map
 
@@ -100,6 +100,7 @@ Last activity: 2026-06-05 -- Phase 09 planning complete
 | Phase 07 P06 | 2min | 3 tasks | 5 files |
 | Phase 07 P07 | 2min | 2 tasks | 3 files |
 | Phase 08 P01 | 4min | - tasks | - files |
+| Phase 09 P01 | 15min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -120,6 +121,8 @@ Recent decisions affecting current work:
 - [Phase ?]: Phase 08-01: api/ mounts at /api/v2; router.py single-owns ten resource sub-routers (Plans 02-05 add handlers only)
 - [Phase ?]: Phase 08-01: idempotency_keys DDL lives in api/idempotency.py via db._pool accessor — db.py byte-for-byte untouched (D-01..D-04)
 - [Phase ?]: Phase 08-01: double-submit CSRF (telebot_csrf vs X-CSRF-Token, compare_digest) replaces HX-Request heuristic for /api/v2 (D-15)
+- [Phase 09-01]: Greenfield frontend/ Vite 8 + React 19 + TS SPA scaffolded; base:/app/ (D-01), Tailwind v4 via @tailwindcss/vite with NO tailwind.config.js (D-10), dark brand palette mapped to shadcn @theme semantic roles (D-10), minimal 5-component set button/input/label/card/sonner (D-11), dev /api proxy to 8090 same-origin cookies (D-12)
+- [Phase 09-01]: Stack adjustments — rolldown binding kept out of package.json (transitive), dropped TS baseUrl, rejected shadcn nova extras (tw-animate-css/next-themes/webfonts), unified radix-ui umbrella package, sonner Toaster theme="dark"
 
 ### Pending Todos
 
@@ -146,5 +149,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-06-01 — v1.2 roadmap created (Phases 8–12); REQUIREMENTS.md traceability filled (25/25); v1.1 transition status recorded (Phase 6 carried forward, Phase 7 superseded)
-Resume file: .planning/phases/09-spa-scaffold-auth-design-system/09-UI-SPEC.md
+Resume file: None
 Next action: `/gsd:plan-phase 8` — JSON API Foundation (resolve idempotency-storage Open Question 4 during planning)
