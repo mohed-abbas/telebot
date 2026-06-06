@@ -1,5 +1,17 @@
 # Phase 10 — Deferred Items (out-of-scope discoveries)
 
+> **RESOLUTION UPDATE (post-Wave-2, orchestrator):** Plan 10-03's two contract tests
+> (`test_signals_contract.py`, `test_history_contract.py`) were **re-authored** onto the
+> proven single-loop `httpx.ASGITransport` + `loop_scope="session"` harness (mirrors
+> `test_analytics_contract.py`), so they now execute green — `6 passed, 7 skipped, 0 errors`
+> across the full Phase-10 contract suite (Python 3.12 + dev PG). Porting also surfaced a
+> latent `/api/v2/history` date-filter binding bug (fixed in `api/history.py`; commit
+> `a9c9ade`). **The item below is therefore narrowed:** only the *pre-existing*
+> `tests/test_api_contract.py` (Phase-8) `TestClient`/`session_client` suite remains blocked
+> by the conftest loop bug (`10 passed, 14 errors`). Phase 10's own contract tests no longer
+> depend on a conftest fix — the recommended path is to migrate `test_api_contract.py` to the
+> same ASGITransport pattern.
+
 ## [10-03] Pre-existing test-harness event-loop incompatibility (DB-touching contract tests)
 
 **Discovered during:** Plan 10-03 Task 2/3 verification.

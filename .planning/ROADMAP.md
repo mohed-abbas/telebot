@@ -218,8 +218,8 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 10-03-PLAN.md — Signals + History API parity widening (D-12): zone/sl/tp/details/source_name/status + contract tests (PAGE-02, PAGE-03) [depends 10-01: api/schemas.py]
-- [ ] 10-04-PLAN.md — Analytics pilot + shared primitives (DataTable, Loading/Empty/ErrorPanel, useUrlFilters) + route/sidebar wiring (PAGE-01) [depends 10-01]
+- [x] 10-03-PLAN.md — Signals + History API parity widening (D-12): zone/sl/tp/details/source_name/status + contract tests (PAGE-02, PAGE-03) [depends 10-01: api/schemas.py]
+- [x] 10-04-PLAN.md — Analytics pilot + shared primitives (DataTable, Loading/Empty/ErrorPanel, useUrlFilters) + route/sidebar wiring (PAGE-01) [depends 10-01]
 
 **Wave 3** *(blocked on Wave 2)*
 
@@ -275,6 +275,6 @@ Plans:
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
-| 10. Read-only Page Migration | 2/6 | In Progress|  |
+| 10. Read-only Page Migration | 4/6 | In Progress|  |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
