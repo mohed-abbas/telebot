@@ -209,7 +209,25 @@ Plans:
   4. The SPA staged-entries page reaches parity (pending stages per account with live polling and elapsed-time display), matching the legacy staged view
   5. For each of the four pages, SPA output is verified equal to the live legacy page before that page is considered ready for cutover (no live-money action exists on any of these pages, so cutover risk is read-only)
 
-**Plans**: TBD
+**Plans**: 6 plans (4 waves)
+Plans:
+**Wave 1**
+
+- [ ] 10-01-PLAN.md — Analytics API widening (D-01): by_source/extremes/avg_stages/sources + contract test (PAGE-01)
+- [ ] 10-02-PLAN.md — Stages API widening (D-09): active started_at epoch (Pitfall-4-safe) + contract test (PAGE-04)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 10-03-PLAN.md — Signals + History API parity widening (D-12): zone/sl/tp/details/source_name/status + contract tests (PAGE-02, PAGE-03) [depends 10-01: api/schemas.py]
+- [ ] 10-04-PLAN.md — Analytics pilot + shared primitives (DataTable, Loading/Empty/ErrorPanel, useUrlFilters) + route/sidebar wiring (PAGE-01) [depends 10-01]
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 10-05-PLAN.md — Signals + History SPA pages (URL filters, bookmarkable) reusing the primitives (PAGE-02, PAGE-03) [depends 10-03, 10-04]
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 10-06-PLAN.md — Staged SPA page (3s polling, card-per-account, useElapsed ticking timer) + ProbeView removal (PAGE-04) [depends 10-02, 10-04, 10-05]
 **UI hint**: yes
 
 ### Phase 11: Live-money Pages + Settings
