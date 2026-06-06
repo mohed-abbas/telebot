@@ -223,7 +223,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2)*
 
-- [ ] 10-05-PLAN.md — Signals + History SPA pages (URL filters, bookmarkable) reusing the primitives (PAGE-02, PAGE-03) [depends 10-03, 10-04]
+- [x] 10-05-PLAN.md — Signals + History SPA pages (URL filters, bookmarkable) reusing the primitives (PAGE-02, PAGE-03) [depends 10-03, 10-04]
 
 **Wave 4** *(blocked on Wave 3)*
 
@@ -275,6 +275,6 @@ Plans:
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
-| 10. Read-only Page Migration | 4/6 | In Progress|  |
+| 10. Read-only Page Migration | 5/6 | In Progress|  |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
