@@ -697,8 +697,8 @@ async def get_analytics_with_filters(
         "total_trades": summary_row["total_trades"],
         "wins": summary_row["wins"],
         "losses": summary_row["losses"],
-        "win_rate": float(summary_row["win_rate"]) if summary_row["win_rate"] else None,
-        "profit_factor": round(profit_factor, 2) if profit_factor else None,
+        "win_rate": float(summary_row["win_rate"]) if summary_row["win_rate"] is not None else None,
+        "profit_factor": round(profit_factor, 2) if profit_factor is not None else None,
         "gross_profit": gross_profit,
         "gross_loss": gross_loss,
         "net_pnl": float(summary_row["net_pnl"] or 0),
@@ -735,11 +735,11 @@ async def get_analytics_with_filters(
             "total_trades": row["total_trades"],
             "wins": row["wins"],
             "losses": row["losses"],
-            "win_rate": float(row["win_rate"]) if row["win_rate"] else None,
-            "profit_factor": round(pf, 2) if pf else None,
+            "win_rate": float(row["win_rate"]) if row["win_rate"] is not None else None,
+            "profit_factor": round(pf, 2) if pf is not None else None,
             "net_pnl": float(row["net_pnl"] or 0),
-            "best_trade": float(row["best_trade"]) if row["best_trade"] else None,
-            "worst_trade": float(row["worst_trade"]) if row["worst_trade"] else None,
+            "best_trade": float(row["best_trade"]) if row["best_trade"] is not None else None,
+            "worst_trade": float(row["worst_trade"]) if row["worst_trade"] is not None else None,
         })
 
     # Avg stages filled (from staged_entries, if applicable)
@@ -759,7 +759,7 @@ async def get_analytics_with_filters(
             ) sub
         """
         stages_row = await _pool.fetchrow(stages_query, source_name)
-        avg_stages = round(stages_row["avg_stages"], 1) if stages_row and stages_row["avg_stages"] else None
+        avg_stages = round(stages_row["avg_stages"], 1) if stages_row and stages_row["avg_stages"] is not None else None
 
     # Best/worst trade overall (extremes)
     extremes_query = f"""
@@ -777,8 +777,8 @@ async def get_analytics_with_filters(
         "by_source": by_source,
         "avg_stages": avg_stages,
         "extremes": {
-            "best_trade": float(extremes_row["best_trade"]) if extremes_row["best_trade"] else None,
-            "worst_trade": float(extremes_row["worst_trade"]) if extremes_row["worst_trade"] else None,
+            "best_trade": float(extremes_row["best_trade"]) if extremes_row["best_trade"] is not None else None,
+            "worst_trade": float(extremes_row["worst_trade"]) if extremes_row["worst_trade"] is not None else None,
         },
     }
 

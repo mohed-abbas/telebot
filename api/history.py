@@ -102,12 +102,14 @@ async def list_history(
 async def history_filter_options(_user: str = Depends(require_user)) -> FilterOptions:
     """Distinct filter values (wraps db.get_trade_filter_options).
 
-    The helper returns accounts/symbols/sources; `directions` is not stored as a
-    distinct-filter list, so it stays empty (schema-declared, additive).
+    The helper returns accounts/symbols/sources — all three are surfaced so the
+    history page's Source dropdown is populated (D-05 parity). `directions` is not
+    stored as a distinct-filter list, so it stays empty (schema-declared, additive).
     """
     opts = await db.get_trade_filter_options()
     return FilterOptions(
         accounts=opts.get("accounts", []),
         symbols=opts.get("symbols", []),
+        sources=opts.get("sources", []),
         directions=[],
     )

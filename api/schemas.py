@@ -107,10 +107,11 @@ class HistoryTrade(BaseModel):
 
 
 class FilterOptions(BaseModel):
-    """Distinct filter values for the history page (accounts/symbols/directions)."""
+    """Distinct filter values for the history page (accounts/symbols/sources/directions)."""
 
     accounts: list[str] = []
     symbols: list[str] = []
+    sources: list[str] = []
     directions: list[str] = []
 
 

@@ -43,6 +43,12 @@ def _enrich_active(stage: dict, raw: dict) -> dict:
     if isinstance(created_at, datetime):
         out["started_at"] = ts_machine(created_at)
         out["started_at_display"] = ts_display(created_at)
+    else:
+        # Always emit the key (value null) so the SPA contract is stable even when a
+        # raw row lacks a usable created_at — the elapsed timer guards null/NaN input
+        # (WR-04/WR-05). Never leave `started_at` absent.
+        out["started_at"] = None
+        out["started_at_display"] = None
     return out
 
 

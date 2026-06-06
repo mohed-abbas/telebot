@@ -77,11 +77,16 @@ def test_enrich_active_plumbs_raw_created_at_to_started_at():
     assert "filled_count" not in out and "total_stages" not in out
 
 
-def test_enrich_active_no_created_at_omits_started_at():
-    """When the raw row has no datetime created_at, started_at is simply absent."""
+def test_enrich_active_no_created_at_emits_null_started_at():
+    """When the raw row has no datetime created_at, started_at is emitted as None.
+
+    The key is ALWAYS present (value null) so the SPA contract is stable — the
+    elapsed timer guards null/NaN input rather than relying on key absence (WR-04).
+    """
     enriched = {"symbol": "XAUUSD", "filled": 0, "total": 2}
     out = stages._enrich_active(enriched, {"symbol": "XAUUSD"})
-    assert "started_at" not in out
+    assert out["started_at"] is None
+    assert out["started_at_display"] is None
 
 
 # ---------------------------------------------------------------------------

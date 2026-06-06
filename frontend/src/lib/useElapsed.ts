@@ -15,13 +15,18 @@
 
 import { useEffect, useState } from "react";
 
-export function useElapsed(startedAtIso: string): string {
+export function useElapsed(startedAtIso: string | null | undefined): string {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
-  const secs = Math.max(0, Math.floor((now - Date.parse(startedAtIso)) / 1000));
+  // Guard unparseable input (missing/null started_at, or a malformed string): Date.parse
+  // returns NaN, and NaN escapes Math.max(0, …) — yielding "NaN:NaN" without this check (WR-04).
+  const start = Date.parse(startedAtIso ?? "");
+  const secs = Number.isFinite(start)
+    ? Math.max(0, Math.floor((now - start) / 1000))
+    : 0;
   const h = Math.floor(secs / 3600),
     m = Math.floor((secs % 3600) / 60),
     s = secs % 60;

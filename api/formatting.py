@@ -19,8 +19,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from risk_calculator import GOLD_PIP_SIZE  # noqa: F401  (single-source pip size, D-08)
-
 # Price digits per symbol. Default 5 (FX). XAUUSD prints to 2dp (broker convention).
 # Extend HERE for new instruments — never inline a `:.Nf` literal in a route/model.
 _SYMBOL_DIGITS: dict[str, int] = {"XAUUSD": 2}

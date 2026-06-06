@@ -45,15 +45,17 @@ export function AppShell() {
         />
       )}
 
-      {/* Sidebar: fixed drawer on mobile (slides in), fixed rail on md+. */}
+      {/* Sidebar: fixed drawer on mobile (slides in), fixed rail on md+.
+          Drawer-close is wired explicitly through Sidebar's onNavigate (fired on NavLink taps
+          only), not a broad wrapper onClick — so the Sign-out button never races the close (WR-06).
+          On md+ onNavigate is a harmless no-op (drawer is always open/irrelevant). */}
       <div
         className={cn(
           "fixed inset-y-0 left-0 z-40 transition-transform duration-200 md:translate-x-0",
           drawerOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
         )}
-        onClick={() => setDrawerOpen(false)}
       >
-        <Sidebar />
+        <Sidebar onNavigate={() => setDrawerOpen(false)} />
       </div>
 
       {/* Main content — offset by the 224px rail on md+, padded under the mobile top bar. */}

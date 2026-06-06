@@ -307,7 +307,13 @@ export function AnalyticsView() {
             <KpiCard
               label="Net P&L"
               value={data.total_profit_display}
-              tone={data.total_profit > 0 ? "green" : "red"}
+              tone={
+                data.total_profit > 0
+                  ? "green"
+                  : data.total_profit < 0
+                    ? "red"
+                    : "neutral"
+              }
             />
           </div>
 
@@ -340,8 +346,10 @@ export function AnalyticsView() {
               />
             </div>
 
-            {/* Avg-Stages card — renders ONLY when a source filter yields a truthy avg_stages (Pitfall 3). */}
-            {data.avg_stages ? (
+            {/* Avg-Stages card — renders when a source filter is active and the server returns a
+                non-null avg_stages. Distinguishes null (all-source default → hide, Pitfall 3) from a
+                legitimate 0.00 (filtered source averaging zero → still show the card, WR-03). */}
+            {filters.source && data.avg_stages != null ? (
               <div className="rounded-lg border border-border bg-card p-4">
                 <p className="text-xs font-medium text-muted-foreground">
                   Avg Stages Filled

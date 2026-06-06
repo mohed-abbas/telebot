@@ -131,8 +131,11 @@ async def test_history_five_param_filter_round_trip(client):
     """account+symbol filters round-trip with AND logic over returned rows (D-11)."""
     opts = (await client.get("/api/v2/history/filter-options")).json()
     assert isinstance(opts, dict)
-    for key in ("accounts", "symbols"):
+    # CR-01 regression: `sources` MUST be surfaced so the History Source dropdown
+    # is populated (D-05 parity) — it was previously dropped by the route/schema.
+    for key in ("accounts", "symbols", "sources"):
         assert key in opts, f"filter-options missing {key}"
+    assert isinstance(opts["sources"], list), "sources must be a list"
 
     accounts = opts.get("accounts") or []
     symbols = opts.get("symbols") or []

@@ -67,7 +67,10 @@ async function signOut() {
   window.location.assign("/app/login");
 }
 
-export function Sidebar() {
+// `onNavigate` lets the mobile app-shell close its drawer when a nav link is tapped.
+// Scoped to NavLinks only — NOT the Sign-out button (which hard-navigates), so the
+// drawer-close never races the async logout handler (WR-06).
+export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   return (
     <nav
       aria-label="Main navigation"
@@ -88,7 +91,7 @@ export function Sidebar() {
             if (entry.label === "Analytics") {
               return (
                 <li key={entry.label}>
-                  <NavLink to="/analytics" className={liveLinkClass}>
+                  <NavLink to="/analytics" className={liveLinkClass} onClick={onNavigate}>
                     {entry.label}
                   </NavLink>
                 </li>
@@ -98,7 +101,7 @@ export function Sidebar() {
             if (entry.to) {
               return (
                 <li key={entry.label}>
-                  <NavLink to={entry.to} end={entry.end} className={liveLinkClass}>
+                  <NavLink to={entry.to} end={entry.end} className={liveLinkClass} onClick={onNavigate}>
                     {entry.label}
                   </NavLink>
                 </li>

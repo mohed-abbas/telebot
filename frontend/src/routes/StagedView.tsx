@@ -23,11 +23,11 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 import { DataTable, type Column } from "@/components/data/DataTable";
+import { DirectionBadge } from "@/components/data/DirectionBadge";
 import { Empty } from "@/components/state/Empty";
 import { ErrorPanel } from "@/components/state/ErrorPanel";
 import { Loading } from "@/components/state/Loading";
 import { api } from "@/lib/http";
-import { cn } from "@/lib/utils";
 import { useElapsed } from "@/lib/useElapsed";
 
 // ── API types (10-02 stages widening) ───────────────────────────────────────────────────────
@@ -48,7 +48,9 @@ interface ActiveStage {
   distance_str: string | null;
   status: string;
   // Server machine epoch (ISO-8601 + offset) from the 10-02 widening — the useElapsed input.
-  started_at: string;
+  // Nullable: the server always emits the key but sets it null when a raw row lacks a usable
+  // created_at (WR-04); useElapsed guards null/NaN input and renders "00:00".
+  started_at: string | null;
   started_at_display: string | null;
 }
 
@@ -90,23 +92,6 @@ function statusLabel(status: string): string {
 }
 
 // ── Small presentational helpers ──────────────────────────────────────────────────────────────
-
-/** BUY/SELL direction badge (green/red); "—" when absent. */
-function DirectionBadge({ direction }: { direction: string | null }) {
-  if (!direction) return <span className="text-muted-foreground">—</span>;
-  const up = direction.toUpperCase();
-  const tone =
-    up === "BUY"
-      ? "bg-green-400/10 text-green-400"
-      : up === "SELL"
-        ? "bg-red-400/10 text-red-400"
-        : "bg-muted/50 text-card-foreground";
-  return (
-    <span className={cn("rounded-md px-2 py-0.5 font-mono text-xs", tone)}>
-      {up}
-    </span>
-  );
-}
 
 /** Labelled field inside a stage card. */
 function Field({ label, children }: { label: string; children: ReactNode }) {

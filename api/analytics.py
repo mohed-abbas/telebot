@@ -12,7 +12,7 @@ Session-gated.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 import db
 from api.deps import require_user
@@ -23,14 +23,26 @@ router = APIRouter()
 
 
 def _parse_range(range_: str) -> int | None:
-    """Coerce the `range` query param to range_days (None = all time)."""
+    """Coerce the `range` query param to range_days (None = all time).
+
+    Empty → all time. A non-empty value MUST be a positive integer day count
+    (the SPA sends 7/30/90 or empty); anything else (typo, negative, zero) is a
+    client error surfaced as HTTP 422 rather than silently coerced to all-time
+    (IN-04) — a malformed range no longer masquerades as a valid all-time result.
+    """
     if not range_:
         return None
     try:
         days = int(range_)
-        return days if days > 0 else None
     except (TypeError, ValueError):
-        return None
+        raise HTTPException(
+            status_code=422, detail=f"Invalid range '{range_}': expected a positive integer day count."
+        )
+    if days <= 0:
+        raise HTTPException(
+            status_code=422, detail=f"Invalid range '{range_}': expected a positive integer day count."
+        )
+    return days
 
 
 @router.get("/analytics", response_model=Analytics)

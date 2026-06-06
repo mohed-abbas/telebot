@@ -24,8 +24,8 @@ import { Empty } from "@/components/state/Empty";
 import { ErrorPanel } from "@/components/state/ErrorPanel";
 import { Loading } from "@/components/state/Loading";
 import { Button } from "@/components/ui/button";
+import { DirectionBadge } from "@/components/data/DirectionBadge";
 import { api } from "@/lib/http";
-import { cn } from "@/lib/utils";
 
 // ── API type (10-03 signals widening) ──────────────────────────────────────────────────────
 
@@ -75,23 +75,6 @@ function TypeBadge({ signalType }: { signalType: string }) {
   return (
     <span className="rounded-md bg-muted/50 px-2 py-0.5 font-mono text-xs text-card-foreground">
       {typeLabel(signalType)}
-    </span>
-  );
-}
-
-/** BUY/SELL direction badge (green/red); "—" when absent. */
-function DirectionBadge({ direction }: { direction: string | null }) {
-  if (!direction) return <span className="text-muted-foreground">—</span>;
-  const up = direction.toUpperCase();
-  const tone =
-    up === "BUY"
-      ? "bg-green-400/10 text-green-400"
-      : up === "SELL"
-        ? "bg-red-400/10 text-red-400"
-        : "bg-muted/50 text-card-foreground";
-  return (
-    <span className={cn("rounded-md px-2 py-0.5 font-mono text-xs", tone)}>
-      {up}
     </span>
   );
 }
