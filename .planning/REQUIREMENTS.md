@@ -35,7 +35,7 @@
 - [x] **SPA-02**: Styling uses Tailwind v4 (`@tailwindcss/vite` + `@theme`) with shadcn/ui components; the existing dark palette (`#252542` / `#1a1a2e` / `#0f0f1a`) is mapped to theme tokens
 - [x] **SPA-03**: Operator can log in through the SPA; the httpOnly session cookie auth is retained; no auth tokens are stored in `localStorage`
 - [x] **SPA-04**: Expired or unauthenticated sessions are detected globally (401 handler) and redirect to the login view without redirect loops
-- [ ] **SPA-05**: Server-state (TanStack Query background polling) is kept separate from form/UI state so a background refetch can never clobber an open input or modal — the structural fix for the HTMX refresh-race bug class
+- [x] **SPA-05**: Server-state (TanStack Query background polling) is kept separate from form/UI state so a background refetch can never clobber an open input or modal — the structural fix for the HTMX refresh-race bug class
 
 ### PAGE — Page Migration (parity)
 
@@ -103,7 +103,7 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 | SPA-02 | Phase 9 | Complete |
 | SPA-03 | Phase 9 | Complete |
 | SPA-04 | Phase 9 | Complete |
-| SPA-05 | Phase 9 | Pending |
+| SPA-05 | Phase 9 | Complete |
 | PAGE-01 | Phase 10 | Pending |
 | PAGE-02 | Phase 10 | Pending |
 | PAGE-03 | Phase 10 | Pending |

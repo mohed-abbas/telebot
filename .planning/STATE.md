@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: executing
-last_updated: "2026-06-06T08:28:33.933Z"
+status: verifying
+last_updated: "2026-06-06T09:02:14.237Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 26
-  completed_plans: 25
-  percent: 96
+  completed_plans: 27
+  percent: 63
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-06-01)
 
 Phase: 09 (spa-scaffold-auth-design-system) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-06
 
 ## v1.2 Milestone Map
@@ -103,6 +103,7 @@ Last activity: 2026-06-06
 | Phase 09 P01 | 15min | 3 tasks | 17 files |
 | Phase 09 P02 | 8min | 3 tasks | 4 files |
 | Phase 09 P03 | 6min | 2 tasks | 6 files |
+| Phase 09 P04 | 12min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,7 @@ Recent decisions affecting current work:
 - [Phase 09-01]: Stack adjustments — rolldown binding kept out of package.json (transitive), dropped TS baseUrl, rejected shadcn nova extras (tw-animate-css/next-themes/webfonts), unified radix-ui umbrella package, sonner Toaster theme="dark"
 - [Phase 09-02]: SPA served at /app via uvicorn StaticFiles with SpaStaticFiles 404->index.html deep-link fallback (D-01, Pitfall 1); mount registered AFTER api_router so /api/v2 is never shadowed (D-02); Dockerfile node:22-slim AS spa-build stage builds the bundle, runtime stays python:3.12-slim with no prod Node, css-build coexists (D-03)
 - [Phase 09-03]: Single api() fetch wrapper echoes telebot_csrf as X-CSRF-Token on mutations only + credentials:same-origin + throws HttpError on non-2xx (D-04/D-06); one global onAuthError on QueryCache+MutationCache hard-navs to /app/login with loop-break (SPA-04); QueryClient inherited defaults keepPreviousData + refetchIntervalInBackground:false, staleTime:1000, retry:false (D-09); login view seeds CSRF on mount (Pitfall 5) and submits {password, csrf_token} only; zero auth token in browser storage (SPA-03)
+- [Phase 09-04]: Declarative react-router-dom 7 router (createBrowserRouter basename /app) in lockstep with Vite base + uvicorn StaticFiles mount (D-07); main.tsx wires QueryClientProvider over RouterProvider + root sonner Toaster; App.tsx boot guard GET /auth/me (200→shell, 401 delegated to the single global onAuthError, no competing redirect — single bounce, D-05/SPA-04); 224px AppShell + Telebot-cyan Sidebar (Overview live, 6 disabled-visible future links, Sign out logout POST) — cyan reserved for wordmark/active/focus only (D-07); THROWAWAY ProbeView proved SC#5 LIVE — useQuery(trading-status, refetchInterval 3000) vs useState input survived ≥2 refetch cycles unclobbered (D-08/SPA-05). Phase 9 manual gate APPROVED by human (cold login no-403, no localStorage token, deep-link reload, single 401 redirect, input survives refetches). Phase 9 complete — ready for verification.
 
 ### Pending Todos
 
@@ -152,6 +154,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-06-06 — Completed 09-03-PLAN.md (data + auth layer: http.ts wrapper, queryClient global 401, csrf.ts cold-start, LoginView). Plan 3 of 4 done.
+Last activity: 2026-06-06 — Completed 09-04-PLAN.md (app shell + /app router + boot guard + throwaway SC#5 probe). Manual phase gate APPROVED live (all 5 checks passed). Plan 4 of 4 done — Phase 9 complete.
 Resume file: None
-Next action: execute 09-04-PLAN.md — router/shell/boot-guard + probe view (wave 3, depends on 09-03)
+Next action: run phase verification for Phase 09, then plan Phase 10 (read-only page migration).

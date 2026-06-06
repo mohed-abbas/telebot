@@ -49,7 +49,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 ### v1.2 (active)
 
 - [x] **Phase 8: JSON API Foundation** - Refactor `dashboard.py`'s HTML-fragment endpoints into a versioned, curl/pytest-testable JSON API (`/api/v2`) with Pydantic models, double-submit CSRF, server-side number/timestamp formatting, and idempotent partial-close. Bot core untouched. (completed 2026-06-03)
-- [ ] **Phase 9: SPA Scaffold + Auth + Design System** - Stand up the Vite 8 + React 19 + Tailwind v4 + shadcn SPA served same-origin behind nginx, with session-cookie auth, global 401 redirect, and the TanStack-Query/local-form-state split that structurally kills the refresh-race bug class. No pages yet.
+- [x] **Phase 9: SPA Scaffold + Auth + Design System** - Stand up the Vite 8 + React 19 + Tailwind v4 + shadcn SPA served same-origin behind nginx, with session-cookie auth, global 401 redirect, and the TanStack-Query/local-form-state split that structurally kills the refresh-race bug class. No pages yet. (completed 2026-06-06)
 - [ ] **Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)** - Migrate the four no-live-money-action pages to the SPA at parity, starting with analytics as the read-only pipeline pilot.
 - [ ] **Phase 11: Live-money Pages + Settings** - Migrate overview, positions (4 destructive actions), kill switch, and settings (folds SEED-001) using server-confirmed mutations only, disabled-while-pending, CSRF on every mutation, and client-side zod hard-cap mirroring.
 - [ ] **Phase 12: Parallel-run Cutover + HTMX Decommission** - Run SPA and legacy HTMX in parallel behind nginx; cut over page-by-page gated on MT5-demo-verified parity; then remove HTMX/Jinja templates, the Tailwind standalone-CLI stage, and Basecoat vendor assets.
@@ -192,7 +192,7 @@ Plans:
 
 **Wave 3** *(blocked on 09-01 + 09-03)*
 
-- [ ] 09-04-PLAN.md — App shell + /app router + boot guard + throwaway polling probe proving the server-state/form-state split (SPA-04, SPA-05)
+- [x] 09-04-PLAN.md — App shell + /app router + boot guard + throwaway polling probe proving the server-state/form-state split (SPA-04, SPA-05)
 **Research flag**: RESOLVED — OQ1 CSRF names = telebot_csrf cookie / X-CSRF-Token header (Phase 8 D-15); OQ2 URL strategy = /app/ subpath (D-01); OQ3 serving = uvicorn StaticFiles + deep-link fallback subclass (D-02).
 **UI hint**: yes
 
@@ -256,7 +256,7 @@ Plans:
 | 6. Staged entry execution | 5/5 | Carried forward (awaiting UAT) | - |
 | 7. Dashboard redesign (HTMX) | 7/8 | Superseded by v1.2 | - |
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
-| 9. SPA Scaffold + Auth + Design System | 3/4 | In Progress|  |
+| 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 0/TBD | Not started | - |
 | 11. Live-money Pages + Settings | 0/TBD | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
