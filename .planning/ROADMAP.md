@@ -251,7 +251,7 @@ Plans:
 
 **Wave 1** *(blocked on 11-01)*
 
-- [ ] 11-02-PLAN.md — Live-money mutation hooks: useClose/useLevels/usePartialClose (request_id idempotency, no optimistic) + useEmergency + useSettingsMutations (validate branches on data.valid) (PAGE-06, PAGE-07, PAGE-08, SUX-01)
+- [x] 11-02-PLAN.md — Live-money mutation hooks: useClose/useLevels/usePartialClose (request_id idempotency, no optimistic) + useEmergency + useSettingsMutations (validate branches on data.valid) (PAGE-06, PAGE-07, PAGE-08, SUX-01)
 
 **Wave 2** *(blocked on 11-01 + 11-02)*
 
