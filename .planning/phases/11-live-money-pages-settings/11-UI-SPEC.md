@@ -1,10 +1,11 @@
 ---
 phase: 11
 slug: live-money-pages-settings
-status: draft
+status: approved
 shadcn_initialized: true
 preset: none (shadcn CLI, new-york style, neutral base + brand .dark overrides)
 created: 2026-06-07
+reviewed_at: 2026-06-07
 ---
 
 # Phase 11 — UI Design Contract
