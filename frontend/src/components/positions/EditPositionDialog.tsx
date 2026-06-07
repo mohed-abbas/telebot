@@ -100,18 +100,23 @@ export function EditPositionDialog({
 
   // ── Partial-close validation (D-04): absolute lots, 0 < value < volume, lot-step rounded ──────
   const closeNum = closeVolume.trim() === "" ? NaN : Number(closeVolume);
+  // CR-01: round FIRST, then guard + submit the SAME rounded value. Validating the un-rounded
+  // input while submitting the rounded one let `0.998` on a 1.00-lot position pass the guard yet
+  // send `close_volume: 1.0` — a FULL close through the partial endpoint. The bound is strict
+  // against the rounded value so a partial close always leaves a non-zero remainder.
+  const closeRounded = Number.isFinite(closeNum) ? roundToStep(closeNum) : NaN;
   const partialSchema = z
     .number()
     .positive()
     .max(position.volume, { message: "Exceeds open volume." });
-  const closeParsed = Number.isFinite(closeNum)
-    ? partialSchema.safeParse(roundToStep(closeNum))
+  const closeParsed = Number.isFinite(closeRounded)
+    ? partialSchema.safeParse(closeRounded)
     : null;
-  const closeValid = closeParsed?.success === true && closeNum < position.volume;
+  const closeValid = closeParsed?.success === true && closeRounded < position.volume;
   // Live "Remaining after" readout (the whole point of the absolute-lots model — no percent/slider).
   const remainingAfter =
-    Number.isFinite(closeNum) && closeNum > 0
-      ? Math.max(0, position.volume - closeNum)
+    Number.isFinite(closeRounded) && closeRounded > 0
+      ? Math.max(0, position.volume - closeRounded)
       : position.volume;
 
   // ── SL/TP submit (independent — D-02) ─────────────────────────────────────────────────────────
@@ -134,9 +139,8 @@ export function EditPositionDialog({
       {
         account: position!.account,
         ticket: position!.ticket,
-        // Absolute lots (D-04) — the request_id (held in the hook ref) was regenerated on every
-        // amount change below, so this is a genuinely-new operation, not a retry.
-        closeVolume: roundToStep(closeNum),
+        // Absolute lots (D-04) — submit the SAME rounded value the guard approved (CR-01).
+        closeVolume: closeRounded,
       },
       { onSuccess: () => onClose() },
     );

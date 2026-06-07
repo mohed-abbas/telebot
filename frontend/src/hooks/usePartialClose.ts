@@ -54,7 +54,7 @@ export function usePartialClose() {
 
   const mutation = useMutation({
     mutationFn: ({ account, ticket, closeVolume }: PartialCloseVars) =>
-      api(`/api/v2/positions/${account}/${ticket}/close-partial`, {
+      api(`/api/v2/positions/${encodeURIComponent(account)}/${encodeURIComponent(String(ticket))}/close-partial`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

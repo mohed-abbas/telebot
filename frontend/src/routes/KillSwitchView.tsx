@@ -26,7 +26,7 @@
 //     there is no empty/accidental close-all.
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { ErrorPanel } from "@/components/state/ErrorPanel";
 import { Loading } from "@/components/state/Loading";
@@ -74,6 +74,8 @@ export function KillSwitchView() {
   const tradingStatus = useQuery<TradingStatus>({
     queryKey: ["trading-status"],
     queryFn: () => api("/api/v2/trading-status") as Promise<TradingStatus>,
+    // WR-01: retain last-known status across a transient poll failure (shared key with Overview).
+    placeholderData: keepPreviousData,
   });
 
   // The two-step guard: the operator must explicitly arm the confirm (T-11-17). "Keep trading

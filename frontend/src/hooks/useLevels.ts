@@ -34,7 +34,7 @@ export function useLevels() {
       if (sl !== undefined) body.sl = sl;
       if (tp !== undefined) body.tp = tp;
 
-      return api(`/api/v2/positions/${account}/${ticket}/levels`, {
+      return api(`/api/v2/positions/${encodeURIComponent(account)}/${encodeURIComponent(String(ticket))}/levels`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

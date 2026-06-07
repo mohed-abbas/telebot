@@ -110,6 +110,9 @@ export function SettingsView() {
         <Loading rows={6} />
       ) : (
         <AccountSettings
+          // CR-02: re-mount on account switch so rhf defaults AND all local review/confirm state
+          // reset — without this, account A's typed values can be confirmed onto account B.
+          key={account}
           account={account}
           validate={validate}
           confirm={confirm}
@@ -139,7 +142,7 @@ function AccountSettings({
 }: AccountSettingsProps) {
   const { data, isPending, isError, error, refetch } = useQuery<SettingsPayload>({
     queryKey: ["settings", account],
-    queryFn: () => api(`/api/v2/settings/${account}`) as Promise<SettingsPayload>,
+    queryFn: () => api(`/api/v2/settings/${encodeURIComponent(account)}`) as Promise<SettingsPayload>,
   });
 
   // The pending change being reviewed (drives the confirm modal). Null = modal closed.

@@ -56,7 +56,7 @@ export function useSettingsMutations() {
   // The caller reads the returned `data.valid` to branch — we do NOT toast/throw on valid:false here.
   const validate = useMutation({
     mutationFn: ({ account, values }: SettingsVars) =>
-      api(`/api/v2/settings/${account}/validate`, {
+      api(`/api/v2/settings/${encodeURIComponent(account)}/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account, values }),
@@ -69,7 +69,7 @@ export function useSettingsMutations() {
 
   const confirm = useMutation({
     mutationFn: ({ account, values }: SettingsVars) =>
-      api(`/api/v2/settings/${account}`, {
+      api(`/api/v2/settings/${encodeURIComponent(account)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account, values }),
@@ -86,7 +86,7 @@ export function useSettingsMutations() {
 
   const revert = useMutation({
     mutationFn: ({ account }: { account: string }) =>
-      api(`/api/v2/settings/${account}/revert`, {
+      api(`/api/v2/settings/${encodeURIComponent(account)}/revert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ account }),

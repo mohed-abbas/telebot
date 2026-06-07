@@ -24,7 +24,7 @@
 // bare numerics, the same Pitfall-5-exempt category as win_rate/elapsed (NOT a money re-format).
 // Counts (open_trades, daily_trades) and the risk percentage are bare ints/floats, rendered raw.
 
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import type { ReactNode } from "react";
 
@@ -247,6 +247,9 @@ export function OverviewView() {
     queryKey: ["trading-status"],
     queryFn: () => api("/api/v2/trading-status") as Promise<TradingStatus>,
     refetchInterval: 3000,
+    // WR-01: keep the last-known status across a transient poll failure so a single failed
+    // refetch never flips a real PAUSED state to "running" (undefined → paused:false).
+    placeholderData: keepPreviousData,
   });
 
   // Pending stages (top-5) — reuse the shipped GET /api/v2/stages contract (Open Question 2).
@@ -257,6 +260,10 @@ export function OverviewView() {
   });
 
   const paused = tradingStatus.data?.paused === true;
+  // WR-01: fail safe — an unknown status (cold-start error, no cached value) must NOT render as
+  // "running". Surface a degraded indicator so the operator is never silently shown a not-paused
+  // layout while the pause state is genuinely unknown.
+  const statusUnknown = tradingStatus.data == null && tradingStatus.isError;
 
   return (
     <div className="mx-auto max-w-6xl py-6">
@@ -306,6 +313,19 @@ export function OverviewView() {
           </p>
           <p className="mt-1 text-sm text-destructive">
             Kill switch active — no signals will be processed
+          </p>
+        </div>
+      ) : statusUnknown ? (
+        // WR-01: degraded — do NOT imply trading is live when the status fetch failed.
+        <div
+          role="alert"
+          className="mb-6 rounded-lg border border-border bg-muted/40 p-4 text-center"
+        >
+          <p className="text-sm font-semibold tracking-wide text-muted-foreground">
+            TRADING STATUS UNAVAILABLE
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Could not reach the server — pause state is unknown
           </p>
         </div>
       ) : null}

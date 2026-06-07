@@ -77,7 +77,7 @@ export function PositionDrilldown({ account, ticket }: PositionDrilldownProps) {
     // Keyed by account+ticket so each open drilldown is its own cache entry (multi-open allowed).
     queryKey: ["position-drilldown", account, ticket],
     queryFn: () =>
-      api(`/api/v2/positions/${account}/${ticket}`) as Promise<DrilldownPayload>,
+      api(`/api/v2/positions/${encodeURIComponent(account)}/${encodeURIComponent(String(ticket))}`) as Promise<DrilldownPayload>,
   });
 
   if (isPending) {

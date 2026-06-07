@@ -33,7 +33,7 @@ export function useClose() {
 
   return useMutation({
     mutationFn: ({ account, ticket }: ClosePositionVars) =>
-      api(`/api/v2/positions/${account}/${ticket}/close`, { method: "POST" }),
+      api(`/api/v2/positions/${encodeURIComponent(account)}/${encodeURIComponent(String(ticket))}/close`, { method: "POST" }),
     onSuccess: () => {
       // SC#1: server-confirmed only — re-fetch positions + overview, no optimistic write.
       qc.invalidateQueries({ queryKey: ["positions"] });
