@@ -16,6 +16,7 @@ import App from "@/App";
 import { LoginView } from "@/auth/LoginView";
 import { AnalyticsView } from "@/routes/AnalyticsView";
 import { HistoryView } from "@/routes/HistoryView";
+import { SettingsView } from "@/routes/SettingsView";
 import { SignalsView } from "@/routes/SignalsView";
 import { StagedView } from "@/routes/StagedView";
 
@@ -58,6 +59,12 @@ export const router = createBrowserRouter(
           // background-polling page (D-07).
           path: "stages",
           element: <StagedView />,
+        },
+        {
+          // PAGE-08 per-account settings. Reachable at /app/settings (basename adds the prefix).
+          // The two-step validate→confirm-diff→confirm flow (D-05); does not poll.
+          path: "settings",
+          element: <SettingsView />,
         },
       ],
     },
