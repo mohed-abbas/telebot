@@ -474,13 +474,12 @@ async def history_page(
 
 @app.get("/signals", response_class=HTMLResponse)
 async def signals_page(request: Request, user: str = Depends(_verify_auth)):
-    signals = await db.get_recent_signals(100)
-    return templates.TemplateResponse("signals.html", {
-        "request": request,
-        "signals": signals,
-        "page": "signals",
-        "page_title": "Signal Log",
-    })
+    """CUT-02 (D-01): legacy signals page cut over to the SPA (303 to /app/signals).
+
+    Depends(_verify_auth) retained so an unauth hit bounces to login first.
+    Route deleted wholesale in 12-03.
+    """
+    return RedirectResponse(url="/app/signals", status_code=303)
 
 
 # ─── STAGE-08: pending-stages observability (D-32..D-36) ──────────────────
