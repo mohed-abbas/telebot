@@ -61,15 +61,23 @@ result: code complete + guard green locally 2026-06-07; live sign-off DEFERRED t
 
 ### 8. kill-switch verified-then-decommissioned (NO legacy GET page)
 expected: SPA kill-switch (/app/emergency) data matches legacy kill_switch_preview on live data; live-money kill-switch action behaves correctly against the demo broker (drains pending stages then closes positions, resume never un-cancels); no console errors; poll-safe modals/drilldowns. NOTE: the kill switch has NO legacy GET page to redirect — this row is verified-then-decommissioned: its sign-off gates the 12-03 Commit-1 deletion of /api/emergency-preview, not a per-page redirect.
-result: [pending — sign: YYYY-MM-DD operator]
+result: no code change in 12-02 (no GET page to redirect — SPA kill-switch already built in Phase 11); live parity sign-off DEFERRED to VPS end-to-end acceptance (gates the 12-03 /api/emergency-preview deletion)
 
 ## Summary
 
 total: 8
-passed: 0
+code-complete: 8
+live-signed: 0
 issues: 0
-pending: 8
+pending: 0
 skipped: 0
 blocked: 0
+
+NOTE (deploy-at-end workflow, 2026-06-07): All 8 rows are code-complete locally
+(7 page redirects + root flip green-or-skip against the pytest guard; kill-switch
+SPA already built in Phase 11, no GET page to redirect). The single live MT5-demo
+parity sign-off is DEFERRED to one end-to-end VPS acceptance at final deploy per
+operator decision — NO per-page operator signatures were fabricated here. The
+deferred kill-switch parity row still gates the 12-03 /api/emergency-preview deletion.
 
 ## Gaps
