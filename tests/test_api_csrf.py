@@ -115,8 +115,12 @@ def test_valid_token_passes(api_app):
 
 def test_csrf_cookie_name_no_collision(api_app):
     """The new cookie is `telebot_csrf`, distinct from the legacy
-    `telebot_login_csrf`, and the legacy /login GET still sets its own cookie
-    (D-13: both flows run in parallel, legacy untouched)."""
+    `telebot_login_csrf` name.
+
+    Phase 12 (CUT-03) deleted the legacy HTML GET /login route, so the prior
+    assertion that `/login` still sets `telebot_login_csrf` was dropped — the
+    legacy flow no longer exists. The surviving /api/v2/auth/csrf flow must still
+    issue a distinctly-named cookie."""
     c = TestClient(api_app)
 
     # New flow issues telebot_csrf.
@@ -124,10 +128,3 @@ def test_csrf_cookie_name_no_collision(api_app):
     assert "telebot_csrf" in r.cookies
     assert "telebot_login_csrf" not in r.cookies
     assert "telebot_csrf" != "telebot_login_csrf"
-
-    # Legacy HTML /login flow is untouched — still sets telebot_login_csrf.
-    c2 = TestClient(api_app)
-    r2 = c2.get("/login")
-    assert r2.status_code == 200
-    assert "telebot_login_csrf" in r2.cookies
-    assert "telebot_csrf" not in r2.cookies

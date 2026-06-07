@@ -34,17 +34,13 @@ def test_health_route_open(app):
     assert c.get("/health").status_code == 200
 
 
-def test_page_route_redirects_on_missing_session(app):
+def test_unauth_root_redirects_to_app_login(app):
+    """After CUT-03 Commit 1 repoint, an unauth hit to the surviving root bounces
+    to /app/login (not the deleted legacy /login). Pitfall-4 guard."""
     c = TestClient(app)
-    r = c.get("/overview", follow_redirects=False)
+    r = c.get("/", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"].startswith("/login?next=")
-
-
-def test_htmx_route_returns_401_on_missing_session(app):
-    c = TestClient(app)
-    r = c.get("/overview", headers={"HX-Request": "true"}, follow_redirects=False)
-    assert r.status_code == 401
+    assert r.headers["location"].startswith("/app/login?next=")
 
 
 def test_valid_session_passes_auth(app):
@@ -64,21 +60,3 @@ def test_session_middleware_registered(app):
     from starlette.middleware.sessions import SessionMiddleware
     names = [m.cls.__name__ for m in app.user_middleware]
     assert "SessionMiddleware" in names
-
-
-def test_asset_url_helper_registered(app):
-    """asset_url must be available as a Jinja global."""
-    import dashboard
-    assert "asset_url" in dashboard.templates.env.globals
-    # Without a manifest, falls back to logical name under /static/css/
-    assert dashboard.asset_url("app.css").startswith("/static/css/")
-
-
-def test_base_html_has_no_play_cdn():
-    from pathlib import Path
-    p = Path("templates/base.html")
-    txt = p.read_text()
-    assert "cdn.tailwindcss.com" not in txt, "UI-01: Play CDN must be removed"
-    assert "asset_url('app.css')" in txt, "UI-04: hashed CSS reference must be via asset_url"
-    assert "basecoat.min.js" in txt, "Basecoat JS must be wired"
-    assert "htmx_basecoat_bridge.js" in txt, "HTMX bridge must be wired"
