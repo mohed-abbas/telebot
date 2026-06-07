@@ -481,19 +481,19 @@ Sequencing note: Commits 1-3 make several tests fail until Commit 4 prunes them,
 
 **Note:** A1, A2 (enrich fn), and A4 were resolved during research by grep — folded into the MUST-SURVIVE list and the Commit-3 inventory. A3, A5, A6, A7 remain operator/planner-confirmable.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Is legacy `/login` (GET form + POST submit) deleted, or only the GET form?**
    - What we know: SPA logs in via `/api/v2/auth/login` (sets session itself). Legacy `POST /login` + `_render_login` + `login.html` are Jinja-coupled. `_verify_auth` redirects to `/login`.
    - What's unclear: whether any non-SPA client (a saved bookmark, a monitoring probe) still hits `GET /login`.
-   - Recommendation: **Delete both legacy `/login` routes + `login.html` in Commit 1, repoint `_verify_auth` → `/app/login`, KEEP/repoint `/logout`.** The SPA owns login. Confirm with operator that no bookmark/probe targets the old `/login`.
+   - **RESOLVED:** Delete both legacy `/login` routes + `login.html` in Commit 1, repoint `_verify_auth` → `/app/login`, KEEP/repoint `/logout`. The SPA owns login. Confirm with operator that no bookmark/probe targets the old `/login`. Encoded in plan 12-03 Commit 1 (Pitfall-4 repoint).
 
 2. **Order of Commit 4 (test prune) vs Commits 1-3 (code delete).**
    - What we know: Commits 1-3 make `test_ui_substrate.py`, `test_pending_stages_sse.py`, `test_settings_form.py`, parts of `test_auth_session.py`, and `test_login_flow.py` fail. Commit 4 prunes them.
-   - Recommendation: Sequence so the plan's final gate is green — either prune the dead tests inside the same commit that deletes their target, or land an all-then-prune ordering with one green checkpoint. The 4 commits stay independently revertable.
+   - **RESOLVED:** Sequence so the plan's final gate is green — either prune the dead tests inside the same commit that deletes their target, or land an all-then-prune ordering with one green checkpoint. The 4 commits stay independently revertable. Encoded in plan 12-03's D-10 4-commit grouping.
 
 3. **Does CUT-03 need a `docker build` in CI, or is operator-side build sufficient?**
-   - Recommendation: Run `docker build .` locally/CI as Commit 3's gate to catch the Dockerfile half-removal trap (Pitfall 1) before the operator deploys.
+   - **RESOLVED:** Run `docker build .` locally/CI as Commit 3's gate to catch the Dockerfile half-removal trap (Pitfall 1) before the operator deploys. Encoded in plan 12-03 Commit 3 `<verify>`.
 
 ## Environment Availability
 
