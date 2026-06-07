@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-07T20:16:41.934Z"
-last_activity: 2026-06-07 -- Phase 12 planning complete
+last_updated: "2026-06-07T20:31:00.000Z"
+last_activity: 2026-06-07 -- Phase 12 Plan 01 (Wave-0 cutover guards) complete
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 41
-  completed_plans: 39
-  percent: 88
+  completed_plans: 40
+  percent: 90
 ---
 
 # Project State
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 12 — parallel run cutover + htmx decommission
+**Current focus:** Phase 12 — parallel-run-cutover-htmx-decommission
 
 ## Current Position
 
-Phase: 12
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-07 -- Phase 12 planning complete
+Phase: 12 (parallel-run-cutover-htmx-decommission) — EXECUTING
+Plan: 2 of 3
+Status: Executing Phase 12 (Plan 01 Wave-0 guards complete)
+Last activity: 2026-06-07 -- Phase 12 Plan 01 (Wave-0 cutover guards) complete
 
 ## v1.2 Milestone Map
 
@@ -136,6 +136,7 @@ Recent decisions affecting current work:
 - [Phase 11-01]: Phase 11 foundation shipped — react-hook-form ^7.77 + zod ^4 (v4 API, resolver import `@hookform/resolvers/zod`) + @hookform/resolvers ^5 + vitest (node env, not jsdom); 5 shadcn components (dialog/tooltip/select/badge/popover) verified opaque on dark brand (Pitfall-9 gate Playwright-confirmed: DialogContent oklch(0.12 0.02 275), SelectContent oklch(0.17 0.03 275)). footgun() mode-aware (percent multiplies risk_value×max_stages; fixed_lot does NOT — riskValue is TOTAL across stages, Pitfall 6); makeSettingsSchema(maxLotSize) mirrors server caps (percent ≤5.0, fixed_lot ≤ per-account max_lot_size, ints 1-10/1-500/1-100, no cap on read-only max_open_trades — SUX-03). Package legitimacy T-11-SC approved (0 vulns, no postinstall hooks). Both pure fns vitest-proven (15 tests green).
 - [Phase 11-02]: Five live-money mutation hooks shipped (frontend/src/hooks/) — useClose/useLevels/usePartialClose (PAGE-06), useEmergency (PAGE-07), useSettingsMutations (PAGE-08/SUX-01). Money-safe discipline baked in once: api()-only CSRF (no raw fetch — Pitfall 2/T-11-03), NO setQueryData (SC#1/Pitfall 1 — UI re-derives via invalidateQueries onSuccess), 401 handled by inherited global onAuthError, errors via shared errorMessage() into sonner (T-11-06). usePartialClose: absolute close_volume (D-04, no percent) + request_id useRef(crypto.randomUUID) reused on pure retries + regenerateRequestId on amount change + HttpError 409 → specific toast (Pitfall 3/T-11-04). useSettingsMutations.validate honors 200-on-invalid (no onSuccess/no throw; caller branches on data.valid — Pitfall 7). NOT vitest-unit-tested (node-env/pure-fn-only runner; @testing-library/react+jsdom not installed = excluded package install); gated by npm run build + grep acceptance — exercised by Wave-2 page plans.
 - [Phase 11-06]: Overview (PAGE-05) shipped + Phase-11 routing/sidebar cutover. OverviewView is the live-money landing surface: 3 useQuery sources (overview/trading-status/stages, each refetchInterval 3000) + the embedded <PositionsView/>'s own ["positions"] poll. Red TRADING PAUSED banner (text-destructive) above the positions section when trading-status.paused. Per-account cards (overview_cards.html parity): Connected/Offline chip, Balance/Equity/Open-P&L via *_display, daily-trades yellow≥80%/red≥100%, margin-used ratio bar (margin/balance — Pitfall-5-exempt). Open Positions = rendered <PositionsView/> (SC#3 poll-safe modal/drilldown inherited wholesale, zero shared state). Pending Stages = top-5 active from GET /api/v2/stages (Open Question 2, no new endpoint). Emergency Kill Switch entry = Button asChild + <Link to="/emergency"> → KillSwitchView. router.tsx: /app index now renders OverviewView (was Navigate to /analytics); overview/positions/emergency routes added; pre-existing /app/settings route preserved. Sidebar: Positions→to:/positions, Settings→to:/settings (now live NavLinks). npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 4 live-money pages built + routed).
+- [Phase 12-01]: Wave-0 cutover guards shipped (no production code). CUT-01 confirmed satisfied by existing Phase-9 routing with ZERO code change — evidence is tests/test_spa_serving.py::test_api_not_shadowed_by_spa_mount (/api/v2 router registered before /app mount; green-or-skip). tests/test_cutover_redirects.py = CUT-02 guard (7 D-05 page rows 303->/app/<page> + unauth->/app/login), tests/test_post_teardown.py = CUT-03 guard (deleted /overview|/stream|/partials/positions real-404 + surviving /health|/app/|/api/v2|/->303/app/ + import-api MUST-SURVIVE-symbol guard). Both intentionally RED per-row until 12-02/12-03 land; collect-clean (16 items, exit 0) is the Wave-0 bar. 12-CUTOVER-CHECKLIST.md = D-04 operator parity sign-off (8 D-05-ordered rows; kill-switch row is verified-then-decommissioned, gates /api/emergency-preview deletion not a redirect). Tests run in python:3.12-slim container (host has no pytest, Postgres absent locally).
 - [Phase 09-04]: Declarative react-router-dom 7 router (createBrowserRouter basename /app) in lockstep with Vite base + uvicorn StaticFiles mount (D-07); main.tsx wires QueryClientProvider over RouterProvider + root sonner Toaster; App.tsx boot guard GET /auth/me (200→shell, 401 delegated to the single global onAuthError, no competing redirect — single bounce, D-05/SPA-04); 224px AppShell + Telebot-cyan Sidebar (Overview live, 6 disabled-visible future links, Sign out logout POST) — cyan reserved for wordmark/active/focus only (D-07); THROWAWAY ProbeView proved SC#5 LIVE — useQuery(trading-status, refetchInterval 3000) vs useState input survived ≥2 refetch cycles unclobbered (D-08/SPA-05). Phase 9 manual gate APPROVED by human (cold login no-403, no localStorage token, deep-link reload, single 401 redirect, input survives refetches). Phase 9 complete — ready for verification.
 
 ### Pending Todos
@@ -162,6 +163,8 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-06-07 — Phase 11 Plan 06 (Wave 3 — Overview PAGE-05 + routing/sidebar cutover) COMPLETE. 2 tasks committed atomically (c8293a5 OverviewView, 4d75984 router+sidebar wiring). OverviewView composes the embedded PositionsView (SC#3 inherited), per-account cards, TRADING PAUSED banner, top-5 pending stages (no new endpoint), and an /emergency entry. /app index now lands on Overview; Positions + Settings are live NavLinks; /app/settings preserved. npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 6 plans shipped: PAGE-05/06/07/08 + SUX). Phase 10 still has its live-DB human verification gate outstanding; Phase 11 has its own wave-merge MANUAL browser gate (VPS + MT5 demo).
+Last activity: 2026-06-07 — Phase 12 Plan 01 (Wave-0 cutover guards) COMPLETE. 3 tasks committed atomically (b7e9a88 test_cutover_redirects.py CUT-02 guard, 109af05 test_post_teardown.py CUT-03 guard, 789617c 12-CUTOVER-CHECKLIST.md D-04 sign-off). CUT-01 confirmed by existing routing (zero code change). Guards intentionally RED per-row until 12-02/12-03; collect-clean (16 items) verified in python:3.12 container. Next: Plan 12-02 (per-page redirect cutover — each D-01 commit turns one cutover-test row green + signs one checklist row, gated on MT5-demo parity). Resume file: .planning/phases/12-parallel-run-cutover-htmx-decommission/12-02-PLAN.md.
+
+Prior: Phase 11 Plan 06 (Wave 3 — Overview PAGE-05 + routing/sidebar cutover) COMPLETE. 2 tasks committed atomically (c8293a5 OverviewView, 4d75984 router+sidebar wiring). OverviewView composes the embedded PositionsView (SC#3 inherited), per-account cards, TRADING PAUSED banner, top-5 pending stages (no new endpoint), and an /emergency entry. /app index now lands on Overview; Positions + Settings are live NavLinks; /app/settings preserved. npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 6 plans shipped: PAGE-05/06/07/08 + SUX). Phase 10 still has its live-DB human verification gate outstanding; Phase 11 has its own wave-merge MANUAL browser gate (VPS + MT5 demo).
 Resume file: .planning/phases/12-parallel-run-cutover-htmx-decommission/12-CONTEXT.md
 Next action: (a) wave-merge MANUAL browser verification on VPS + MT5 demo (TRADING PAUSED banner, account-card/positions/pending-stages parity vs legacy /, SC#3 open modal/drilldown survives ≥2 refetch cycles) + full gate `pytest tests/ -x && cd frontend && npm run build && npx vitest run`; then (b) Phase 12 — parallel-run cutover + HTMX decommission; and/or (c) complete Phase 10's live-DB human verification gate via /gsd-verify-work 10.

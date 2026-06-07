@@ -57,7 +57,7 @@
 
 ### CUT — Cutover
 
-- [ ] **CUT-01**: The SPA and the legacy HTMX dashboard run in parallel behind nginx (e.g. `/app` for the SPA, `/` for legacy) so cutover is incremental and reversible
+- [x] **CUT-01**: The SPA and the legacy HTMX dashboard run in parallel behind nginx (e.g. `/app` for the SPA, `/` for legacy) so cutover is incremental and reversible
 - [ ] **CUT-02**: Each page is cut over individually; a legacy HTMX route is decommissioned only after its React replacement is verified at parity against the MT5 demo
 - [ ] **CUT-03**: After full cutover, the HTMX/Jinja templates, Tailwind standalone-CLI build stage, and Basecoat vendor assets are removed
 
@@ -116,7 +116,7 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 | SUX-02 | Phase 11 | Complete |
 | SUX-03 | Phase 11 | Complete |
 | SUX-04 | Phase 11 | Complete |
-| CUT-01 | Phase 12 | Pending |
+| CUT-01 | Phase 12 | Complete (12-01) |
 | CUT-02 | Phase 12 | Pending |
 | CUT-03 | Phase 12 | Pending |
 

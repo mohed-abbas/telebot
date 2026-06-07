@@ -280,7 +280,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 12-01-PLAN.md — Wave-0 guards + CUT-01 confirm: `test_cutover_redirects.py` (303-target per page), `test_post_teardown.py` (deleted-404/surviving-200/import-api), `12-CUTOVER-CHECKLIST.md` (8 D-05-ordered parity rows); confirm parallel-run satisfied by Phase 9 (no code) (CUT-01)
+- [x] 12-01-PLAN.md — Wave-0 guards + CUT-01 confirm: `test_cutover_redirects.py` (303-target per page), `test_post_teardown.py` (deleted-404/surviving-200/import-api), `12-CUTOVER-CHECKLIST.md` (8 D-05-ordered parity rows); confirm parallel-run satisfied by Phase 9 (no code) (CUT-01) — COMPLETE 2026-06-07
 
 **Wave 2** *(blocked on 12-01)*
 
@@ -307,4 +307,4 @@ Plans:
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
 | 11. Live-money Pages + Settings | 6/6 | Complete    | 2026-06-07 |
-| 12. Parallel-run Cutover + HTMX Decommission | 0/3 | Planned | - |
+| 12. Parallel-run Cutover + HTMX Decommission | 1/3 | In progress | - |
