@@ -396,13 +396,13 @@ async def overview(request: Request, user: str = Depends(_verify_auth)):
 
 @app.get("/positions", response_class=HTMLResponse)
 async def positions_page(request: Request, user: str = Depends(_verify_auth)):
-    positions = await _get_all_positions()
-    return templates.TemplateResponse("positions.html", {
-        "request": request,
-        "positions": positions,
-        "page": "positions",
-        "page_title": "Open Positions",
-    })
+    """CUT-02 (D-01): legacy positions page cut over to the SPA (303 to /app/positions).
+
+    Live-money control surface (close / modify levels / partial-close) —
+    Depends(_verify_auth) retained so an unauth hit bounces to login before
+    reaching the SPA. Route deleted wholesale in 12-03.
+    """
+    return RedirectResponse(url="/app/positions", status_code=303)
 
 
 @app.get("/history", response_class=HTMLResponse)

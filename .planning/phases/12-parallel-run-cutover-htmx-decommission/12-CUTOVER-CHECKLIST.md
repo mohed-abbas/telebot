@@ -57,7 +57,7 @@ result: code complete + guard green locally 2026-06-07; live sign-off DEFERRED t
 
 ### 7. positions SPA matches legacy on live data
 expected: SPA /app/positions data matches legacy /positions on live data; live-money actions behave correctly against the demo broker (close / modify levels / partial-close); no console errors; poll-safe modals/drilldowns
-result: [pending — sign: YYYY-MM-DD operator]
+result: code complete + guard green locally 2026-06-07; live sign-off DEFERRED to VPS end-to-end acceptance
 
 ### 8. kill-switch verified-then-decommissioned (NO legacy GET page)
 expected: SPA kill-switch (/app/emergency) data matches legacy kill_switch_preview on live data; live-money kill-switch action behaves correctly against the demo broker (drains pending stages then closes positions, resume never un-cancels); no console errors; poll-safe modals/drilldowns. NOTE: the kill switch has NO legacy GET page to redirect — this row is verified-then-decommissioned: its sign-off gates the 12-03 Commit-1 deletion of /api/emergency-preview, not a per-page redirect.
