@@ -2,16 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: ready_to_plan
-last_updated: 2026-06-07T19:08:06.761Z
-last_activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routing/sidebar cutover) — Phase 11 feature-complete
+status: planning
+last_updated: "2026-06-07T19:33:00.058Z"
+last_activity: 2026-06-07
 progress:
   total_phases: 8
   completed_phases: 7
-  total_plans: 39
-  completed_plans: 52
+  total_plans: 38
+  completed_plans: 39
   percent: 88
-stopped_at: Phase 11 complete (6/6) — ready to discuss Phase 12
 ---
 
 # Project State
@@ -164,5 +163,5 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last activity: 2026-06-07 — Phase 11 Plan 06 (Wave 3 — Overview PAGE-05 + routing/sidebar cutover) COMPLETE. 2 tasks committed atomically (c8293a5 OverviewView, 4d75984 router+sidebar wiring). OverviewView composes the embedded PositionsView (SC#3 inherited), per-account cards, TRADING PAUSED banner, top-5 pending stages (no new endpoint), and an /emergency entry. /app index now lands on Overview; Positions + Settings are live NavLinks; /app/settings preserved. npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 6 plans shipped: PAGE-05/06/07/08 + SUX). Phase 10 still has its live-DB human verification gate outstanding; Phase 11 has its own wave-merge MANUAL browser gate (VPS + MT5 demo).
-Resume file: —
+Resume file: .planning/phases/12-parallel-run-cutover-htmx-decommission/12-CONTEXT.md
 Next action: (a) wave-merge MANUAL browser verification on VPS + MT5 demo (TRADING PAUSED banner, account-card/positions/pending-stages parity vs legacy /, SC#3 open modal/drilldown survives ≥2 refetch cycles) + full gate `pytest tests/ -x && cd frontend && npm run build && npx vitest run`; then (b) Phase 12 — parallel-run cutover + HTMX decommission; and/or (c) complete Phase 10's live-DB human verification gate via /gsd-verify-work 10.
