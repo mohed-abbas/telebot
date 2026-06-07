@@ -52,7 +52,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: SPA Scaffold + Auth + Design System** - Stand up the Vite 8 + React 19 + Tailwind v4 + shadcn SPA served same-origin behind nginx, with session-cookie auth, global 401 redirect, and the TanStack-Query/local-form-state split that structurally kills the refresh-race bug class. No pages yet. (completed 2026-06-06)
 - [x] **Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)** - Migrate the four no-live-money-action pages to the SPA at parity, starting with analytics as the read-only pipeline pilot. (completed 2026-06-06)
 - [x] **Phase 11: Live-money Pages + Settings** - Migrate overview, positions (4 destructive actions), kill switch, and settings (folds SEED-001) using server-confirmed mutations only, disabled-while-pending, CSRF on every mutation, and client-side zod hard-cap mirroring. (all 6 plans shipped 2026-06-07; pending wave-merge MANUAL browser verification on VPS + MT5 demo)
-- [ ] **Phase 12: Parallel-run Cutover + HTMX Decommission** - Run SPA and legacy HTMX in parallel behind nginx; cut over page-by-page gated on MT5-demo-verified parity; then remove HTMX/Jinja templates, the Tailwind standalone-CLI stage, and Basecoat vendor assets.
+- [x] **Phase 12: Parallel-run Cutover + HTMX Decommission** - Run SPA and legacy HTMX in parallel behind nginx; cut over page-by-page gated on MT5-demo-verified parity; then remove HTMX/Jinja templates, the Tailwind standalone-CLI stage, and Basecoat vendor assets. (CUT-01/02/03 code-complete 2026-06-08; HTMX/Jinja stack decommissioned; single live MT5-demo parity bake + operator GO DEFERRED to one end-to-end VPS acceptance — deploy-at-end)
 
 ## Phase Details
 
@@ -288,7 +288,7 @@ Plans:
 
 **Wave 3** *(blocked on 12-02; gated behind 7-day bake + operator GO)*
 
-- [ ] 12-03-PLAN.md — HTMX teardown in 4 grouped commits (dashboard.py surgery keeping the 6 api/-imported helpers + `_verify_auth`→`/app/login`; templates/+Basecoat+JS-bridge; Dockerfile Stage-1+Stage-3-COPY-fix+nginx-SSE; HTMX test prune); bake-gated, autonomous: false (CUT-03)
+- [x] 12-03-PLAN.md — HTMX teardown in 4 grouped commits (dashboard.py surgery keeping the 6 api/-imported helpers + `_verify_auth`→`/app/login`; templates/+Basecoat+JS-bridge; Dockerfile Stage-1+Stage-3-COPY-fix+nginx-SSE; HTMX test prune); bake-gated, autonomous: false (CUT-03) — COMPLETE 2026-06-08 (143b7f0/e14e11f/35b4d4f/7cf93d0; import dashboard+api OK, docker build green, SPA build green; deploy-at-end: 7-day live bake + operator GO deferred to one VPS end-to-end acceptance)
 **UI hint**: yes
 
 ## Progress

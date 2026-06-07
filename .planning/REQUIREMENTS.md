@@ -59,7 +59,7 @@
 
 - [x] **CUT-01**: The SPA and the legacy HTMX dashboard run in parallel behind nginx (e.g. `/app` for the SPA, `/` for legacy) so cutover is incremental and reversible
 - [~] **CUT-02**: Each page is cut over individually; a legacy HTMX route is decommissioned only after its React replacement is verified at parity against the MT5 demo — CODE-COMPLETE (12-02: all 7 pages 303→/app/<page> + root flip, one commit each, D-05 order); live MT5-demo parity sign-off DEFERRED to single VPS end-to-end acceptance (deploy-at-end)
-- [ ] **CUT-03**: After full cutover, the HTMX/Jinja templates, Tailwind standalone-CLI build stage, and Basecoat vendor assets are removed
+- [x] **CUT-03**: After full cutover, the HTMX/Jinja templates, Tailwind standalone-CLI build stage, and Basecoat vendor assets are removed — COMPLETE (12-03: 4 grouped revertable commits; dashboard.py reduced to wiring keeping the 6 api/-imported helpers; templates/+Basecoat+HTMX-bridge + Dockerfile Stage-1+nginx-SSE removed; docker build + SPA build + post-teardown guard green; live VPS bake/GO deferred — deploy-at-end)
 
 ---
 
@@ -118,7 +118,7 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 | SUX-04 | Phase 11 | Complete |
 | CUT-01 | Phase 12 | Complete (12-01) |
 | CUT-02 | Phase 12 | Code-complete (12-02; live VPS parity sign-off deferred) |
-| CUT-03 | Phase 12 | Pending |
+| CUT-03 | Phase 12 | Complete (12-03; live VPS bake/GO deferred) |
 
 **Coverage:** 25/25 v1.2 requirements mapped, no orphans, no duplicates.
 
