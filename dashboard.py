@@ -386,26 +386,12 @@ async def root(request: Request, user: str = Depends(_verify_auth)):
 
 @app.get("/overview", response_class=HTMLResponse)
 async def overview(request: Request, user: str = Depends(_verify_auth)):
-    accounts_data = await _get_accounts_overview()
-    # D-32: initial server-render of the pending-stages top-5 card (SSE then
-    # takes over). If positions lookup fails, fall back to empty list — the
-    # partial's empty-state renders correctly and SSE populates on first tick.
-    try:
-        positions = await _get_all_positions()
-        raw_stages = await db.get_pending_stages(limit=5)
-        stages = [_enrich_stage_for_ui(s, positions) for s in raw_stages]
-    except Exception:  # pragma: no cover — defensive for overview render
-        stages = []
-    return templates.TemplateResponse("overview.html", {
-        "request": request,
-        "accounts": accounts_data,
-        "trading_enabled": _settings.trading_enabled if _settings else False,
-        "dry_run": _settings.trading_dry_run if _settings else True,
-        "trading_paused": _executor._trading_paused if _executor else False,
-        "stages": stages,
-        "page": "overview",
-        "page_title": "Overview",
-    })
+    """CUT-02 (D-01): legacy overview page cut over to the SPA (303 to /app/overview).
+
+    Live-money landing surface — Depends(_verify_auth) retained so an unauth hit
+    bounces to login before reaching the SPA. Route deleted wholesale in 12-03.
+    """
+    return RedirectResponse(url="/app/overview", status_code=303)
 
 
 @app.get("/positions", response_class=HTMLResponse)
