@@ -284,7 +284,7 @@ Plans:
 
 **Wave 2** *(blocked on 12-01)*
 
-- [ ] 12-02-PLAN.md — Per-page cutover: `RedirectResponse('/app/<page>', 303)` one commit each in D-05 order (analytics→…→positions), kill-switch verified-only, root `/` flips LAST; gated on per-page MT5-demo parity sign-off (autonomous: false) (CUT-02)
+- [x] 12-02-PLAN.md — Per-page cutover: `RedirectResponse('/app/<page>', 303)` one commit each in D-05 order (analytics→…→positions), kill-switch verified-only, root `/` flips LAST; gated on per-page MT5-demo parity sign-off (autonomous: false) (CUT-02) — COMPLETE 2026-06-07 (deploy-at-end: live parity sign-off deferred to single VPS end-to-end acceptance)
 
 **Wave 3** *(blocked on 12-02; gated behind 7-day bake + operator GO)*
 
