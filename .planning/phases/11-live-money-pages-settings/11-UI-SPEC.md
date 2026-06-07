@@ -73,7 +73,8 @@ created: 2026-06-07
 
 ## Spacing Scale
 
-8-point scale, inherited verbatim from Phase 9 (Tailwind v4 `0.25rem` step; all multiples of 4):
+8-point design-token scale, inherited verbatim from Phase 9 (Tailwind v4 `0.25rem` step;
+**all 7 tokens are multiples of 4** — this is the complete spacing-token contract):
 
 | Token | Value | Usage in Phase 11 |
 |-------|-------|-------------------|
@@ -85,12 +86,23 @@ created: 2026-06-07
 | 2xl | 48px | Major section breaks (Overview sections: positions / pending-stages / kill-switch) |
 | 3xl | 64px | Page-level spacing (rare) |
 
-**Exceptions:**
-- **Interactive touch targets:** min **40px** height (nav rows, primary/destructive buttons,
-  mobile drawer links) — matches Phase 9 / legacy `min-h-10`. The default shadcn button is
-  `h-9` (36px); live-money destructive buttons (Close, CONFIRM CLOSE ALL, Confirm change)
-  must use `size="default"` or larger to keep a comfortable tap target.
-- **Table cell vertical padding:** `py-3` (12px) for data density (inherited `DataTable`).
+**Implementation-level Tailwind class choices (NOT design tokens — documented for the
+executor, explicitly OUTSIDE the 7-token scale above):**
+
+These two values are concrete component-level utility choices inherited from Phase 9 /
+the legacy templates. They are **not** part of the spacing-token contract — the checker
+should validate only the 7 tokens above. They are recorded here purely so the executor
+reproduces the established density and tap-target behavior:
+
+- **`py-3` (12px) table cell vertical padding** — a `DataTable` density choice inherited
+  from Phase 10. It is a fixed component utility, not a reusable spacing token, and must
+  not be treated as one.
+- **`min-h-10` (40px) interactive touch-target minimum** — a component-level minimum
+  height for nav rows, primary/destructive buttons, and mobile drawer links (matches
+  Phase 9 / legacy `min-h-10`). The default shadcn button is `h-9` (36px); live-money
+  destructive buttons (Close, CONFIRM CLOSE ALL, Confirm change) must use `size="default"`
+  or larger to clear this minimum. This is an accessibility/ergonomics floor, not a
+  spacing-scale step.
 
 ---
 
@@ -157,6 +169,26 @@ The **compounded-exposure footgun warning (SUX-02 / D-06)** renders as an **ambe
 inline note** (not `--destructive` red — it is a caution, not an error, and must not collide
 with field-validation red). Use a warning treatment (e.g. `text-amber-400` + `AlertTriangle`
 lucide icon) distinct from both the cyan accent and the destructive red.
+
+---
+
+## Visual Hierarchy & Focal Point
+
+**Primary screen:** Overview (PAGE-05) — the operator's default live-money landing surface.
+
+**Primary focal point:** the open-positions table headline (its count of open positions +
+the aggregate P&L readout in `--font-mono`, P&L colored green/red by sign). This is the
+first thing the operator's eye should land on — "how many positions are live and am I up or
+down right now."
+
+**Secondary anchor:** the **TRADING PAUSED** banner (red `--destructive` text/border),
+shown above the positions table whenever `trading-status` reports paused. When present it
+escalates above the P&L readout because a paused engine is the most consequential state to
+notice; when absent the open-positions headline is unrivaled as the focal point.
+
+**Tertiary:** the pending-stages card and the **Emergency Kill Switch** entry button sit
+below the fold of attention — reachable but deliberately not competing with the headline
+count/P&L for first-glance attention.
 
 ---
 
@@ -258,7 +290,7 @@ Mirrors the legacy templates (parity baseline) translated to React + operator-le
 | Page / section title | **Emergency Kill Switch** (red) |
 | Warning body | *"This will close ALL positions, cancel ALL pending orders, and pause trading. You must manually re-enable trading afterwards."* |
 | Confirm button (idle / pending) | **CONFIRM CLOSE ALL** / **Closing all…** (`variant="destructive"`, disabled-while-pending) |
-| Cancel button | **Cancel** |
+| Cancel button | **Keep trading active** (returns to the preview / Overview without closing anything — non-destructive escape from the two-step flow) |
 | Resume button (idle / pending) | **Resume Trading** / **Resuming…** (cyan primary) |
 
 ### Settings (PAGE-08 / SUX-04)
@@ -274,11 +306,11 @@ Mirrors the legacy templates (parity baseline) translated to React + operator-le
 | `max_daily_trades` → | **Daily trade limit** |
 | Footgun — percent mode | **AlertTriangle** *"{max_stages} entries at {risk_value}% risks up to {max_stages × risk_value}% per signal."* (amber) |
 | Footgun — fixed_lot mode | **AlertTriangle** *"This sizes up to {risk_value} total lots per signal across {max_stages} entries."* (amber) |
-| Save button | **Save** (opens validate → confirm) |
+| Save button | **Review changes** (opens validate → confirm-diff; deliberately conveys the two-step nature — this does NOT persist) |
 | Confirm modal title | **Confirm settings change — {account}** (revert: **Revert change — {account}**) |
 | Confirm modal body | *"Review the change below. It applies to signals received AFTER you confirm. In-flight staged sequences are unaffected."* |
 | Confirm button (idle / pending) | **Confirm change** / **Saving…** (cyan primary, disabled-while-pending) |
-| Cancel | **Cancel** |
+| Confirm-modal cancel | **Go back** (closes the confirm modal and returns to the editable form with typed values preserved — nothing is persisted or discarded) |
 | Audit section heading | **Recent Changes** |
 | Revert action | **Revert** (per-row; opens revert confirm) |
 | Toast — save success | *"Settings saved for {account}."* |
@@ -294,7 +326,7 @@ Mirrors the legacy templates (parity baseline) translated to React + operator-le
 | Empty state heading | **No open positions** |
 | Empty state body | **Positions will appear here as signals fill.** |
 | Error state | **Something went wrong loading {resource}.** + **Retry** (inline panel) |
-| Destructive confirmations | **Close**: inline "Confirm close #{ticket}?"; **Close lots**: inline confirm; **Emergency Kill Switch**: two-step preview → **CONFIRM CLOSE ALL** |
+| Destructive confirmations | **Close**: inline "Confirm close #{ticket}?"; **Close lots**: inline confirm; **Emergency Kill Switch**: two-step preview → **CONFIRM CLOSE ALL** (escape: **Keep trading active**) |
 
 ---
 
