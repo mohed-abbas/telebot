@@ -243,8 +243,26 @@ Plans:
   4. The emergency kill switch reaches parity with its two-step preview → confirm flow (confirm disabled-while-pending), and partial-close uses absolute target volume + request-id so a double-fire cannot close the wrong amount
   5. Settings reaches parity — per-account form, two-step dangerous-change confirmation rendering a diff, audit timeline, and revert — with viewport-level sonner save/error/revert toasts (SUX-01), per-field help/tooltips including the live compounded-exposure footgun warning (SUX-02), react-hook-form + zod client validation mirroring the server hard-caps including mode-dependent and per-account `risk_value` caps (SUX-03), and operator-legible copywriting on labels/placeholders/confirmation text (SUX-04)
 
-**Plans**: TBD
-**Research flag**: Partial-close API shape change (percent → absolute volume) needs an explicit design note before coding (depends on the idempotency-storage decision locked in Phase 8).
+**Plans**: 6 plans (4 waves)
+Plans:
+**Wave 0**
+
+- [ ] 11-01-PLAN.md — Foundation: install rhf/zod/@hookform/resolvers + vitest + shadcn dialog/tooltip/select/badge/popover; mode-aware footgun.ts + settingsSchema.ts pure fns + their vitest units (SUX-02, SUX-03)
+
+**Wave 1** *(blocked on 11-01)*
+
+- [ ] 11-02-PLAN.md — Live-money mutation hooks: useClose/useLevels/usePartialClose (request_id idempotency, no optimistic) + useEmergency + useSettingsMutations (validate branches on data.valid) (PAGE-06, PAGE-07, PAGE-08, SUX-01)
+
+**Wave 2** *(blocked on 11-01 + 11-02)*
+
+- [ ] 11-03-PLAN.md — Positions page: polling DataTable + inline-confirm Close + combined Edit modal (two independent submits, absolute-lots partial-close, remaining-after) + drilldown, all poll-safe (PAGE-06)
+- [ ] 11-04-PLAN.md — Settings page: rhf+zod form (mode-aware caps/footgun, tooltips) + validate→confirm-diff→confirm + audit timeline + revert-latest + toasts (PAGE-08, SUX-01, SUX-02, SUX-03, SUX-04)
+- [ ] 11-05-PLAN.md — Emergency kill switch: two-step preview→confirm (disabled-while-pending, hidden when nothing to close) + resume (PAGE-07)
+
+**Wave 3** *(blocked on 11-03 + 11-05)*
+
+- [ ] 11-06-PLAN.md — Overview page (multi-source poll + PAUSED banner + account cards + positions + pending-stages + kill-switch entry) + router/sidebar wiring (index→overview, live Positions/Settings) (PAGE-05)
+**Research flag**: RESOLVED — partial-close uses absolute volume + client request_id (Phase 8 D-09/D-10/D-11 shipped). OQ1 revert = single "Revert last change" (API reverts latest-only, no audit_id — no new endpoint). OQ2 overview pending-stages = reuse shipped GET /api/v2/stages top-5.
 **UI hint**: yes
 
 ### Phase 12: Parallel-run Cutover + HTMX Decommission
@@ -276,5 +294,5 @@ Plans:
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
-| 11. Live-money Pages + Settings | 0/TBD | Not started | - |
+| 11. Live-money Pages + Settings | 0/6 | Not started | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
