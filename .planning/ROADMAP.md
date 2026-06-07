@@ -255,9 +255,9 @@ Plans:
 
 **Wave 2** *(blocked on 11-01 + 11-02)*
 
-- [ ] 11-03-PLAN.md — Positions page: polling DataTable + inline-confirm Close + combined Edit modal (two independent submits, absolute-lots partial-close, remaining-after) + drilldown, all poll-safe (PAGE-06)
-- [ ] 11-04-PLAN.md — Settings page: rhf+zod form (mode-aware caps/footgun, tooltips) + validate→confirm-diff→confirm + audit timeline + revert-latest + toasts (PAGE-08, SUX-01, SUX-02, SUX-03, SUX-04)
-- [ ] 11-05-PLAN.md — Emergency kill switch: two-step preview→confirm (disabled-while-pending, hidden when nothing to close) + resume (PAGE-07)
+- [x] 11-03-PLAN.md — Positions page: polling DataTable + inline-confirm Close + combined Edit modal (two independent submits, absolute-lots partial-close, remaining-after) + drilldown, all poll-safe (PAGE-06)
+- [x] 11-04-PLAN.md — Settings page: rhf+zod form (mode-aware caps/footgun, tooltips) + validate→confirm-diff→confirm + audit timeline + revert-latest + toasts (PAGE-08, SUX-01, SUX-02, SUX-03, SUX-04)
+- [x] 11-05-PLAN.md — Emergency kill switch: two-step preview→confirm (disabled-while-pending, hidden when nothing to close) + resume (PAGE-07)
 
 **Wave 3** *(blocked on 11-03 + 11-05)*
 
@@ -294,5 +294,5 @@ Plans:
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
-| 11. Live-money Pages + Settings | 1/6 | In progress | - |
+| 11. Live-money Pages + Settings | 5/6 | In Progress|  |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
