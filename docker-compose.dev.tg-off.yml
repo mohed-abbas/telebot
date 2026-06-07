@@ -1,0 +1,10 @@
+# Dev override: run the dashboard standalone (no bot.py / no Telegram client) so
+# the local stack can't collide with the live VPS TG_SESSION during the Phase-12
+# cutover parity check. Use together with docker-compose.dev.yml:
+#
+#   docker compose -f docker-compose.dev.yml -f docker-compose.dev.tg-off.yml up -d --build telebot
+#
+# Reachable at http://localhost:${DASHBOARD_HOST_PORT:-8090}
+services:
+  telebot:
+    command: ["python", "-u", "dev_dashboard_standalone.py"]
