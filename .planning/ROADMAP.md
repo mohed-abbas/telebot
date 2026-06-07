@@ -276,7 +276,19 @@ Plans:
   2. **Safety invariant — parity gate before decommission**: each legacy HTMX route is removed only after its React replacement is verified at parity against the MT5 demo (SPA numbers match legacy on live data; destructive actions confirmed against the demo broker; CSRF regression test green) — no page is decommissioned on "looks done"
   3. After full cutover the HTMX/Jinja templates directory, the legacy Tailwind standalone-CLI Dockerfile stage, the Basecoat vendor assets, and the `/stream` SSE endpoint (plus its nginx directives) are all removed, and `dashboard.py` is reduced to wiring (accessors + `include_router` + shared middleware)
 
-**Plans**: TBD
+**Plans**: 3 plans (3 waves)
+Plans:
+**Wave 1**
+
+- [ ] 12-01-PLAN.md — Wave-0 guards + CUT-01 confirm: `test_cutover_redirects.py` (303-target per page), `test_post_teardown.py` (deleted-404/surviving-200/import-api), `12-CUTOVER-CHECKLIST.md` (8 D-05-ordered parity rows); confirm parallel-run satisfied by Phase 9 (no code) (CUT-01)
+
+**Wave 2** *(blocked on 12-01)*
+
+- [ ] 12-02-PLAN.md — Per-page cutover: `RedirectResponse('/app/<page>', 303)` one commit each in D-05 order (analytics→…→positions), kill-switch verified-only, root `/` flips LAST; gated on per-page MT5-demo parity sign-off (autonomous: false) (CUT-02)
+
+**Wave 3** *(blocked on 12-02; gated behind 7-day bake + operator GO)*
+
+- [ ] 12-03-PLAN.md — HTMX teardown in 4 grouped commits (dashboard.py surgery keeping the 6 api/-imported helpers + `_verify_auth`→`/app/login`; templates/+Basecoat+JS-bridge; Dockerfile Stage-1+Stage-3-COPY-fix+nginx-SSE; HTMX test prune); bake-gated, autonomous: false (CUT-03)
 **UI hint**: yes
 
 ## Progress
@@ -295,4 +307,4 @@ Plans:
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
 | 11. Live-money Pages + Settings | 6/6 | Complete    | 2026-06-07 |
-| 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
+| 12. Parallel-run Cutover + HTMX Decommission | 0/3 | Planned | - |
