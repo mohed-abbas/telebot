@@ -26,12 +26,12 @@ type NavEntry = { label: string; to?: string; end?: boolean };
 
 const NAV_ENTRIES: readonly NavEntry[] = [
   { label: "Overview", to: "/", end: true },
-  { label: "Positions" },
+  { label: "Positions", to: "/positions" },
   { label: "Trade History", to: "/history" },
   { label: "Signal Log", to: "/signals" },
   { label: "Analytics", to: "/analytics" },
   { label: "Pending Stages", to: "/stages" },
-  { label: "Settings" },
+  { label: "Settings", to: "/settings" },
 ] as const;
 
 const navRowBase =

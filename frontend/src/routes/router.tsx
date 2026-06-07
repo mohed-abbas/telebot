@@ -7,15 +7,19 @@
 //
 // Routes:
 //   /login  → <LoginView/>                       (public; CSRF-seed on mount, no boot guard)
-//   /       → <App/> (boot guard → <AppShell/>)  with an index child that REDIRECTS to the
-//             analytics pilot (Overview is Phase 11 — OQ2). The throwaway ProbeView is removed.
+//   /       → <App/> (boot guard → <AppShell/>)  with an index child that RENDERS Overview
+//             (Phase 11 — OQ2: Overview is now the live-money landing surface; the index no longer
+//             redirects to the analytics pilot). The throwaway ProbeView is removed.
 
-import { Navigate, createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter } from "react-router-dom";
 
 import App from "@/App";
 import { LoginView } from "@/auth/LoginView";
 import { AnalyticsView } from "@/routes/AnalyticsView";
 import { HistoryView } from "@/routes/HistoryView";
+import { KillSwitchView } from "@/routes/KillSwitchView";
+import { OverviewView } from "@/routes/OverviewView";
+import { PositionsView } from "@/routes/PositionsView";
 import { SettingsView } from "@/routes/SettingsView";
 import { SignalsView } from "@/routes/SignalsView";
 import { StagedView } from "@/routes/StagedView";
@@ -33,10 +37,28 @@ export const router = createBrowserRouter(
       element: <App />,
       children: [
         {
-          // Index landing: redirect /app/ to the shipped analytics pilot (Overview is Phase 11 —
-          // OQ2). `replace` keeps /app/ out of the history stack so Back doesn't bounce.
+          // Index landing: /app/ now resolves to Overview — the live-money landing surface (OQ2).
+          // No longer a redirect to the analytics pilot.
           index: true,
-          element: <Navigate to="/analytics" replace />,
+          element: <OverviewView />,
+        },
+        {
+          // PAGE-05 overview. Also reachable explicitly at /app/overview (basename adds the prefix);
+          // the index above renders the same component so /app/ lands here.
+          path: "overview",
+          element: <OverviewView />,
+        },
+        {
+          // PAGE-06 positions. Reachable at /app/positions (basename adds the prefix). 3s-polling
+          // live-money table with per-row Close/Edit/drilldown.
+          path: "positions",
+          element: <PositionsView />,
+        },
+        {
+          // PAGE-07 emergency kill switch. Reachable at /app/emergency (the Overview entry button
+          // navigates here). Two-step preview→CONFIRM CLOSE ALL flow.
+          path: "emergency",
+          element: <KillSwitchView />,
         },
         {
           // PAGE-01 analytics pilot. Path written WITHOUT the /app prefix (basename adds it) →
