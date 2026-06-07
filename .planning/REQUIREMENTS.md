@@ -44,16 +44,16 @@
 - [ ] **PAGE-03**: History page reaches parity on the SPA, including trade-history filters
 - [ ] **PAGE-04**: Staged-entries page reaches parity on the SPA (pending stages per account)
 - [x] **PAGE-05**: Overview page reaches parity on the SPA with live polling
-- [ ] **PAGE-06**: Positions page reaches parity with safe live-money actions — close, modify SL+TP, partial-close — using server-confirmed mutations only (no optimistic clear), disabled-while-pending, and error toasts
-- [ ] **PAGE-07**: Emergency kill switch reaches parity on the SPA with its two-step preview → confirm flow
-- [ ] **PAGE-08**: Settings page reaches parity on the SPA — per-account form, two-step dangerous-change confirmation with diff, audit timeline, and revert
+- [x] **PAGE-06**: Positions page reaches parity with safe live-money actions — close, modify SL+TP, partial-close — using server-confirmed mutations only (no optimistic clear), disabled-while-pending, and error toasts
+- [x] **PAGE-07**: Emergency kill switch reaches parity on the SPA with its two-step preview → confirm flow
+- [x] **PAGE-08**: Settings page reaches parity on the SPA — per-account form, two-step dangerous-change confirmation with diff, audit timeline, and revert
 
 ### SUX — Settings UX (folds SEED-001)
 
-- [ ] **SUX-01**: Settings actions surface viewport-level save and error toasts (sonner) — success on confirm, explicit rejection on validation failure, revert confirmation
-- [ ] **SUX-02**: Each settings field has inline help/tooltip describing what it controls, its units, recommended range, and its footgun (e.g. live compounded-exposure warning when `max_stages` × `risk_value` is high)
-- [ ] **SUX-03**: Client-side validation (react-hook-form + zod) mirrors the server hard-caps, including the mode-dependent and per-account `risk_value` caps
-- [ ] **SUX-04**: Copywriting pass on labels, placeholders, and confirmation-modal text for operator legibility (DB-column names → operator mental models with units)
+- [x] **SUX-01**: Settings actions surface viewport-level save and error toasts (sonner) — success on confirm, explicit rejection on validation failure, revert confirmation
+- [x] **SUX-02**: Each settings field has inline help/tooltip describing what it controls, its units, recommended range, and its footgun (e.g. live compounded-exposure warning when `max_stages` × `risk_value` is high)
+- [x] **SUX-03**: Client-side validation (react-hook-form + zod) mirrors the server hard-caps, including the mode-dependent and per-account `risk_value` caps
+- [x] **SUX-04**: Copywriting pass on labels, placeholders, and confirmation-modal text for operator legibility (DB-column names → operator mental models with units)
 
 ### CUT — Cutover
 
@@ -109,13 +109,13 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 | PAGE-03 | Phase 10 | Pending |
 | PAGE-04 | Phase 10 | Pending |
 | PAGE-05 | Phase 11 | Complete |
-| PAGE-06 | Phase 11 | Pending |
-| PAGE-07 | Phase 11 | Pending |
-| PAGE-08 | Phase 11 | Pending |
-| SUX-01 | Phase 11 | Pending |
-| SUX-02 | Phase 11 | Pending |
-| SUX-03 | Phase 11 | Pending |
-| SUX-04 | Phase 11 | Pending |
+| PAGE-06 | Phase 11 | Complete |
+| PAGE-07 | Phase 11 | Complete |
+| PAGE-08 | Phase 11 | Complete |
+| SUX-01 | Phase 11 | Complete |
+| SUX-02 | Phase 11 | Complete |
+| SUX-03 | Phase 11 | Complete |
+| SUX-04 | Phase 11 | Complete |
 | CUT-01 | Phase 12 | Pending |
 | CUT-02 | Phase 12 | Pending |
 | CUT-03 | Phase 12 | Pending |

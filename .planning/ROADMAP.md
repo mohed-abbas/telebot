@@ -294,5 +294,5 @@ Plans:
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
-| 11. Live-money Pages + Settings | 6/6 | Complete (pending wave-merge browser gate) | 2026-06-07 |
+| 11. Live-money Pages + Settings | 6/6 | Complete    | 2026-06-07 |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |

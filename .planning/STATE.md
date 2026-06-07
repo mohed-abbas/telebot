@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: executing
-last_updated: "2026-06-07T20:00:00.000Z"
+status: ready_to_plan
+last_updated: 2026-06-07T19:08:06.761Z
 last_activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routing/sidebar cutover) — Phase 11 feature-complete
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 39
-  completed_plans: 39
-  percent: 95
+  completed_plans: 52
+  percent: 88
+stopped_at: Phase 11 complete (6/6) — ready to discuss Phase 12
 ---
 
 # Project State
@@ -20,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 11 — live-money-pages-settings
+**Current focus:** Phase 12 — parallel run cutover + htmx decommission
 
 ## Current Position
 
-Phase: 11 (live-money-pages-settings) — FEATURE-COMPLETE (all 6 plans shipped)
-Plan: 6 of 6 (11-01..11-06 complete)
-Status: Phase 11 complete — pending wave-merge MANUAL browser verification (VPS + MT5 demo)
-Last activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routing/sidebar cutover)
+Phase: 12
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-07
 
 ## v1.2 Milestone Map
 
@@ -69,7 +70,7 @@ Last activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routi
 
 **Velocity:**
 
-- Total plans completed: 9 (v1.2)
+- Total plans completed: 15 (v1.2)
 - Average duration: —
 - Total execution time: 0 hours
 
@@ -79,6 +80,7 @@ Last activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routi
 |-------|-------|-------|----------|
 | 08 | 5 | - | - |
 | 09 | 4 | - | - |
+| 11 | 6 | - | - |
 
 **Recent Trend (v1.0/v1.1 carryover):**
 
