@@ -552,21 +552,12 @@ def _label_resolved_stage(r: dict) -> dict:
 
 @app.get("/staged", response_class=HTMLResponse)
 async def staged_page(request: Request, user: str = Depends(_verify_auth)):
-    """D-32: full-page view of all active sequences + collapsed 'Recently resolved'."""
-    positions = await _get_all_positions()
-    raw_active = await db.get_pending_stages()  # no limit — all rows
-    active = [_enrich_stage_for_ui(s, positions) for s in raw_active]
-    resolved = await db.get_recently_resolved_stages(limit=50)
-    resolved_labeled = [_label_resolved_stage(r) for r in resolved]
-    return templates.TemplateResponse("staged.html", {
-        "request": request,
-        "active": active,
-        "resolved": resolved_labeled,
-        "trading_enabled": _settings.trading_enabled if _settings else False,
-        "dry_run": _settings.trading_dry_run if _settings else True,
-        "page": "staged",
-        "page_title": "Pending Stages",
-    })
+    """CUT-02 (D-01): legacy staged page cut over to the SPA (303 to /app/staged).
+
+    Depends(_verify_auth) retained so an unauth hit bounces to login first.
+    Route deleted wholesale in 12-03.
+    """
+    return RedirectResponse(url="/app/staged", status_code=303)
 
 
 @app.get("/partials/pending_stages", response_class=HTMLResponse)

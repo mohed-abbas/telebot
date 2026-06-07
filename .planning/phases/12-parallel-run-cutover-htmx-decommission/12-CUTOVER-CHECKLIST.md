@@ -45,7 +45,7 @@ result: code complete + guard green locally 2026-06-07; live sign-off DEFERRED t
 
 ### 4. staged SPA matches legacy on live data
 expected: SPA /app/staged data matches legacy /staged on live data; live-money actions behave correctly against the demo broker; no console errors; poll-safe modals/drilldowns
-result: [pending — sign: YYYY-MM-DD operator]
+result: code complete + guard green locally 2026-06-07; live sign-off DEFERRED to VPS end-to-end acceptance
 
 ### 5. overview SPA matches legacy on live data
 expected: SPA /app/overview data matches legacy /overview on live data; live-money actions behave correctly against the demo broker; no console errors; poll-safe modals/drilldowns
