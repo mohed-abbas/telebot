@@ -247,7 +247,7 @@ Plans:
 Plans:
 **Wave 0**
 
-- [ ] 11-01-PLAN.md — Foundation: install rhf/zod/@hookform/resolvers + vitest + shadcn dialog/tooltip/select/badge/popover; mode-aware footgun.ts + settingsSchema.ts pure fns + their vitest units (SUX-02, SUX-03)
+- [x] 11-01-PLAN.md — Foundation: install rhf/zod/@hookform/resolvers + vitest + shadcn dialog/tooltip/select/badge/popover; mode-aware footgun.ts + settingsSchema.ts pure fns + their vitest units (SUX-02, SUX-03)
 
 **Wave 1** *(blocked on 11-01)*
 
@@ -294,5 +294,5 @@ Plans:
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
-| 11. Live-money Pages + Settings | 0/6 | Not started | - |
+| 11. Live-money Pages + Settings | 1/6 | In progress | - |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |
