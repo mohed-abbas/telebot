@@ -381,7 +381,13 @@ async def logout(request: Request):
 
 @app.get("/", response_class=HTMLResponse)
 async def root(request: Request, user: str = Depends(_verify_auth)):
-    return RedirectResponse(url="/overview")
+    """CUT-02 (D-02): root flips to the SPA LAST, after every page is cut over.
+
+    Was RedirectResponse(url="/overview"); now 303s to /app/ so the default
+    landing surface is the SPA. Depends(_verify_auth) retained so an unauth hit
+    bounces to login first.
+    """
+    return RedirectResponse(url="/app/", status_code=303)
 
 
 @app.get("/overview", response_class=HTMLResponse)
