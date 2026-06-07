@@ -51,7 +51,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 8: JSON API Foundation** - Refactor `dashboard.py`'s HTML-fragment endpoints into a versioned, curl/pytest-testable JSON API (`/api/v2`) with Pydantic models, double-submit CSRF, server-side number/timestamp formatting, and idempotent partial-close. Bot core untouched. (completed 2026-06-03)
 - [x] **Phase 9: SPA Scaffold + Auth + Design System** - Stand up the Vite 8 + React 19 + Tailwind v4 + shadcn SPA served same-origin behind nginx, with session-cookie auth, global 401 redirect, and the TanStack-Query/local-form-state split that structurally kills the refresh-race bug class. No pages yet. (completed 2026-06-06)
 - [x] **Phase 10: Read-only Page Migration (analytics pilot → signals → history → staged)** - Migrate the four no-live-money-action pages to the SPA at parity, starting with analytics as the read-only pipeline pilot. (completed 2026-06-06)
-- [ ] **Phase 11: Live-money Pages + Settings** - Migrate overview, positions (4 destructive actions), kill switch, and settings (folds SEED-001) using server-confirmed mutations only, disabled-while-pending, CSRF on every mutation, and client-side zod hard-cap mirroring.
+- [x] **Phase 11: Live-money Pages + Settings** - Migrate overview, positions (4 destructive actions), kill switch, and settings (folds SEED-001) using server-confirmed mutations only, disabled-while-pending, CSRF on every mutation, and client-side zod hard-cap mirroring. (all 6 plans shipped 2026-06-07; pending wave-merge MANUAL browser verification on VPS + MT5 demo)
 - [ ] **Phase 12: Parallel-run Cutover + HTMX Decommission** - Run SPA and legacy HTMX in parallel behind nginx; cut over page-by-page gated on MT5-demo-verified parity; then remove HTMX/Jinja templates, the Tailwind standalone-CLI stage, and Basecoat vendor assets.
 
 ## Phase Details
@@ -261,7 +261,7 @@ Plans:
 
 **Wave 3** *(blocked on 11-03 + 11-05)*
 
-- [ ] 11-06-PLAN.md — Overview page (multi-source poll + PAUSED banner + account cards + positions + pending-stages + kill-switch entry) + router/sidebar wiring (index→overview, live Positions/Settings) (PAGE-05)
+- [x] 11-06-PLAN.md — Overview page (multi-source poll + PAUSED banner + account cards + positions + pending-stages + kill-switch entry) + router/sidebar wiring (index→overview, live Positions/Settings) (PAGE-05)
 **Research flag**: RESOLVED — partial-close uses absolute volume + client request_id (Phase 8 D-09/D-10/D-11 shipped). OQ1 revert = single "Revert last change" (API reverts latest-only, no audit_id — no new endpoint). OQ2 overview pending-stages = reuse shipped GET /api/v2/stages top-5.
 **UI hint**: yes
 
@@ -294,5 +294,5 @@ Plans:
 | 8. JSON API Foundation | 5/5 | Complete   | 2026-06-03 |
 | 9. SPA Scaffold + Auth + Design System | 4/4 | Complete   | 2026-06-06 |
 | 10. Read-only Page Migration | 6/6 | Complete   | 2026-06-06 |
-| 11. Live-money Pages + Settings | 5/6 | In Progress|  |
+| 11. Live-money Pages + Settings | 6/6 | Complete (pending wave-merge browser gate) | 2026-06-07 |
 | 12. Parallel-run Cutover + HTMX Decommission | 0/TBD | Not started | - |

@@ -43,7 +43,7 @@
 - [ ] **PAGE-02**: Signals page reaches parity on the SPA
 - [ ] **PAGE-03**: History page reaches parity on the SPA, including trade-history filters
 - [ ] **PAGE-04**: Staged-entries page reaches parity on the SPA (pending stages per account)
-- [ ] **PAGE-05**: Overview page reaches parity on the SPA with live polling
+- [x] **PAGE-05**: Overview page reaches parity on the SPA with live polling
 - [ ] **PAGE-06**: Positions page reaches parity with safe live-money actions — close, modify SL+TP, partial-close — using server-confirmed mutations only (no optimistic clear), disabled-while-pending, and error toasts
 - [ ] **PAGE-07**: Emergency kill switch reaches parity on the SPA with its two-step preview → confirm flow
 - [ ] **PAGE-08**: Settings page reaches parity on the SPA — per-account form, two-step dangerous-change confirmation with diff, audit timeline, and revert
@@ -108,7 +108,7 @@ These are not v1.2 requirements but remain open outstanding items (tracked in ST
 | PAGE-02 | Phase 10 | Pending |
 | PAGE-03 | Phase 10 | Pending |
 | PAGE-04 | Phase 10 | Pending |
-| PAGE-05 | Phase 11 | Pending |
+| PAGE-05 | Phase 11 | Complete |
 | PAGE-06 | Phase 11 | Pending |
 | PAGE-07 | Phase 11 | Pending |
 | PAGE-08 | Phase 11 | Pending |

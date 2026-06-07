@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-07T17:30:00.000Z"
-last_activity: 2026-06-07 -- Phase 11 Plan 02 complete (5 live-money mutation hooks)
+last_updated: "2026-06-07T20:00:00.000Z"
+last_activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routing/sidebar cutover) — Phase 11 feature-complete
 progress:
   total_phases: 8
-  completed_phases: 6
-  total_plans: 38
-  completed_plans: 35
-  percent: 79
+  completed_phases: 7
+  total_plans: 39
+  completed_plans: 39
+  percent: 95
 ---
 
 # Project State
@@ -24,10 +24,10 @@ See: .planning/PROJECT.md (updated 2026-06-01)
 
 ## Current Position
 
-Phase: 11 (live-money-pages-settings) — EXECUTING
-Plan: 3 of 6 (11-01, 11-02 complete)
-Status: Executing Phase 11
-Last activity: 2026-06-07 -- Phase 11 Plan 02 complete (5 live-money mutation hooks)
+Phase: 11 (live-money-pages-settings) — FEATURE-COMPLETE (all 6 plans shipped)
+Plan: 6 of 6 (11-01..11-06 complete)
+Status: Phase 11 complete — pending wave-merge MANUAL browser verification (VPS + MT5 demo)
+Last activity: 2026-06-07 -- Phase 11 Plan 06 complete (Overview PAGE-05 + routing/sidebar cutover)
 
 ## v1.2 Milestone Map
 
@@ -107,6 +107,7 @@ Last activity: 2026-06-07 -- Phase 11 Plan 02 complete (5 live-money mutation ho
 | Phase 09 P04 | 12min | 3 tasks | 6 files |
 | Phase 11 P01 | 3min | 3 tasks | 12 files |
 | Phase 11 P02 | 2min | 2 tasks | 5 files |
+| Phase 11 P06 | 12min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,7 @@ Recent decisions affecting current work:
 - [Phase 09-03]: Single api() fetch wrapper echoes telebot_csrf as X-CSRF-Token on mutations only + credentials:same-origin + throws HttpError on non-2xx (D-04/D-06); one global onAuthError on QueryCache+MutationCache hard-navs to /app/login with loop-break (SPA-04); QueryClient inherited defaults keepPreviousData + refetchIntervalInBackground:false, staleTime:1000, retry:false (D-09); login view seeds CSRF on mount (Pitfall 5) and submits {password, csrf_token} only; zero auth token in browser storage (SPA-03)
 - [Phase 11-01]: Phase 11 foundation shipped — react-hook-form ^7.77 + zod ^4 (v4 API, resolver import `@hookform/resolvers/zod`) + @hookform/resolvers ^5 + vitest (node env, not jsdom); 5 shadcn components (dialog/tooltip/select/badge/popover) verified opaque on dark brand (Pitfall-9 gate Playwright-confirmed: DialogContent oklch(0.12 0.02 275), SelectContent oklch(0.17 0.03 275)). footgun() mode-aware (percent multiplies risk_value×max_stages; fixed_lot does NOT — riskValue is TOTAL across stages, Pitfall 6); makeSettingsSchema(maxLotSize) mirrors server caps (percent ≤5.0, fixed_lot ≤ per-account max_lot_size, ints 1-10/1-500/1-100, no cap on read-only max_open_trades — SUX-03). Package legitimacy T-11-SC approved (0 vulns, no postinstall hooks). Both pure fns vitest-proven (15 tests green).
 - [Phase 11-02]: Five live-money mutation hooks shipped (frontend/src/hooks/) — useClose/useLevels/usePartialClose (PAGE-06), useEmergency (PAGE-07), useSettingsMutations (PAGE-08/SUX-01). Money-safe discipline baked in once: api()-only CSRF (no raw fetch — Pitfall 2/T-11-03), NO setQueryData (SC#1/Pitfall 1 — UI re-derives via invalidateQueries onSuccess), 401 handled by inherited global onAuthError, errors via shared errorMessage() into sonner (T-11-06). usePartialClose: absolute close_volume (D-04, no percent) + request_id useRef(crypto.randomUUID) reused on pure retries + regenerateRequestId on amount change + HttpError 409 → specific toast (Pitfall 3/T-11-04). useSettingsMutations.validate honors 200-on-invalid (no onSuccess/no throw; caller branches on data.valid — Pitfall 7). NOT vitest-unit-tested (node-env/pure-fn-only runner; @testing-library/react+jsdom not installed = excluded package install); gated by npm run build + grep acceptance — exercised by Wave-2 page plans.
+- [Phase 11-06]: Overview (PAGE-05) shipped + Phase-11 routing/sidebar cutover. OverviewView is the live-money landing surface: 3 useQuery sources (overview/trading-status/stages, each refetchInterval 3000) + the embedded <PositionsView/>'s own ["positions"] poll. Red TRADING PAUSED banner (text-destructive) above the positions section when trading-status.paused. Per-account cards (overview_cards.html parity): Connected/Offline chip, Balance/Equity/Open-P&L via *_display, daily-trades yellow≥80%/red≥100%, margin-used ratio bar (margin/balance — Pitfall-5-exempt). Open Positions = rendered <PositionsView/> (SC#3 poll-safe modal/drilldown inherited wholesale, zero shared state). Pending Stages = top-5 active from GET /api/v2/stages (Open Question 2, no new endpoint). Emergency Kill Switch entry = Button asChild + <Link to="/emergency"> → KillSwitchView. router.tsx: /app index now renders OverviewView (was Navigate to /analytics); overview/positions/emergency routes added; pre-existing /app/settings route preserved. Sidebar: Positions→to:/positions, Settings→to:/settings (now live NavLinks). npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 4 live-money pages built + routed).
 - [Phase 09-04]: Declarative react-router-dom 7 router (createBrowserRouter basename /app) in lockstep with Vite base + uvicorn StaticFiles mount (D-07); main.tsx wires QueryClientProvider over RouterProvider + root sonner Toaster; App.tsx boot guard GET /auth/me (200→shell, 401 delegated to the single global onAuthError, no competing redirect — single bounce, D-05/SPA-04); 224px AppShell + Telebot-cyan Sidebar (Overview live, 6 disabled-visible future links, Sign out logout POST) — cyan reserved for wordmark/active/focus only (D-07); THROWAWAY ProbeView proved SC#5 LIVE — useQuery(trading-status, refetchInterval 3000) vs useState input survived ≥2 refetch cycles unclobbered (D-08/SPA-05). Phase 9 manual gate APPROVED by human (cold login no-403, no localStorage token, deep-link reload, single 401 redirect, input survives refetches). Phase 9 complete — ready for verification.
 
 ### Pending Todos
@@ -159,6 +161,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last activity: 2026-06-07 — Phase 11 Plan 02 (Wave 1 — live-money mutation hooks) COMPLETE. 2 tasks committed atomically (23160b1 useClose/useLevels/usePartialClose, c9cf5fd useEmergency/useSettingsMutations). All five hooks money-safe (api()-only CSRF, no setQueryData, server-confirmed invalidate, errorMessage toasts); usePartialClose idempotent (request_id + 409); validate honors 200-on-invalid (Pitfall 7). npm run build green; grep acceptance clean (no code-level setQueryData/raw fetch). Phase 10 still has its live-DB human verification gate outstanding.
-Resume file: .planning/phases/11-live-money-pages-settings/11-03-PLAN.md
-Next action: (a) /gsd-execute-phase 11 Wave 2 = 11-03 (positions page) + 11-04 (settings page) — now unblocked by 11-02 (mutation hooks shipped); and/or (b) complete Phase 10's live-DB human verification gate via /gsd-verify-work 10 on VPS+live DB (4 golden-number parity checks).
+Last activity: 2026-06-07 — Phase 11 Plan 06 (Wave 3 — Overview PAGE-05 + routing/sidebar cutover) COMPLETE. 2 tasks committed atomically (c8293a5 OverviewView, 4d75984 router+sidebar wiring). OverviewView composes the embedded PositionsView (SC#3 inherited), per-account cards, TRADING PAUSED banner, top-5 pending stages (no new endpoint), and an /emergency entry. /app index now lands on Overview; Positions + Settings are live NavLinks; /app/settings preserved. npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 6 plans shipped: PAGE-05/06/07/08 + SUX). Phase 10 still has its live-DB human verification gate outstanding; Phase 11 has its own wave-merge MANUAL browser gate (VPS + MT5 demo).
+Resume file: —
+Next action: (a) wave-merge MANUAL browser verification on VPS + MT5 demo (TRADING PAUSED banner, account-card/positions/pending-stages parity vs legacy /, SC#3 open modal/drilldown survives ≥2 refetch cycles) + full gate `pytest tests/ -x && cd frontend && npm run build && npx vitest run`; then (b) Phase 12 — parallel-run cutover + HTMX decommission; and/or (c) complete Phase 10's live-DB human verification gate via /gsd-verify-work 10.
