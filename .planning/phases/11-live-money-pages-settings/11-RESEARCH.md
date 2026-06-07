@@ -507,9 +507,14 @@ if (!v.valid) { toast.error(`Couldn't save: ${Object.values(v.errors)[0]}`); ret
 | A3 | `@hookform/resolvers` 5.4.0 exports `zodResolver` from `/zod` | Standard Stack | wrong import → build error; confirm path at install |
 | A4 | Drilldown payload keys (`fill_history`, `signal`) stable as in positions.py | Contracts | drilldown render gap; verify against a live response in dev |
 
-## Open Questions
+## Open Questions (RESOLVED — see Phase 11 plans)
 
-1. **Audit revert granularity mismatch (parity vs contract).**
+> Both questions are resolved and reflected in the plans: OQ1 → a single "Revert last
+> change" + confirm toast (no `audit_id` endpoint), implemented in 11-04. OQ2 → reuse
+> the shipped `GET /api/v2/stages` (top-5) on the Overview poll, implemented in 11-06.
+> No new endpoints — the hard boundary holds.
+
+1. **Audit revert granularity mismatch (parity vs contract).** *(RESOLVED: revert-latest only.)*
    - What we know: legacy `settings_audit_timeline.html` renders a per-row "Revert change" button posting `?audit_id={row.id}`. The Phase 8 `POST /settings/{account}/revert` reverts ONLY the latest persisted change and takes NO `audit_id` (api/settings.py:259-305).
    - What's unclear: whether the SPA should (a) show a single "Revert last change" action (matches the shipped API, no new endpoint), or (b) show per-row Revert buttons but only enable it on the newest row.
    - Recommendation: **(a) or (b)-enabled-on-newest-only.** Do NOT add an `audit_id` endpoint — that violates the hard boundary (no new endpoints). The UI-SPEC copy "Revert (per-row; opens revert confirm)" should be implemented as revert-latest. Flag for the planner; lean to a single "Revert last change" + confirm toast, which is unambiguous and contract-faithful.
