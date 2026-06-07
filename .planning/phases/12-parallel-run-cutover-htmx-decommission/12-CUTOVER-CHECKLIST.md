@@ -33,7 +33,7 @@ The four D-04 parity items (verified against the live MT5 demo broker on the VPS
 
 ### 1. analytics (pilot) SPA matches legacy on live data
 expected: SPA /app/analytics data matches legacy /analytics on live data; live-money actions behave correctly against the demo broker; no console errors; poll-safe modals/drilldowns
-result: [pending — sign: YYYY-MM-DD operator]
+result: code complete + guard green locally 2026-06-07; live sign-off DEFERRED to VPS end-to-end acceptance
 
 ### 2. signals SPA matches legacy on live data
 expected: SPA /app/signals data matches legacy /signals on live data; live-money actions behave correctly against the demo broker; no console errors; poll-safe modals/drilldowns
