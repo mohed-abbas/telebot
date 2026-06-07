@@ -30,7 +30,14 @@ findings:
   warning: 6
   info: 4
   total: 12
-status: issues_found
+resolved:
+  critical: [CR-01, CR-02]
+  warning: [WR-01, WR-02]
+deferred:
+  warning: [WR-03, WR-04, WR-05, WR-06]
+  info: [IN-01, IN-02, IN-03, IN-04]
+resolution_commit: 481134d
+status: issues_resolved
 ---
 
 # Phase 11: Code Review Report
@@ -38,7 +45,23 @@ status: issues_found
 **Reviewed:** 2026-06-07
 **Depth:** standard
 **Files Reviewed:** 22
-**Status:** issues_found
+**Status:** issues_resolved (both blockers + 2 safety warnings fixed in 481134d; 4 warnings + 4 info deferred)
+
+## Resolution (2026-06-07, commit 481134d)
+
+- **CR-01 (BLOCKER) — FIXED.** `EditPositionDialog` now rounds the partial-close volume first, then
+  guards and submits the *same* rounded value with a strict `< position.volume` remainder bound.
+  Typing `0.998` on a 1.00-lot position is now rejected instead of silently full-closing.
+- **CR-02 (BLOCKER) — FIXED.** `SettingsView` adds `key={account}` so the per-account body remounts
+  on switch — rhf defaults and all `review`/`confirmData`/`confirmOpen` state reset. Account A's
+  values can no longer be confirmed onto account B.
+- **WR-01 — FIXED.** `trading-status` queries use `placeholderData: keepPreviousData` (a transient
+  poll failure keeps the last-known paused state) and Overview shows a degraded "TRADING STATUS
+  UNAVAILABLE" indicator on a cold-start error instead of silently rendering not-paused.
+- **WR-02 — FIXED.** `account`/`ticket` path params are now `encodeURIComponent`-wrapped on every
+  live-money mutation URL (4 hooks + drilldown + settings read).
+- **WR-03, WR-04, WR-05, WR-06 + IN-01..04 — DEFERRED** (documented below; non-blocking, no live
+  money loss). Recommended follow-up via `/gsd:code-review 11 --fix`.
 
 ## Summary
 
