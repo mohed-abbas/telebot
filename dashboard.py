@@ -564,25 +564,12 @@ async def pending_stages_partial(
 
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, user: str = Depends(_verify_auth)):
-    """SET-03: per-account tabbed settings form with audit timeline."""
-    accounts_data = await _get_accounts_overview()
-    store = _get_settings_store()
-    settings_by_account: dict[str, object] = {}
-    audit_by_account: dict[str, list[dict]] = {}
-    for a in accounts_data:
-        name = a["name"]
-        settings_by_account[name] = store.effective(name) if store else None
-        audit_by_account[name] = await db.get_settings_audit(name, limit=50)
-    return templates.TemplateResponse("settings.html", {
-        "request": request,
-        "accounts": accounts_data,
-        "settings_by_account": settings_by_account,
-        "audit_by_account": audit_by_account,
-        "trading_enabled": _settings.trading_enabled if _settings else False,
-        "dry_run": _settings.trading_dry_run if _settings else True,
-        "page": "settings",
-        "page_title": "Settings",
-    })
+    """CUT-02 (D-01): legacy settings page cut over to the SPA (303 to /app/settings).
+
+    Live-money control surface — Depends(_verify_auth) retained so an unauth hit
+    bounces to login before reaching the SPA. Route deleted wholesale in 12-03.
+    """
+    return RedirectResponse(url="/app/settings", status_code=303)
 
 
 # ─── SET-03: per-account settings form (POST handlers) ──────────────────
