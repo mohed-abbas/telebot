@@ -93,7 +93,7 @@ def _verify_auth(request: Request) -> str:
     if user:
         return user
 
-    if request.headers.get("hx-request") or request.url.path.startswith("/api/"):
+    if request.url.path.startswith("/api/"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Session expired",
