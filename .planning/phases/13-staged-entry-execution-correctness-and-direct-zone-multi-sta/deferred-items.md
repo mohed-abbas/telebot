@@ -130,3 +130,33 @@ to also pass if the scheme is later made account-scoped).
 `mt5_comment` account-scoped (option (a) preferred — keeps a single UNIQUE column and a
 human-legible comment) with a coordinated update to `get_stage_by_comment`, the reconnect
 reconcile, and the executor stage-1 anchor lookup.
+
+---
+
+## TEST-INFRA — session-scoped asyncpg pool vs function-loop fixtures (orchestrator, post-Wave-2 gate)
+
+**Surfaced by:** Phase 13 post-merge gate (orchestrator), 2026-06-08.
+
+**Symptom:** Running the full single-process test suite (or all of `tests/test_trade_manager.py`
+in one process) yields order-dependent `asyncpg InterfaceError: another operation is in progress`
+and `RuntimeError: Future attached to a different loop`. Baseline (pre-Phase-13) already carried
+22 such errors in `tests/test_api_*`. Phase 13 added two DB-touching direct-zone tests
+(`test_direct_zone_past_market_stale`, `test_direct_zone_in_zone_not_stale_proceeds`) that now
+also trip it when the whole file runs.
+
+**Root cause (not production code):** `db_pool` is `loop_scope="session"`, but the consuming
+async fixtures (`tm_with_store`, `priced_connector`, `seeded_staged_account`, …) are default
+function-loop fixtures. They `await` pool work on a function loop, stranding a pool connection on
+the wrong loop for later session-loop tests. A naive `loop_scope="session"` on the fixtures is NOT
+safe because the seed fixtures must stay function-scoped (the autouse `clean_tables` TRUNCATEs
+between tests).
+
+**Evidence production code is correct:** every Phase-13 acceptance test passes in per-file
+isolation, and the two direct-zone tests pass when run alone (`2 passed`). EXEC2-01..06 logic is
+verified green on dev Postgres `tb13pg`.
+
+**Recommended follow-up (out of Phase 13 scope):** a dedicated test-infra plan to align the async
+fixture/loop architecture — e.g. a session-scoped pool created per-test-loop, or per-test pool
+fixtures, or a single explicit event-loop policy — so the full suite is deterministic in one
+process. Until then, CI should run DB test files in isolated processes (one file per `pytest`
+invocation), as the executors and this gate did.
