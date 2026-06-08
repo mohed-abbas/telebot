@@ -591,6 +591,15 @@ async def test_direct_zone_multistage(
     For BUY, in-zone-at-arrival is ask <= band.high. ask=2040.2 <= every
     band.high → ALL 5 bands are already crossed → all 5 fire at market.
     """
+    # Allow all 5 bands to fill at market (default max_open_trades=3 would cap
+    # the deepest two as 'capped'); this test validates the N-stage geometry.
+    # max_open_trades lives on the accounts table (not account_settings).
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE accounts SET max_open_trades = 10 WHERE name = 'test-acct'"
+        )
+    await tm_with_store.settings_store.load_all()
+
     # NO orphan registered → handle_signal routes a standalone OPEN to _handle_open.
     open_signal = SignalAction(
         type=SignalType.OPEN, symbol="XAUUSD",

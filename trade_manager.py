@@ -590,6 +590,39 @@ class TradeManager:
             source_name=source_name,
         )
 
+        # ── EXEC2-06 (D2-01..D2-04): multi-stage scale-in ──────────────────
+        # A standalone OPEN carrying zone+SL+TP scales ACROSS the zone as N
+        # bands — mirroring _handle_correlated_followup's band lifecycle —
+        # instead of the v1.0 single zone_mid full-fill. Routing the sequence
+        # through staged_entries + the zone-watcher (NO resting-limit orders,
+        # D2-01) inherits the D-21 kill-switch drain, D-14 pre-flight, and D-24
+        # reconnect reconcile for free.
+        #
+        # Stage numbering differs from the correlated path: there is NO prior
+        # text-only market anchor, so the LOWEST band is stage 1 (bands 1..N),
+        # not 2..N. This makes the direct-zone sequence uniform and gives the
+        # executor's D-16 stage-1 cascade a real `telebot-{id}-s1` anchor that
+        # may or may not fill — exactly the D2-03 "first fill anchors" model.
+        # When stage 1 never fills, the executor cascade (executor.py:733-736)
+        # treats "stage 1 still awaiting → fire OK", so no collision occurs.
+        store = getattr(self, "settings_store", None)
+
+        if signal.entry_zone is None or signal.direction is None:
+            # No zone (or no direction) → cannot band-scale. Preserve the v1.0
+            # single-fill behavior for this degenerate case.
+            for acct_name, connector in self.connectors.items():
+                acct = self.accounts.get(acct_name)
+                if not acct or not acct.enabled:
+                    continue
+                if not connector.connected:
+                    results.append({"account": acct_name, "status": "skipped", "reason": "disconnected"})
+                    continue
+                result = await self._execute_open_on_account(signal, signal_id, acct, connector)
+                results.append(result)
+            return results
+
+        zone_low, zone_high = signal.entry_zone
+
         for acct_name, connector in self.connectors.items():
             acct = self.accounts.get(acct_name)
             if not acct or not acct.enabled:
@@ -598,8 +631,108 @@ class TradeManager:
                 results.append({"account": acct_name, "status": "skipped", "reason": "disconnected"})
                 continue
 
-            result = await self._execute_open_on_account(signal, signal_id, acct, connector)
-            results.append(result)
+            try:
+                snapshot = store.snapshot(acct_name) if store else None
+            except KeyError:
+                snapshot = None
+
+            max_stages = snapshot.max_stages if snapshot else 1
+            # Direct-zone wants N bands for max_stages=N (truth: max_stages=N →
+            # N stages). compute_bands is built for the CORRELATED path where
+            # stage 1 is an external text-only market fill, so it returns
+            # max_stages-1 bands (stages 2..N). For the direct path there is no
+            # external anchor — every stage is a band — so request max_stages+1
+            # to get N bands, then re-base their numbering to 1..N below.
+            if max_stages >= 2:
+                raw_bands = compute_bands(
+                    zone_low, zone_high, max_stages + 1, signal.direction.value,
+                )
+                # D2-04 uniform model: re-base 2..(N+1) numbering to 1..N (the
+                # lowest band is stage 1, the direct-zone anchor).
+                bands = [
+                    Band(stage_number=i + 1, low=b.low, high=b.high)
+                    for i, b in enumerate(raw_bands)
+                ]
+            else:
+                # D2-04: max_stages=1. Do NOT fall back to a zone_mid single
+                # fill, and do NOT reuse the correlated path's empty-band return
+                # (Pitfall 5 — different semantics: the follow-up's stage 1 has
+                # already fired, but here nothing has). Synthesize ONE whole-zone
+                # band and run it through the same at-arrival/arm logic so every
+                # max_stages behaves uniformly.
+                bands = [Band(stage_number=1, low=zone_low, high=zone_high)]
+
+            rows = [
+                {
+                    "signal_id": signal_id,
+                    "stage_number": b.stage_number,
+                    "account_name": acct_name,
+                    "symbol": signal.symbol,
+                    "direction": signal.direction.value,
+                    "zone_low": zone_low,
+                    "zone_high": zone_high,
+                    "band_low": b.low,
+                    "band_high": b.high,
+                    "target_lot": stage_lot_size(snapshot) if snapshot else 0.0,
+                    "snapshot_settings": asdict(snapshot) if snapshot else {},
+                    "mt5_comment": f"telebot-{signal_id}-s{b.stage_number}",
+                    "status": "awaiting_zone",
+                    # EXEC2-01: persist the OPEN's real SL/TP so the zone-watch
+                    # read path (Plan 02) carries them on late stages + cascade.
+                    "signal_sl": signal.sl,
+                    "signal_tp": signal.target_tp,
+                }
+                for b in bands
+            ]
+            stage_ids = await db.create_staged_entries(rows)
+
+            price_data = await connector.get_price(signal.symbol)
+            if price_data is None:
+                results.append({
+                    "account": acct_name, "status": "staged",
+                    "reason": "no_price_yet", "stages": len(rows),
+                })
+                continue
+            bid, ask = price_data
+
+            fired_count = 0
+            for band, stage_id in zip(bands, stage_ids):
+                # D2-02: fire ONLY bands price has already crossed at arrival.
+                # If price is entirely outside the zone, NOTHING fires — all
+                # bands arm and wait for _zone_watch_loop. No forced market
+                # anchor (unlike the correlated path's prior text-only fill).
+                if not stage_is_in_zone_at_arrival(band, bid, ask, signal.direction.value):
+                    continue  # armed
+                synth = SignalAction(
+                    type=SignalType.OPEN,
+                    symbol=signal.symbol,
+                    raw_text=signal.raw_text,
+                    direction=signal.direction,
+                    entry_zone=(band.low, band.high),
+                    sl=signal.sl,
+                    tps=list(signal.tps) if signal.tps else [],
+                    target_tp=signal.target_tp,
+                )
+                result = await self._execute_open_on_account(
+                    synth, signal_id, acct, connector,
+                    staged=True, stage_number=band.stage_number,
+                    stage_row_id=stage_id, snapshot=snapshot,
+                )
+                if result.get("status") == "failed":
+                    await db.update_stage_status(
+                        stage_id, "failed",
+                        cancelled_reason=result.get("reason", "broker_reject"),
+                    )
+                if result.get("status") in ("executed", "filled"):
+                    fired_count += 1
+                results.append(result)
+
+            results.append({
+                "account": acct_name, "status": "staged",
+                "fired_at_arrival": fired_count,
+                "armed": len(bands) - fired_count,
+                "total": len(bands),
+            })
 
         return results
 
