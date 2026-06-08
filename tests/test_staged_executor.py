@@ -412,12 +412,96 @@ async def test_stage_marked_failed_on_broker_reject_others_continue(
 # plan replaces the body with the real assertion.
 
 
-def test_late_stage_carries_signal_sl_tp():
+async def _capture_fire_zone_stage_synth(tm_with_store, global_config, *, stage):
+    """Drive _fire_zone_stage with `stage` and capture the synth SignalAction
+    passed to _execute_open_on_account (without actually submitting).
+
+    Returns the captured SignalAction.
+    """
+    from executor import Executor
+
+    ex = Executor(
+        trade_manager=tm_with_store,
+        global_config=global_config,
+        notifier=None,
+    )
+    captured: dict = {}
+
+    async def _spy(synth, signal_id, acct, connector, **kwargs):
+        captured["synth"] = synth
+        return {"status": "executed", "ticket": 4242}
+
+    tm_with_store._execute_open_on_account = _spy  # type: ignore[assignment]
+    connector = tm_with_store.connectors["test-acct"]
+    await ex._fire_zone_stage(
+        acct_name="test-acct",
+        connector=connector,
+        symbol="XAUUSD",
+        stage=stage,
+        bid=2045.0,
+        ask=2045.2,
+        signal_id=stage["signal_id"],
+    )
+    return captured.get("synth")
+
+
+def _late_stage_row(**overrides):
+    """A minimal staged_entries-shaped dict the way get_active_stages returns it."""
+    row = {
+        "id": 9001,
+        "signal_id": 7777,
+        "stage_number": 2,
+        "account_name": "test-acct",
+        "direction": "buy",
+        "band_low": 2040.0,
+        "band_high": 2045.0,
+        "mt5_comment": "telebot-7777-s2",
+        "snapshot_settings": {
+            "account_name": "test-acct",
+            "risk_mode": "fixed_lot",
+            "risk_value": 0.5,
+            "max_stages": 5,
+            "default_sl_pips": 100,
+            "max_daily_trades": 30,
+            "max_open_trades": 3,
+            "max_lot_size": 1.0,
+        },
+        "signal_sl": 2035.0,
+        "signal_tp": 2060.0,
+    }
+    row.update(overrides)
+    return row
+
+
+async def test_late_stage_carries_signal_sl_tp(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store, global_config,
+):
     """EXEC2-01 — a late zone-watch stage fires with the signal's REAL SL/TP
     (read from the persisted signal_sl/signal_tp on the staged row), NOT the
-    default_sl_pips-derived SL with target_tp=None. Implemented in Plan 02.
+    default_sl_pips-derived SL with target_tp=None.
+
+    Three contracts:
+      1. signal_sl/signal_tp present → synth.sl == signal_sl, synth.target_tp == signal_tp.
+      2. signal_sl NULL (pre-migration) → synth.sl falls back to the default_sl_pips
+         price (NOT 0.0, NOT None); synth.target_tp stays None.
+      3. No path yields synth.sl <= 0.
     """
-    pytest.fail("Wave 0 stub — EXEC2-01 late-stage SL/TP carry (implemented in Plan 02)")
+    # 1) Persisted SL/TP are carried verbatim.
+    stage = _late_stage_row(signal_sl=2035.0, signal_tp=2060.0)
+    synth = await _capture_fire_zone_stage_synth(tm_with_store, global_config, stage=stage)
+    assert synth is not None, "_fire_zone_stage did not reach _execute_open_on_account"
+    assert synth.sl == pytest.approx(2035.0), "late stage must carry persisted signal_sl"
+    assert synth.target_tp == pytest.approx(2060.0), "late stage must carry persisted signal_tp"
+    assert synth.sl > 0.0
+
+    # 2) NULL signal_sl → default_sl_pips fallback, target_tp None, never sl=0.
+    null_stage = _late_stage_row(signal_sl=None, signal_tp=None)
+    synth_null = await _capture_fire_zone_stage_synth(tm_with_store, global_config, stage=null_stage)
+    assert synth_null is not None
+    # buy, band_high=2045.0, default_sl_pips=100, gold pip=0.10 → 2045.0 - 100*0.10 = 2035.0
+    assert synth_null.sl == pytest.approx(2035.0), "NULL signal_sl must fall back to default-SL price"
+    assert synth_null.sl > 0.0, "fallback SL must never be 0"
+    assert synth_null.target_tp is None, "NULL signal_tp leaves target_tp None (orphan TP is Plan 04)"
 
 
 def test_percent_splits_risk():
