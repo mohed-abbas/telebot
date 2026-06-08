@@ -242,6 +242,54 @@ def account():
     )
 
 
+# ── Phase 6/13 staged-entry integration fixtures (promoted from
+# test_staged_executor.py so test_trade_manager.py can share them — mirrors the
+# Plan 01 seeded_signal promotion; Rule 3 deviation, blocking otherwise) ──────
+
+
+class _PricedDry(DryRunConnector):
+    """DryRunConnector with a settable price book for at-arrival band tests."""
+
+    def __init__(self, *args, prices=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._prices = prices or {"XAUUSD": (2040.1, 2040.2)}
+
+    async def get_price(self, symbol):
+        return self._prices.get(symbol)
+
+
+@pytest_asyncio.fixture
+async def priced_connector():
+    c = _PricedDry("test-acct", "TestServer", 99999, "pass")
+    await c.connect()
+    yield c
+    await c.disconnect()
+
+
+@pytest_asyncio.fixture
+async def tm_with_store(db_pool, seeded_staged_account, priced_connector, global_config):
+    """TradeManager with SettingsStore + SignalCorrelator attached — Phase 6-ready."""
+    from settings_store import SettingsStore
+    from signal_correlator import SignalCorrelator
+    from trade_manager import TradeManager
+
+    store = SettingsStore(db._pool)
+    await store.load_all()
+    acct = AccountConfig(
+        name="test-acct", server="TestServer", login=99999, password_env="",
+        risk_percent=1.0, max_lot_size=1.0, max_daily_loss_percent=3.0,
+        max_open_trades=5, enabled=True,
+    )
+    t = TradeManager(
+        connectors={"test-acct": priced_connector},
+        accounts=[acct],
+        global_config=global_config,
+    )
+    t.settings_store = store
+    t.correlator = SignalCorrelator(window_seconds=600)
+    return t
+
+
 @pytest.fixture
 async def connector():
     """A connected DryRunConnector for testing."""

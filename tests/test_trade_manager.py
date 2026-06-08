@@ -639,9 +639,61 @@ async def test_open_with_real_sl_unchanged(tm, monkeypatch):
     )
 
 
-def test_direct_zone_past_market_stale():
+@pytest.mark.asyncio(loop_scope="session")
+async def test_direct_zone_past_market_stale(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store,
+):
     """EXEC2-06 / D2-14 — when price has already run PAST the zone at arrival, the
-    direct-zone OPEN is rejected as stale (_check_stale runs first) before any
-    band fires at market — never chase a moved market. Implemented in Plan 05.
+    direct-zone OPEN is rejected as stale (_check_stale runs FIRST) before any
+    band fires at market AND before any staged row is created — never chase a
+    moved market.
+
+    BUY signal, TP above the zone. _check_stale flags BUY stale when
+    current_price >= TP1. Set price (2085.1/2085.2) ABOVE TP1=2080 → the market
+    already ran past the target → stale → clean skip, NO staged_entries rows.
     """
-    pytest.fail("Wave 0 stub — EXEC2-06/D2-14 past-zone arrival rejected as stale (implemented in Plan 05)")
+    open_signal = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2040-2060 SL 2030 TP 2080",
+        direction=Direction.BUY, entry_zone=(2040.0, 2060.0),
+        sl=2030.0, tps=[2080.0], target_tp=2080.0,
+    )
+    # Price has run PAST the zone and past TP1 — moved market.
+    priced_connector._prices = {"XAUUSD": (2085.1, 2085.2)}
+
+    results = await tm_with_store.handle_signal(open_signal)
+
+    # Stale skip — no band fired.
+    assert any(
+        r.get("status") == "skipped" and "stale" in r.get("reason", "").lower()
+        for r in results
+    ), results
+    assert not any(r.get("status") == "executed" for r in results)
+
+    # D2-14: the stale check precedes the band lifecycle → NO staged rows created.
+    async with db._pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id FROM staged_entries")
+    assert len(rows) == 0
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_direct_zone_in_zone_not_stale_proceeds(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store,
+):
+    """D2-14 guard — an in-zone (non-stale) arrival is NOT rejected by the
+    pre-band stale check; it proceeds to the band lifecycle and creates rows."""
+    open_signal = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2040-2060 SL 2030 TP 2080",
+        direction=Direction.BUY, entry_zone=(2040.0, 2060.0),
+        sl=2030.0, tps=[2080.0], target_tp=2080.0,
+    )
+    # Price inside/below the zone, well under TP1 → not stale.
+    priced_connector._prices = {"XAUUSD": (2050.1, 2050.2)}
+
+    await tm_with_store.handle_signal(open_signal)
+
+    async with db._pool.acquire() as conn:
+        rows = await conn.fetch("SELECT id FROM staged_entries")
+    # Bands were created (not stale-skipped before the lifecycle).
+    assert len(rows) > 0

@@ -96,43 +96,9 @@ class TestStageLotSize:
 
 
 # ── Integration fixtures ─────────────────────────────────────────────
-
-
-class _PricedDry(DryRunConnector):
-    def __init__(self, *args, prices=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._prices = prices or {"XAUUSD": (2040.1, 2040.2)}
-
-    async def get_price(self, symbol):
-        return self._prices.get(symbol)
-
-
-@pytest_asyncio.fixture
-async def priced_connector():
-    c = _PricedDry("test-acct", "TestServer", 99999, "pass")
-    await c.connect()
-    yield c
-    await c.disconnect()
-
-
-@pytest_asyncio.fixture
-async def tm_with_store(db_pool, seeded_staged_account, priced_connector, global_config):
-    """TradeManager with SettingsStore + SignalCorrelator attached — Phase 6-ready."""
-    store = SettingsStore(db._pool)
-    await store.load_all()
-    acct = AccountConfig(
-        name="test-acct", server="TestServer", login=99999, password_env="",
-        risk_percent=1.0, max_lot_size=1.0, max_daily_loss_percent=3.0,
-        max_open_trades=5, enabled=True,
-    )
-    t = TradeManager(
-        connectors={"test-acct": priced_connector},
-        accounts=[acct],
-        global_config=global_config,
-    )
-    t.settings_store = store
-    t.correlator = SignalCorrelator(window_seconds=600)
-    return t
+# _PricedDry / priced_connector / tm_with_store are now shared via
+# tests/conftest.py (promoted in Plan 13-05 so test_trade_manager.py can use
+# them for the D2-14 stale tests).
 
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
