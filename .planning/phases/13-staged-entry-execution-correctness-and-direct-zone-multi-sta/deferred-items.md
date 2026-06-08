@@ -62,3 +62,26 @@ They are unrelated to EXEC2-05 / Plan 13-04 (orphan protective-TP).
 
 **Resolution:** none required for 13-04. These turn green when Plan 13-05
 (EXEC2-06 direct-zone multistage) lands. Logged per the executor scope-boundary rule.
+
+## Plan-13-04 EXEC2-05 live MT5 sign-off — DEFERRED to single VPS end-to-end acceptance
+
+**Status:** code-complete; live sign-off DEFERRED (deploy-at-end, operator-approved).
+
+The orphan protective-TP attach (`executor._run_orphan_protective_tp_watchdog` /
+`_attach_one_orphan_protective_tp`, commit 6795e81) is fully gated by DryRunConnector
+tests (`test_orphan_protective_tp_at_expiry`, `test_orphan_no_tp_during_window`,
+`test_orphan_tp_idempotent_when_already_set`,
+`test_orphan_with_sibling_gets_no_protective_tp` — all GREEN). The real MT5
+`modify_position`/TP round-trip cannot run under DryRun. Per
+`project_deploy_at_end_workflow.md` and the operator approval of option (a) — mirroring
+the Plans 12-02 / 12-03 precedent — the live MT5 sign-off is DEFERRED to the single VPS
+end-to-end acceptance. No live sign-off is fabricated here.
+
+**VPS smoke procedure (MT5 demo, run at end-to-end acceptance):**
+1. Fire a text-only OPEN (orphan) and let stage 1 fill at market with its default SL.
+2. Do NOT send a follow-up. Wait past `correlation_window_seconds` (default 600s).
+3. Confirm within ~10s after expiry the position shows a TP at distance == its SL
+   distance (R=1:1), SL unchanged.
+4. Confirm the TP is set exactly once (no repeated modifies on subsequent loop ticks).
+5. Repeat but send a follow-up before expiry → confirm NO protective TP is applied
+   (the follow-up's real SL/TP wins).
