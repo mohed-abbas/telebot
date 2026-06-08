@@ -59,3 +59,22 @@ async def test_failed_login_attempts_table_exists(db_pool):
     names = [c["column_name"] for c in cols]
     for required in ("ip_addr", "attempted_at", "user_agent"):
         assert required in names, f"failed_login_attempts missing column: {required}"
+
+
+async def test_staged_entries_has_signal_sl_tp_columns(db_pool):
+    """Phase 13 EXEC2-01 — additive signal_sl/signal_tp columns exist on the
+    ALREADY-CREATED staged_entries table.
+
+    This is the Pitfall-1 guard: the columns were added via
+    `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` (NOT inside CREATE TABLE IF NOT
+    EXISTS, which silently no-ops on an existing table). If the migration used
+    the wrong idiom, the columns are absent and this assertion fails.
+    """
+    async with db_pool.acquire() as conn:
+        cols = await conn.fetch(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='staged_entries' ORDER BY ordinal_position"
+        )
+    names = [c["column_name"] for c in cols]
+    for required in ("signal_sl", "signal_tp"):
+        assert required in names, f"staged_entries missing EXEC2-01 column: {required}"

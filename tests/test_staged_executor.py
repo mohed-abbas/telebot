@@ -403,3 +403,50 @@ async def test_stage_marked_failed_on_broker_reject_others_continue(
     # First band attempted failed; remaining bands should have status='filled'.
     assert "failed" in statuses  # at least one band failed
     assert "filled" in statuses  # at least one band succeeded
+
+
+# ── Phase 13 Wave-0 RED stubs (executor) ─────────────────────────────
+# Each stub below is intentionally RED (fails, not error-collects) so the
+# downstream implementation task has a concrete `pytest -k <name>` gate to turn
+# green. The docstring states the contract + requirement ID; the implementing
+# plan replaces the body with the real assertion.
+
+
+def test_late_stage_carries_signal_sl_tp():
+    """EXEC2-01 — a late zone-watch stage fires with the signal's REAL SL/TP
+    (read from the persisted signal_sl/signal_tp on the staged row), NOT the
+    default_sl_pips-derived SL with target_tp=None. Implemented in Plan 02.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-01 late-stage SL/TP carry (implemented in Plan 02)")
+
+
+def test_percent_splits_risk():
+    """EXEC2-02 — in percent risk_mode the submitted per-stage volume equals
+    risk_value / max_stages (matches fixed_lot), so total deployed risk is the
+    risk_value ceiling rather than risk_value × stages. Implemented in Plan 04.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-02 percent risk split (implemented in Plan 04)")
+
+
+def test_direct_zone_multistage():
+    """EXEC2-06 — a standalone zone+SL+TP OPEN with max_stages=N creates N stages
+    (mirrors _handle_correlated_followup band geometry), not a single zone_mid
+    fill. Implemented in Plan 05.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-06 direct-zone multistage (implemented in Plan 05)")
+
+
+def test_direct_zone_single_band():
+    """EXEC2-06 / D2-04 — max_stages=1 fires exactly ONE whole-zone entry (a
+    synthesized whole-zone band), NOT the legacy v1.0 zone_mid single fill and
+    NOT the correlated 'no_bands' branch. Implemented in Plan 05.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-06 direct-zone single whole-zone band (implemented in Plan 05)")
+
+
+def test_direct_zone_arms_when_outside():
+    """EXEC2-06 / D2-02 — when price is entirely outside the zone at arrival,
+    NOTHING fires; all bands are armed (status='awaiting_zone') and the
+    _zone_watch_loop fires them later when price enters. Implemented in Plan 05.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-06/D2-02 direct-zone arms when outside (implemented in Plan 05)")

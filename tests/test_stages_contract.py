@@ -155,3 +155,20 @@ def test_stages_payload_shape_and_started_at(session_client):
         # D-13: real keys present, legacy blank-cell keys absent.
         assert "filled" in row and "total" in row
         assert "filled_count" not in row and "total_stages" not in row
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 Wave-0 RED stub (EXEC2-03) — extend the contract.
+# ---------------------------------------------------------------------------
+
+def test_target_lot_matches_volume():
+    """EXEC2-03 — the `/staged` panel's `target_lot` equals the volume actually
+    submitted to the broker (percent-mode per-stage volume).
+
+    target_lot is written from stage_lot_size(snapshot) (already split by
+    max_stages); the bug is the percent branch submitting full-risk_value volume
+    (EXEC2-02). Once EXEC2-02 lands the two converge — this contract proves the
+    displayed target_lot == submitted percent-mode per-stage volume.
+    Intentionally RED. Implemented in Plan 04.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-03 target_lot == submitted volume (implemented in Plan 04)")
