@@ -16,7 +16,14 @@ findings:
   warning: 4
   info: 3
   total: 8
-status: issues_found
+status: resolved
+resolved:
+  - "CR-01 — removed obsolete tests/test_cutover_redirects.py (commit 7bcc325)"
+  - "WR-01 — nginx login rate-limit repointed to /api/v2/auth/login (commit 7c6799a)"
+  - "WR-02 — dead hx-request branch dropped from _verify_auth (commit 7c6799a)"
+deferred:
+  - "WR-03 — _get_all_positions cache contract (benign; not fixed)"
+  - "WR-04 — test_valid_session_passes_auth unconditional skip (coverage gap; not fixed)"
 ---
 
 # Phase 12: Code Review Report
@@ -24,7 +31,7 @@ status: issues_found
 **Reviewed:** 2026-06-08T00:00:00Z
 **Depth:** standard
 **Files Reviewed:** 7
-**Status:** issues_found
+**Status:** resolved (CR-01 + WR-01 + WR-02 fixed; WR-03/WR-04 + info deferred)
 
 ## Summary
 
