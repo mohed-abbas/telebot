@@ -132,6 +132,48 @@ Plans:
 
 **UI hint**: yes
 
+### Phase 13: Staged-entry execution correctness and direct-zone multi-stage
+
+**Status**: Planned (5 plans, 3 waves). Backend-only execution-engine work — the Phase 6 lineage. Independent of the v1.2 dashboard chain (Phases 8–12).
+**Goal**: A signal that delivers zone+SL+TP directly scales into the zone as a multi-stage entry (not one full-size fill at `zone_mid`), and every staged fill — whether fired at arrival or later by the zone-watch loop — carries the signal's actual SL and TP and a correctly-split per-stage risk, with no unmanaged orphan positions and clean handling of SL-less signals; all without regressing any v1.0/v1.1 safety primitive.
+**Depends on**: Phase 6 (staged-entry execution engine — `trade_manager.py`, `executor.py`, `signal_parser.py` — the code being modified). MT5 REST bridge untouched.
+**Requirements**: EXEC2-01..EXEC2-06 (provisional; formalized in `/gsd:discuss-phase 13`)
+
+**Scope — the 6 gaps found in live testing:**
+
+  1. **(EXEC2-01)** Late zone-watch stages lose the signal's SL/TP — `executor.py:_fire_zone_stage` rebuilds them with `default_sl_pips` and `TP=0` instead of carrying the signal SL/TP like at-arrival bands (`trade_manager.py:513-522`).
+  2. **(EXEC2-02)** `percent` risk-mode does not split `risk_value` across `max_stages` — full `risk_value` is applied per stage (`trade_manager.py:693-709`, `_effective:144`) → N× exposure; `fixed_lot` already splits correctly.
+  3. **(EXEC2-03)** `/staged` panel `target_lot` display disagrees with the actual percent-mode order volume (the UI half of EXEC2-02).
+  4. **(EXEC2-04)** Standalone OPEN with no `SL:` line throws an `EXECUTION ERROR` (`calculate_sl_distance(entry, None)`, `trade_manager.py:687`) instead of a clean skip.
+  5. **(EXEC2-05)** Orphan text-only signal with no follow-up inside the correlation window leaves a live position with default SL and no TP, never aligned/cascaded (`_handle_text_only_open`).
+  6. **(EXEC2-06)** *New behavior* — a standalone OPEN carrying zone+SL+TP must scale into the zone via `compute_bands` (multi-stage), not open one full-size position at `zone_mid` (`_handle_open`).
+
+**Success Criteria** (what must be TRUE):
+
+  1. A standalone OPEN carrying zone+SL+TP opens a multi-stage scale-in across the zone honoring per-account `max_stages` (exactly one entry when `max_stages=1`); each stage still respects daily limits, `max_open_trades`, kill-switch state, and the duplicate/idempotency guards (EXEC2-06).
+  2. Every staged fill — fired at arrival OR later by the zone-watch loop — carries the signal's actual SL and target TP (never `default_sl_pips` + `TP=0`); all stages of one sequence end with consistent, signal-derived SL/TP (EXEC2-01).
+  3. In `percent` risk-mode, total risk across a staged sequence equals the configured `risk_value` (per-stage = `risk_value / max_stages`), matching `fixed_lot` semantics; the `/staged` `target_lot` equals the actually-submitted volume (EXEC2-02, EXEC2-03).
+  4. A standalone signal with no `SL:` line is skipped cleanly with an operator-visible reason — no exception, no `EXECUTION ERROR` alert; the `sl<=0` D-08 guard still holds (EXEC2-04).
+  5. An orphan text-only signal with no follow-up inside the window does not leave an unmanaged position — it carries a protective exit or is cancelled/closed per an explicit, documented policy (EXEC2-05).
+  6. **No regression**: kill-switch drain (D-21/D-22), reconnect reconcile (D-24), daily-trade slot accounting (1 signal = 1 slot, D-18), stale re-check (EXEC-02), duplicate guard (D-23), and comment-based idempotency (D-25) all still pass their existing guards.
+
+**Open design forks** (resolve in discuss-phase, not now):
+  - EXEC2-06 entry mechanics: market anchor + zone-watch bands (mirrors text-only flow) **vs** all-resting-limit orders across the zone.
+  - EXEC2-05 orphan policy: attach a managed exit/TP **vs** auto-cancel/close after the window expires.
+  - Band distribution: keep equal-width, or weight toward the entry edge (ties to the observed "deep stages rarely fill" behavior at narrow zones).
+
+**Plans**: 5 plans (3 waves)
+
+Plans:
+**Wave 0**
+- [ ] 13-01-PLAN.md — DDL/persistence foundation (ALTER ADD COLUMN signal_sl/signal_tp; carry through create + get_active_stages) + all Wave-0 red test stubs (EXEC2-01..06)
+**Wave 1** *(blocked on Wave 0)*
+- [ ] 13-02-PLAN.md — EXEC2-01 read side: _fire_zone_stage sources persisted signal SL/TP (NULL-safe) + revive the dormant price-cascade (EXEC2-01)
+- [ ] 13-03-PLAN.md — EXEC2-02 percent risk split (risk_value/max_stages) + EXEC2-03 /staged target_lot contract + EXEC2-04 SL-less clean skip + create-site SL/TP persistence (EXEC2-02, EXEC2-03, EXEC2-04)
+**Wave 2** *(blocked on Wave 1)*
+- [ ] 13-04-PLAN.md — EXEC2-05 orphan protective-TP (R=1:1) at window expiry via the existing 10s loop, idempotent; live VPS checkpoint (EXEC2-05)
+- [ ] 13-05-PLAN.md — EXEC2-06 direct-zone multi-stage _handle_open rewrite (mirror correlated-followup; D2-04 whole-zone band; D2-14 stale guard); live VPS checkpoint (EXEC2-06)
+
 ---
 
 ### Phase 8: JSON API Foundation
