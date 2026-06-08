@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: completed
-last_updated: "2026-06-08T10:31:52.173Z"
-last_activity: 2026-06-08 -- Phase 12 Plan 03 (HTMX/Jinja decommission, CUT-03) complete
+status: executing
+last_updated: "2026-06-08T12:07:03.298Z"
+last_activity: 2026-06-08 -- Phase 13 planning complete
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 41
+  total_plans: 46
   completed_plans: 42
   percent: 89
 ---
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-06-01)
 
 Phase: 12 (parallel-run-cutover-htmx-decommission) — COMPLETE (code; live VPS bake/GO deferred)
 Plan: 3 of 3 (all complete)
-Status: Phase 12 teardown code complete (CUT-01/02/03 all landed); HTMX/Jinja stack decommissioned. Single live MT5-demo parity bake + operator GO DEFERRED to one end-to-end VPS acceptance at final deploy (deploy-at-end).
-Last activity: 2026-06-08 -- Phase 12 Plan 03 (HTMX/Jinja decommission, CUT-03) complete
+Status: Ready to execute
+Last activity: 2026-06-08 -- Phase 13 planning complete
 
 ## v1.2 Milestone Map
 
