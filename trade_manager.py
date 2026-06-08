@@ -323,6 +323,11 @@ class TradeManager:
                 "band_low": 0.0,
                 "band_high": 0.0,
                 "target_lot": stage_lot_size(snapshot) if snapshot else 0.0,
+                # EXEC2-04: persist the protective levels so Plan 02's read path has
+                # them. Orphan text-only has no signal TP (Plan 04 attaches a protective
+                # TP later) → signal_tp=None; signal_sl is the default-SL price.
+                "signal_sl": sl_price,
+                "signal_tp": None,
                 "snapshot_settings": asdict(snapshot) if snapshot else {},
                 "mt5_comment": comment,
                 "status": "awaiting_zone",
@@ -548,6 +553,28 @@ class TradeManager:
     async def _handle_open(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """Handle a new trade signal with zone-based execution."""
         results = []
+
+        # ── EXEC2-04 / D2-13: SL-less OPEN → clean skip BEFORE any sizing ──
+        # A standalone OPEN whose signal.sl is None would crash at
+        # calculate_sl_distance(entry, None) (abs(entry - None) → TypeError) BEFORE
+        # the D-08 sl<=0 backstop ever runs. Detect it here and route to the skip
+        # stream so calculate_sl_distance is never reached. D-08 stays the second
+        # backstop for present-but-non-positive SL values.
+        if signal.sl is None:
+            logger.info("SL-less OPEN — skipping (D-08 requires a stop): %s", signal.symbol)
+            await db.log_signal(
+                raw_text=signal.raw_text,
+                signal_type="open",
+                action_taken="skipped",
+                symbol=signal.symbol,
+                direction=signal.direction.value if signal.direction else "",
+                source_name=source_name,
+            )
+            return [{
+                "account": "*",
+                "status": "skipped",
+                "reason": "Skipped: signal has no SL (D-08 requires a stop)",
+            }]
 
         # Log the signal
         signal_id = await db.log_signal(
