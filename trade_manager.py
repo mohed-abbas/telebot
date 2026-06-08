@@ -636,6 +636,34 @@ class TradeManager:
             except KeyError:
                 snapshot = None
 
+            # ── D2-14: reject moved-market arrivals as stale FIRST ─────────
+            # Before building or firing any band, re-use the existing
+            # _check_stale guard (same helper + threshold as every other entry
+            # path — no new staleness heuristic). If price has already run past
+            # the signal's TP1, NEVER chase it: skip this account with NO
+            # staged_entries rows created. The per-band D-14 pre-flight re-check
+            # in _zone_watch_loop remains the second backstop.
+            price_data = await connector.get_price(signal.symbol)
+            if price_data is None:
+                results.append({
+                    "account": acct_name, "status": "staged",
+                    "reason": "no_price_yet", "stages": 0,
+                })
+                continue
+            bid, ask = price_data
+            current_price = bid if signal.direction == Direction.SELL else ask
+            stale_reason = self._check_stale(signal, current_price)
+            if stale_reason:
+                logger.info(
+                    "%s: direct-zone OPEN rejected pre-band — stale: %s",
+                    acct_name, stale_reason,
+                )
+                results.append({
+                    "account": acct_name, "status": "skipped",
+                    "reason": f"Stale (moved market): {stale_reason}",
+                })
+                continue
+
             max_stages = snapshot.max_stages if snapshot else 1
             # Direct-zone wants N bands for max_stages=N (truth: max_stages=N →
             # N stages). compute_bands is built for the CORRELATED path where
@@ -686,15 +714,8 @@ class TradeManager:
             ]
             stage_ids = await db.create_staged_entries(rows)
 
-            price_data = await connector.get_price(signal.symbol)
-            if price_data is None:
-                results.append({
-                    "account": acct_name, "status": "staged",
-                    "reason": "no_price_yet", "stages": len(rows),
-                })
-                continue
-            bid, ask = price_data
-
+            # Price (bid/ask) was fetched above for the pre-band stale guard and
+            # is reused here for the at-arrival fire decision.
             fired_count = 0
             for band, stage_id in zip(bands, stage_ids):
                 # D2-02: fire ONLY bands price has already crossed at arrival.

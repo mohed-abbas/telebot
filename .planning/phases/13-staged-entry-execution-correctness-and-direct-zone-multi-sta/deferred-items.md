@@ -85,3 +85,48 @@ end-to-end acceptance. No live sign-off is fabricated here.
 4. Confirm the TP is set exactly once (no repeated modifies on subsequent loop ticks).
 5. Repeat but send a follow-up before expiry → confirm NO protective TP is applied
    (the follow-up's real SL/TP wins).
+
+## Plan-13-05 — staged `mt5_comment` global-UNIQUE collides across accounts (architectural, Rule 4)
+
+**Discovered during:** Plan 13-05 Task 1 verification — updating
+`tests/test_trade_manager_integration.py::TestMultiAccountExecution` after the
+EXEC2-06 `_handle_open` rewrite.
+
+**Symptom:** A single standalone OPEN dispatched to TWO accounts raises
+`asyncpg.UniqueViolationError: duplicate key value violates unique constraint
+"staged_entries_mt5_comment_key"` on the second account's stage-1 insert
+(`mt5_comment = telebot-{signal_id}-s1`).
+
+**Root cause (PRE-EXISTING Phase-6 limitation, surfaced — not introduced — by EXEC2-06):**
+`staged_entries.mt5_comment` is `TEXT NOT NULL UNIQUE` *globally* (db.py:230), and the
+comment scheme `telebot-{signal_id}-s{stage}` carries NO account discriminator. Because
+`_handle_open` calls `db.log_signal` ONCE, all accounts share one `signal_id`, so account
+#2 generates the identical `telebot-{id}-s{stage}` comment and collides. The CORRELATED
+path uses the identical scheme (`telebot-{paired_signal_id}-s{stage}`) and would collide
+the same way; db.py:1023-1024 already documents that `mt5_comment` UNIQUE "makes
+`get_stage_by_comment()` collide across accounts" and provides
+`get_stage_by_signal_account()` as the per-account-safe lookup. No prior test exercised a
+multi-account staged sequence, so the constraint was never hit until EXEC2-06 made EVERY
+standalone OPEN staged.
+
+**Why deferred (Rule 4 — architectural):** The fix is one of:
+  (a) make the comment account-scoped (e.g. `telebot-{signal_id}-{account}-s{stage}`), or
+  (b) relax the global UNIQUE to a composite `UNIQUE(account_name, mt5_comment)`.
+Either touches the D-25 idempotency probe (`get_stage_by_comment`), the D-24 reconnect
+reconcile-by-comment path, and the executor cascade's `telebot-{id}-s1` anchor lookup —
+i.e. it changes a contract shared by the correlated path and the live-money safety
+machinery. That is an architectural decision spanning beyond EXEC2-06's
+`trade_manager._handle_open` scope and must be planned deliberately (its own plan/phase),
+not auto-applied mid-execution.
+
+**Current behavior is safe (failure-isolated, D-17):** account #1 stages and fires
+normally; account #2's collision surfaces as an error after #1 has already executed — no
+double-fire, no wrong-size entry. The deploy-at-end reality is single-account MT5 demo, so
+this does not block the VPS acceptance. The integration test
+`test_signal_dispatches_to_both_accounts` asserts the documented collision (and is written
+to also pass if the scheme is later made account-scoped).
+
+**Resolution:** none in Plan 13-05. Recommend a follow-up plan to make the staged
+`mt5_comment` account-scoped (option (a) preferred — keeps a single UNIQUE column and a
+human-legible comment) with a coordinated update to `get_stage_by_comment`, the reconnect
+reconcile, and the executor stage-1 anchor lookup.

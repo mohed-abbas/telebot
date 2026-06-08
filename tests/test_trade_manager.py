@@ -608,7 +608,15 @@ async def test_sl_less_open_skips_cleanly(tm, monkeypatch):
 async def test_open_with_real_sl_unchanged(tm, monkeypatch):
     """EXEC2-04 guard — an OPEN WITH a real SL must NOT take the skip path; it
     proceeds to the normal account loop (calculate_sl_distance reached). Asserts
-    the early skip is gated strictly on signal.sl is None."""
+    the early skip is gated strictly on signal.sl is None.
+
+    Post-EXEC2-06: _handle_open is now a multi-stage scale-in, so a standalone
+    OPEN routes through create_staged_entries → _execute_open_on_account (staged).
+    With no settings_store on the bare `tm` fixture, snapshot is None → max_stages=1
+    → ONE synthesized whole-zone band. The seeded price (2045.0 ask) is inside the
+    zone (2040-2050) and below TP1 (2060), so the band is not stale and fires →
+    calculate_sl_distance is reached. (Updated from the v1.0 single-fill flow.)
+    """
     import trade_manager as tm_mod
 
     monkeypatch.setattr(tm_mod.db, "log_signal", AsyncMock(return_value=7))
@@ -619,7 +627,9 @@ async def test_open_with_real_sl_unchanged(tm, monkeypatch):
     # but the connector is connected (DryRunConnector). Seed a price so sizing runs.
     connector = next(iter(tm.connectors.values()))
     connector.set_simulated_price("XAUUSD", 2044.5, 2045.0)
-    # Stub the remaining db.* calls the success path touches so it runs DB-free.
+    # Stub the db.* calls the staged success path touches so it runs DB-free.
+    # create_staged_entries returns one stage id (max_stages=1 → 1 whole-zone band).
+    monkeypatch.setattr(tm_mod.db, "create_staged_entries", AsyncMock(return_value=[101]))
     for name in ("get_daily_stat", "increment_daily_stat", "mark_signal_counted_today",
                  "update_stage_status", "log_trade", "log_pending_order",
                  "get_stage_by_comment"):
@@ -658,6 +668,8 @@ async def test_direct_zone_past_market_stale(
         direction=Direction.BUY, entry_zone=(2040.0, 2060.0),
         sl=2030.0, tps=[2080.0], target_tp=2080.0,
     )
+    import db
+
     # Price has run PAST the zone and past TP1 — moved market.
     priced_connector._prices = {"XAUUSD": (2085.1, 2085.2)}
 
@@ -688,6 +700,8 @@ async def test_direct_zone_in_zone_not_stale_proceeds(
         direction=Direction.BUY, entry_zone=(2040.0, 2060.0),
         sl=2030.0, tps=[2080.0], target_tp=2080.0,
     )
+    import db
+
     # Price inside/below the zone, well under TP1 → not stale.
     priced_connector._prices = {"XAUUSD": (2050.1, 2050.2)}
 
