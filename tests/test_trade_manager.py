@@ -568,13 +568,75 @@ class TestCorrelatedFollowupStage1Align:
 # `pytest -k <name>` gate to turn green.
 
 
-def test_sl_less_open_skips_cleanly():
+@pytest.mark.asyncio(loop_scope="session")
+async def test_sl_less_open_skips_cleanly(tm, monkeypatch):
     """EXEC2-04 / D2-13 — a standalone OPEN whose signal.sl is None is routed to a
     clean skip-result BEFORE any sizing (no TypeError from
     calculate_sl_distance(entry, None), no EXECUTION ERROR alert). The D-08
-    sl<=0 guard remains the second backstop. Implemented in Plan 04.
+    sl<=0 guard remains the second backstop.
     """
-    pytest.fail("Wave 0 stub — EXEC2-04 SL-less OPEN skips cleanly (implemented in Plan 04)")
+    import trade_manager as tm_mod
+
+    # log_signal is the only db.* call the skip path touches — stub it (DB-free).
+    log_spy = AsyncMock(return_value=42)
+    monkeypatch.setattr(tm_mod.db, "log_signal", log_spy)
+    # Spy on calculate_sl_distance: it MUST NOT be called on the SL-less path.
+    sl_dist_spy = MagicMock(side_effect=tm_mod.calculate_sl_distance)
+    monkeypatch.setattr(tm_mod, "calculate_sl_distance", sl_dist_spy)
+
+    sl_less = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2040-2050 (no SL)",
+        direction=Direction.BUY, entry_zone=(2040.0, 2050.0),
+        sl=None, tps=[2060.0], target_tp=2060.0,
+    )
+
+    # Must not raise; returns a single skip-result.
+    results = await tm._handle_open(sl_less)
+
+    assert len(results) == 1
+    assert results[0]["status"] == "skipped"
+    assert "no SL" in results[0]["reason"]
+    # The crash site is never reached.
+    assert sl_dist_spy.call_count == 0
+    # The signal was logged as skipped (audit trail), not silently dropped.
+    assert log_spy.await_count == 1
+    assert log_spy.call_args.kwargs.get("action_taken") == "skipped"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_open_with_real_sl_unchanged(tm, monkeypatch):
+    """EXEC2-04 guard — an OPEN WITH a real SL must NOT take the skip path; it
+    proceeds to the normal account loop (calculate_sl_distance reached). Asserts
+    the early skip is gated strictly on signal.sl is None."""
+    import trade_manager as tm_mod
+
+    monkeypatch.setattr(tm_mod.db, "log_signal", AsyncMock(return_value=7))
+    sl_dist_spy = MagicMock(side_effect=tm_mod.calculate_sl_distance)
+    monkeypatch.setattr(tm_mod, "calculate_sl_distance", sl_dist_spy)
+
+    # No connected accounts on the bare `tm` fixture's connector → the loop runs
+    # but the connector is connected (DryRunConnector). Seed a price so sizing runs.
+    connector = next(iter(tm.connectors.values()))
+    connector.set_simulated_price("XAUUSD", 2044.5, 2045.0)
+    # Stub the remaining db.* calls the success path touches so it runs DB-free.
+    for name in ("get_daily_stat", "increment_daily_stat", "mark_signal_counted_today",
+                 "update_stage_status", "log_trade", "log_pending_order",
+                 "get_stage_by_comment"):
+        monkeypatch.setattr(tm_mod.db, name, AsyncMock(return_value=0))
+
+    with_sl = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2040-2050 SL 2035 TP 2060",
+        direction=Direction.BUY, entry_zone=(2040.0, 2050.0),
+        sl=2035.0, tps=[2060.0], target_tp=2060.0,
+    )
+    results = await tm._handle_open(with_sl)
+    # Reached sizing → calculate_sl_distance called at least once; no skip-for-no-SL.
+    assert sl_dist_spy.call_count >= 1
+    assert not any(
+        r.get("reason", "").startswith("Skipped: signal has no SL") for r in results
+    )
 
 
 def test_direct_zone_past_market_stale():

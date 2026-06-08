@@ -323,6 +323,11 @@ class TradeManager:
                 "band_low": 0.0,
                 "band_high": 0.0,
                 "target_lot": stage_lot_size(snapshot) if snapshot else 0.0,
+                # EXEC2-04: persist the protective levels so Plan 02's read path has
+                # them. Orphan text-only has no signal TP (Plan 04 attaches a protective
+                # TP later) → signal_tp=None; signal_sl is the default-SL price.
+                "signal_sl": sl_price,
+                "signal_tp": None,
                 "snapshot_settings": asdict(snapshot) if snapshot else {},
                 "mt5_comment": comment,
                 "status": "awaiting_zone",
@@ -549,6 +554,28 @@ class TradeManager:
         """Handle a new trade signal with zone-based execution."""
         results = []
 
+        # ── EXEC2-04 / D2-13: SL-less OPEN → clean skip BEFORE any sizing ──
+        # A standalone OPEN whose signal.sl is None would crash at
+        # calculate_sl_distance(entry, None) (abs(entry - None) → TypeError) BEFORE
+        # the D-08 sl<=0 backstop ever runs. Detect it here and route to the skip
+        # stream so calculate_sl_distance is never reached. D-08 stays the second
+        # backstop for present-but-non-positive SL values.
+        if signal.sl is None:
+            logger.info("SL-less OPEN — skipping (D-08 requires a stop): %s", signal.symbol)
+            await db.log_signal(
+                raw_text=signal.raw_text,
+                signal_type="open",
+                action_taken="skipped",
+                symbol=signal.symbol,
+                direction=signal.direction.value if signal.direction else "",
+                source_name=source_name,
+            )
+            return [{
+                "account": "*",
+                "status": "skipped",
+                "reason": "Skipped: signal has no SL (D-08 requires a stop)",
+            }]
+
         # Log the signal
         signal_id = await db.log_signal(
             raw_text=signal.raw_text,
@@ -699,9 +726,15 @@ class TradeManager:
                 return {"account": name, "status": "failed", "reason": "Cannot get account info"}
             # Phase 5: effective risk/lot caps come from SettingsStore when attached.
             risk_pct, max_lot, _ = _effective(self, acct)
+            # EXEC2-02 (D2-06/D2-07): risk_value is a TOTAL ceiling split equally
+            # across the staged sequence — mirror stage_lot_size's fixed_lot split so
+            # a percent-mode N-stage sequence deploys risk_value (not risk_value×N).
+            # Gated on `staged` so the v1.0 single-signal path keeps full risk_pct.
+            stages = snapshot.max_stages if snapshot and snapshot.max_stages > 0 else 1
+            per_stage_risk = risk_pct / stages if staged else risk_pct
             lot_size = calculate_lot_size(
                 account_balance=acct_info.balance,
-                risk_percent=risk_pct,
+                risk_percent=per_stage_risk,
                 sl_distance=sl_distance,
                 max_lot_size=max_lot,
                 jitter_percent=self.cfg.lot_jitter_percent,
