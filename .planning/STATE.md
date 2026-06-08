@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-08T12:07:03.298Z"
-last_activity: 2026-06-08 -- Phase 13 planning complete
+last_updated: "2026-06-08T12:11:29.401Z"
+last_activity: 2026-06-08 -- Phase 13 execution started
 progress:
   total_phases: 9
   completed_phases: 8
@@ -20,14 +20,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-06-01)
 
 **Core value:** Preserve existing trading reliability while making the bot safer and more resilient — no regressions on live trading
-**Current focus:** Phase 12 — parallel-run-cutover-htmx-decommission
+**Current focus:** Phase 13 — staged-entry-execution-correctness-and-direct-zone-multi-sta
 
 ## Current Position
 
-Phase: 12 (parallel-run-cutover-htmx-decommission) — COMPLETE (code; live VPS bake/GO deferred)
-Plan: 3 of 3 (all complete)
-Status: Ready to execute
-Last activity: 2026-06-08 -- Phase 13 planning complete
+Phase: 13 (staged-entry-execution-correctness-and-direct-zone-multi-sta) — EXECUTING
+Plan: 1 of 5
+Status: Executing Phase 13
+Last activity: 2026-06-08 -- Phase 13 execution started
 
 ## v1.2 Milestone Map
 
