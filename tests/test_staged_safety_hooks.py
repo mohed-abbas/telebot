@@ -651,3 +651,34 @@ async def test_reconnect_reconciliation_dry_on_empty_staged(
 ):
     """No pending staged_entries → _sync_positions unchanged v1.0 behavior (no crash)."""
     await executor_fixture._sync_positions(seeded_staged_account, priced_connector)
+
+
+# ── Phase 13 Wave-0 RED stubs (safety hooks) ─────────────────────────
+# Intentionally RED (pytest.fail) so each downstream task has a concrete
+# `pytest -k <name>` gate to turn green. Plain sync stubs — no fixtures/event
+# loop — guaranteeing collected-and-red regardless of dev-Postgres presence.
+
+
+def test_correlated_cascade_uses_persisted_tp():
+    """EXEC2-01 — the correlated price-cascade (currently a silent no-op because
+    the orphan signal row carries sl=0/tp=0) fires off the PERSISTED signal_sl/
+    signal_tp on the staged row: a correlated sequence whose price reaches the
+    follow-up's TP cancels the unfilled sibling stages. Implemented in Plan 02/03.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-01 correlated cascade uses persisted TP (implemented in Plan 02/03)")
+
+
+def test_orphan_protective_tp_at_expiry():
+    """EXEC2-05 / D2-12 — at correlation-window expiry without a follow-up, the
+    orphan stage-1 position gets a protective TP = entry ± (sl_distance × 1)
+    (R=1:1) via modify_position. Implemented in Plan 03.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-05 orphan protective TP at window expiry (implemented in Plan 03)")
+
+
+def test_orphan_no_tp_during_window():
+    """EXEC2-05 — BEFORE the correlation window expires the orphan must NOT get a
+    protective TP set (don't pre-empt a still-possible follow-up that would set
+    the real TP). Implemented in Plan 03.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-05 orphan no TP during window (implemented in Plan 03)")

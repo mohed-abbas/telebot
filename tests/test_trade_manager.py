@@ -561,3 +561,25 @@ class TestCorrelatedFollowupStage1Align:
         aligned = [r for r in results if r.get("status") == "stage1_aligned"]
         assert len(aligned) == 1
         assert aligned[0]["tp"] == 0.0
+
+
+# ── Phase 13 Wave-0 RED stubs (trade_manager) ────────────────────────
+# Intentionally RED (pytest.fail) so each downstream task has a concrete
+# `pytest -k <name>` gate to turn green.
+
+
+def test_sl_less_open_skips_cleanly():
+    """EXEC2-04 / D2-13 — a standalone OPEN whose signal.sl is None is routed to a
+    clean skip-result BEFORE any sizing (no TypeError from
+    calculate_sl_distance(entry, None), no EXECUTION ERROR alert). The D-08
+    sl<=0 guard remains the second backstop. Implemented in Plan 04.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-04 SL-less OPEN skips cleanly (implemented in Plan 04)")
+
+
+def test_direct_zone_past_market_stale():
+    """EXEC2-06 / D2-14 — when price has already run PAST the zone at arrival, the
+    direct-zone OPEN is rejected as stale (_check_stale runs first) before any
+    band fires at market — never chase a moved market. Implemented in Plan 05.
+    """
+    pytest.fail("Wave 0 stub — EXEC2-06/D2-14 past-zone arrival rejected as stale (implemented in Plan 05)")

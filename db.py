@@ -235,6 +235,18 @@ async def _create_tables() -> None:
                 cancelled_reason   TEXT
             )
         """)
+        # Phase 13 (EXEC2-01): persist the signal's real SL/TP on each staged row
+        # so late zone-watch stages and the correlated price-cascade can recover
+        # them after the in-memory signal is gone. ALTER (not CREATE IF NOT EXISTS)
+        # because staged_entries already exists — CREATE IF NOT EXISTS silently
+        # no-ops on an existing table (RESEARCH Pitfall 1). Nullable + no default so
+        # pre-migration awaiting_zone rows tolerate NULL (NULL-safe read path).
+        await conn.execute("""
+            ALTER TABLE staged_entries ADD COLUMN IF NOT EXISTS signal_sl DOUBLE PRECISION
+        """)
+        await conn.execute("""
+            ALTER TABLE staged_entries ADD COLUMN IF NOT EXISTS signal_tp DOUBLE PRECISION
+        """)
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_staged_entries_active
                 ON staged_entries(status, account_name, signal_id)
@@ -1018,14 +1030,17 @@ async def create_staged_entries(rows: list[dict]) -> list[int]:
                     """INSERT INTO staged_entries
                        (signal_id, stage_number, account_name, symbol, direction,
                         zone_low, zone_high, band_low, band_high, target_lot,
-                        snapshot_settings, mt5_comment, status)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
+                        snapshot_settings, mt5_comment, status, signal_sl, signal_tp)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15)
                        RETURNING id""",
                     r["signal_id"], r["stage_number"], r["account_name"],
                     r["symbol"], r["direction"],
                     r["zone_low"], r["zone_high"], r["band_low"], r["band_high"],
                     r["target_lot"], json.dumps(r["snapshot_settings"]),
                     r["mt5_comment"], r.get("status", "awaiting_zone"),
+                    # EXEC2-01: .get() so callers not yet updated (Plan 03/05) insert
+                    # NULL rather than raising KeyError; NULL is read-path-safe.
+                    r.get("signal_sl"), r.get("signal_tp"),
                 )
                 ids.append(new_id)
     return ids
@@ -1084,7 +1099,8 @@ async def get_active_stages() -> list[dict]:
     rows = await _pool.fetch(
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
-        "mt5_comment FROM staged_entries WHERE status='awaiting_zone'"
+        "mt5_comment, signal_sl, signal_tp "
+        "FROM staged_entries WHERE status='awaiting_zone'"
     )
     return [dict(r) for r in rows]
 
