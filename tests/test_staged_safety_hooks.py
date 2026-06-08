@@ -194,8 +194,14 @@ async def _insert_staged_row(
     target_lot: float = 0.1,
     snapshot_settings: dict | None = None,
     mt5_ticket: int | None = None,
+    signal_sl: float | None = None,
+    signal_tp: float | None = None,
 ) -> int:
-    """Insert one staged_entries row; return its id."""
+    """Insert one staged_entries row; return its id.
+
+    `signal_sl`/`signal_tp` are the persisted per-stage protective levels
+    (Phase 13 Plan 01 columns); leave None to simulate a pre-migration row.
+    """
     if mt5_comment is None:
         mt5_comment = f"telebot-{signal_id}-s{stage_number}"
     if snapshot_settings is None:
@@ -214,12 +220,15 @@ async def _insert_staged_row(
             """INSERT INTO staged_entries
                (signal_id, stage_number, account_name, symbol, direction,
                 zone_low, zone_high, band_low, band_high, target_lot,
-                snapshot_settings, mt5_comment, mt5_ticket, status)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14)
+                snapshot_settings, mt5_comment, mt5_ticket, status,
+                signal_sl, signal_tp)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,
+                       $15,$16)
                RETURNING id""",
             signal_id, stage_number, account_name, symbol, direction,
             band_low, band_high, band_low, band_high, target_lot,
             json.dumps(snapshot_settings), mt5_comment, mt5_ticket, status,
+            signal_sl, signal_tp,
         )
     return row_id
 
@@ -659,13 +668,53 @@ async def test_reconnect_reconciliation_dry_on_empty_staged(
 # loop — guaranteeing collected-and-red regardless of dev-Postgres presence.
 
 
-def test_correlated_cascade_uses_persisted_tp():
-    """EXEC2-01 — the correlated price-cascade (currently a silent no-op because
-    the orphan signal row carries sl=0/tp=0) fires off the PERSISTED signal_sl/
-    signal_tp on the staged row: a correlated sequence whose price reaches the
-    follow-up's TP cancels the unfilled sibling stages. Implemented in Plan 02/03.
+async def test_correlated_cascade_uses_persisted_tp(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector,
+    executor_fixture, caplog,
+):
+    """EXEC2-01 — the correlated price-cascade (a silent no-op for correlated
+    sequences because the orphan signals row carries sl=0/tp=0) now fires off
+    the PERSISTED signal_sl/signal_tp on the staged row.
+
+    Setup mirrors the real correlated case: the signals row has NO sl/tp
+    (get_signal_targets → sl=0/tp=0, so the OLD cascade could never fire), but
+    the stage rows carry the follow-up's real persisted signal_sl/signal_tp.
+    Price reaches the persisted TP → unfilled sibling stage cancels.
     """
-    pytest.fail("Wave 0 stub — EXEC2-01 correlated cascade uses persisted TP (implemented in Plan 02/03)")
+    sid = seeded_signal
+    # Orphan signals row: leave sl/tp unset (NULL/0) → get_signal_targets dead.
+    # Live bid AT/ABOVE the persisted TP (and above stage 2's band).
+    priced_connector._prices = {"XAUUSD": (2060.5, 2060.7)}
+    # Stage 1 still alive on MT5 — D-16 must NOT be the one cancelling.
+    priced_connector._fake_positions[661001] = Position(
+        ticket=661001, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.1, sl=2030.0, tp=2060.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        band_low=2040.0, band_high=2040.1,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=661001,
+        signal_sl=2030.0, signal_tp=2060.0,
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=2, account_name=seeded_staged_account,
+        band_low=2042.0, band_high=2043.0,
+        mt5_comment=f"telebot-{sid}-s2", status="awaiting_zone",
+        signal_sl=2030.0, signal_tp=2060.0,
+    )
+
+    import logging as _lg
+    with caplog.at_level(_lg.INFO):
+        await _run_one_zone_watch_tick(executor_fixture)
+
+    row = await db.get_stage_by_comment(f"telebot-{sid}-s2")
+    assert row["status"] == "cancelled_target_reached", (
+        "cascade must fire off the persisted signal_tp even though the orphan "
+        "signals row has no sl/tp"
+    )
+    assert any("target cascade" in rec.message and "tp_reached" in rec.message
+               for rec in caplog.records)
 
 
 def test_orphan_protective_tp_at_expiry():
