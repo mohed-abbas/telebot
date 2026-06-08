@@ -593,19 +593,46 @@ class Executor:
                         if sid_iter in seen_signal_ids:
                             continue
                         seen_signal_ids.add(sid_iter)
-                        try:
-                            targets = await db.get_signal_targets(sid_iter)
-                        except Exception as exc:
-                            logger.warning(
-                                "%s: target fetch failed signal_id=%d: %s",
-                                acct_name, sid_iter, exc,
-                            )
+
+                        # EXEC2-01: prefer the PERSISTED per-stage SL/TP
+                        # (Plan 01/03/05). For a correlated sequence the
+                        # signals row is the orphan (sl=0/tp=0), so the old
+                        # get_signal_targets path was a silent no-op — deep
+                        # stages kept firing after price already hit the real
+                        # TP. The stage row carries the follow-up's real SL/TP.
+                        # get_signal_targets remains the NULL fallback for
+                        # pre-migration rows / direct-zone signals whose own
+                        # signals row already holds real sl/tp.
+                        stage_sl = stage.get("signal_sl")
+                        stage_tp = stage.get("signal_tp")
+                        stage_dir = (stage.get("direction") or "").lower()
+
+                        targets = None
+                        if stage_sl is None or stage_tp is None or not stage_dir:
+                            try:
+                                targets = await db.get_signal_targets(sid_iter)
+                            except Exception as exc:
+                                logger.warning(
+                                    "%s: target fetch failed signal_id=%d: %s",
+                                    acct_name, sid_iter, exc,
+                                )
+                                targets = None
+
+                        sig_dir = stage_dir or (
+                            (targets.get("direction") or "").lower()
+                            if targets else ""
+                        )
+                        sig_sl = (
+                            float(stage_sl) if stage_sl is not None
+                            else float((targets or {}).get("sl") or 0.0)
+                        )
+                        sig_tp = (
+                            float(stage_tp) if stage_tp is not None
+                            else float((targets or {}).get("tp") or 0.0)
+                        )
+                        if not sig_dir or (sig_sl <= 0 and sig_tp <= 0):
+                            # No usable protective levels from either source.
                             continue
-                        if not targets:
-                            continue
-                        sig_dir = (targets.get("direction") or "").lower()
-                        sig_sl = float(targets.get("sl") or 0.0)
-                        sig_tp = float(targets.get("tp") or 0.0)
                         hit_reason: str | None = None
                         if sig_dir == "buy":
                             if sig_tp > 0 and bid >= sig_tp:
