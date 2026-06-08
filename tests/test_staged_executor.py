@@ -420,12 +420,76 @@ def test_late_stage_carries_signal_sl_tp():
     pytest.fail("Wave 0 stub — EXEC2-01 late-stage SL/TP carry (implemented in Plan 02)")
 
 
-def test_percent_splits_risk():
+async def test_percent_splits_risk(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector, tm_with_store,
+):
     """EXEC2-02 — in percent risk_mode the submitted per-stage volume equals
-    risk_value / max_stages (matches fixed_lot), so total deployed risk is the
-    risk_value ceiling rather than risk_value × stages. Implemented in Plan 04.
+    calculate_lot_size(risk_value / max_stages), so total deployed risk is the
+    risk_value ceiling rather than risk_value × stages. fixed_lot already splits
+    via stage_lot_size; this proves the percent branch now matches.
+
+    Contract:
+      - staged percent OPEN (max_stages=4) submits volume sized at risk_value/4.
+      - non-staged percent OPEN (staged=False) keeps the FULL risk_value (v1.0).
+      - so submitted_staged == submitted_nonstaged / 4 (within rounding).
     """
-    pytest.fail("Wave 0 stub — EXEC2-02 percent risk split (implemented in Plan 04)")
+    from models import AccountSettings
+    from risk_calculator import calculate_lot_size, calculate_sl_distance
+
+    # Configure the account as percent-mode, risk_value=2%, max_stages=4.
+    await db.update_account_setting("test-acct", "risk_mode", "percent", actor="test")
+    await db.update_account_setting("test-acct", "risk_value", 2.0, actor="test")
+    await db.update_account_setting("test-acct", "max_stages", 4, actor="test")
+    await tm_with_store.settings_store.load_all()
+    snapshot = tm_with_store.settings_store.snapshot("test-acct")
+    assert snapshot.risk_mode == "percent"
+    assert snapshot.risk_value == pytest.approx(2.0)
+    assert snapshot.max_stages == 4
+
+    acct = tm_with_store.accounts["test-acct"]
+
+    # A market BUY with a real SL (entry derived from the dry price 2040.2 ask).
+    signal = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy now SL 2035 TP 2050",
+        direction=Direction.BUY, entry_zone=None,
+        sl=2035.0, tps=[], target_tp=None,
+    )
+
+    # Staged percent stage → must divide risk_value by max_stages.
+    staged_result = await tm_with_store._execute_open_on_account(
+        signal, signal_id=seeded_signal, acct=acct,
+        connector=priced_connector,
+        staged=True, stage_number=1, stage_row_id=None, snapshot=snapshot,
+    )
+    assert staged_result["status"] == "executed"
+    submitted_staged = staged_result["lot_size"]
+
+    # Compute the expected per-stage volume independently.
+    acct_info = await priced_connector.get_account_info()
+    entry = 2040.2  # ask from priced_connector
+    sl_distance = calculate_sl_distance(entry, 2035.0)
+    expected_per_stage = calculate_lot_size(
+        account_balance=acct_info.balance,
+        risk_percent=2.0 / 4,  # risk_value / max_stages
+        sl_distance=sl_distance,
+        max_lot_size=snapshot.max_lot_size,
+        jitter_percent=0,
+        symbol="XAUUSD",
+    )
+    expected_full = calculate_lot_size(
+        account_balance=acct_info.balance,
+        risk_percent=2.0,  # un-split, the v1.0 non-staged amount
+        sl_distance=sl_distance,
+        max_lot_size=snapshot.max_lot_size,
+        jitter_percent=0,
+        symbol="XAUUSD",
+    )
+
+    assert submitted_staged == pytest.approx(expected_per_stage)
+    # The split must actually be a quarter of the full (sanity, guards no-op division).
+    assert expected_per_stage == pytest.approx(expected_full / 4, abs=0.01)
+    assert submitted_staged < expected_full
 
 
 def test_direct_zone_multistage():

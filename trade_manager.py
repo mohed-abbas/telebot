@@ -699,9 +699,15 @@ class TradeManager:
                 return {"account": name, "status": "failed", "reason": "Cannot get account info"}
             # Phase 5: effective risk/lot caps come from SettingsStore when attached.
             risk_pct, max_lot, _ = _effective(self, acct)
+            # EXEC2-02 (D2-06/D2-07): risk_value is a TOTAL ceiling split equally
+            # across the staged sequence — mirror stage_lot_size's fixed_lot split so
+            # a percent-mode N-stage sequence deploys risk_value (not risk_value×N).
+            # Gated on `staged` so the v1.0 single-signal path keeps full risk_pct.
+            stages = snapshot.max_stages if snapshot and snapshot.max_stages > 0 else 1
+            per_stage_risk = risk_pct / stages if staged else risk_pct
             lot_size = calculate_lot_size(
                 account_balance=acct_info.balance,
-                risk_percent=risk_pct,
+                risk_percent=per_stage_risk,
                 sl_distance=sl_distance,
                 max_lot_size=max_lot,
                 jitter_percent=self.cfg.lot_jitter_percent,

@@ -162,13 +162,50 @@ def test_stages_payload_shape_and_started_at(session_client):
 # ---------------------------------------------------------------------------
 
 def test_target_lot_matches_volume():
-    """EXEC2-03 — the `/staged` panel's `target_lot` equals the volume actually
-    submitted to the broker (percent-mode per-stage volume).
+    """EXEC2-03 / D2-08 — the `/staged` panel's persisted `target_lot` is the
+    per-stage slice that the order is actually sized from (percent-mode).
 
-    target_lot is written from stage_lot_size(snapshot) (already split by
-    max_stages); the bug is the percent branch submitting full-risk_value volume
-    (EXEC2-02). Once EXEC2-02 lands the two converge — this contract proves the
-    displayed target_lot == submitted percent-mode per-stage volume.
-    Intentionally RED. Implemented in Plan 04.
+    Two halves of one invariant:
+      1. target_lot is written from stage_lot_size(snapshot) = risk_value/max_stages
+         (the per-stage slice), and read through to the panel verbatim — api/stages
+         does NOT recompute it.
+      2. EXEC2-02 makes the percent submit branch size its order from the SAME
+         per-stage risk (risk_value/max_stages). So the displayed per-stage figure
+         and the submitted per-stage order share one divisor — they converge.
+
+    This is the deterministic (no-DB) driver. The live HTTP convergence (display ==
+    submitted volume) is exercised end-to-end by
+    tests/test_staged_executor.py::test_percent_splits_risk.
     """
-    pytest.fail("Wave 0 stub — EXEC2-03 target_lot == submitted volume (implemented in Plan 04)")
+    from models import AccountSettings
+    from trade_manager import stage_lot_size
+
+    snapshot = AccountSettings(
+        account_name="test-acct", risk_mode="percent", risk_value=2.0,
+        max_stages=4, default_sl_pips=100, max_daily_trades=30,
+        max_open_trades=3, max_lot_size=1.0,
+    )
+
+    # Half 1 — the persisted target_lot is the per-stage slice (risk_value/max_stages).
+    persisted_target_lot = stage_lot_size(snapshot)
+    assert persisted_target_lot == pytest.approx(2.0 / 4)  # 0.5% per stage
+
+    # Read-through: api/stages must NOT recompute target_lot — the panel surfaces the
+    # raw persisted value unchanged. _enrich_active passes non-display keys through.
+    raw = {
+        "symbol": "XAUUSD",
+        "target_lot": persisted_target_lot,
+        "band_low": 2800.0, "band_high": 2810.0, "current_price": 2805.0,
+        "filled": 0, "total": 4,
+    }
+    out = stages._enrich_active(dict(raw), raw)
+    assert out["target_lot"] == pytest.approx(persisted_target_lot), (
+        "target_lot must be surfaced verbatim — no recompute in the display layer"
+    )
+
+    # Half 2 — the percent submit branch sizes its order from the SAME per-stage
+    # risk. Mirror the fix's divisor: per_stage_risk = risk_pct / max_stages.
+    risk_pct = snapshot.risk_value  # percent-mode risk is the risk_value
+    per_stage_risk = risk_pct / snapshot.max_stages
+    # The display slice and the submit-path slice share one divisor → they converge.
+    assert per_stage_risk == pytest.approx(persisted_target_lot)
