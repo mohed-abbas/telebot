@@ -35,6 +35,12 @@ def _enrich_active(stage: dict, raw: dict) -> dict:
     """
     symbol = stage.get("symbol") or ""
     out = dict(stage)
+    # EXEC2-03 / D2-08: surface the persisted per-stage `target_lot` verbatim. The
+    # display dict from `_enrich_stage_for_ui` intentionally drops it (it builds the
+    # band/elapsed view), so recover it from the raw get_pending_stages() row — never
+    # recompute. Absent on legacy rows → null, keeping the SPA contract stable.
+    if "target_lot" not in out:
+        out["target_lot"] = raw.get("target_lot")
     for key in ("band_low", "band_high", "current_price"):
         val = stage.get(key)
         if val is not None:
