@@ -172,7 +172,7 @@ Plans:
 - [x] 13-03-PLAN.md — EXEC2-02 percent risk split (risk_value/max_stages) + EXEC2-03 /staged target_lot contract + EXEC2-04 SL-less clean skip + create-site SL/TP persistence (EXEC2-02, EXEC2-03, EXEC2-04)
 **Wave 2** *(blocked on Wave 1)*
 - [x] 13-04-PLAN.md — EXEC2-05 orphan protective-TP (R=1:1) at window expiry via the existing 10s loop, idempotent; live VPS checkpoint (EXEC2-05)
-- [ ] 13-05-PLAN.md — EXEC2-06 direct-zone multi-stage _handle_open rewrite (mirror correlated-followup; D2-04 whole-zone band; D2-14 stale guard); live VPS checkpoint (EXEC2-06)
+- [x] 13-05-PLAN.md — EXEC2-06 direct-zone multi-stage _handle_open rewrite (mirror correlated-followup; D2-04 whole-zone band; D2-14 stale guard); live VPS checkpoint deferred (EXEC2-06)
 
 ---
 
