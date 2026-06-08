@@ -576,25 +576,122 @@ async def test_percent_splits_risk(
     assert submitted_staged < expected_full
 
 
-def test_direct_zone_multistage():
+async def test_direct_zone_multistage(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store,
+):
     """EXEC2-06 — a standalone zone+SL+TP OPEN with max_stages=N creates N stages
     (mirrors _handle_correlated_followup band geometry), not a single zone_mid
-    fill. Implemented in Plan 05.
+    fill. Some already-crossed bands fire at market; the rest arm.
+
+    Direct-zone bands are numbered 1..N (the lowest band IS stage 1 — there is
+    no prior text-only market anchor; D2-02). max_stages=5 → 5 bands.
+
+    Price (2040.1/2040.2). Zone (2040, 2060) max_stages=5 →
+      bands (1..5): 2040-2044, 2044-2048, 2048-2052, 2052-2056, 2056-2060.
+    For BUY, in-zone-at-arrival is ask <= band.high. ask=2040.2 <= every
+    band.high → ALL 5 bands are already crossed → all 5 fire at market.
     """
-    pytest.fail("Wave 0 stub — EXEC2-06 direct-zone multistage (implemented in Plan 05)")
+    # NO orphan registered → handle_signal routes a standalone OPEN to _handle_open.
+    open_signal = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2040-2060 SL 2030 TP 2080",
+        direction=Direction.BUY, entry_zone=(2040.0, 2060.0),
+        sl=2030.0, tps=[2080.0], target_tp=2080.0,
+    )
+    results = await tm_with_store.handle_signal(open_signal)
+
+    async with db._pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT stage_number, status, band_low, band_high, target_lot, "
+            "signal_sl, signal_tp, mt5_comment "
+            "FROM staged_entries ORDER BY stage_number"
+        )
+    # max_stages=5 → exactly 5 stages (NOT a single zone_mid fill).
+    assert len(rows) == 5
+    assert [r["stage_number"] for r in rows] == [1, 2, 3, 4, 5]
+    # All bands already crossed at arrival → all filled.
+    assert all(r["status"] == "filled" for r in rows)
+    # Bands partition the zone exactly.
+    assert rows[0]["band_low"] == pytest.approx(2040.0)
+    assert rows[-1]["band_high"] == pytest.approx(2060.0)
+    # Every row persists the OPEN's real signal SL/TP (not default+0).
+    for r in rows:
+        assert r["signal_sl"] == pytest.approx(2030.0)
+        assert r["signal_tp"] == pytest.approx(2080.0)
+        assert r["mt5_comment"].endswith(f"-s{r['stage_number']}")
+    # No collision with the correlated path: comments key off the OPEN's own id.
+    assert all(r["mt5_comment"].startswith("telebot-") for r in rows)
+    # Fired results carry the signal's real SL (not a default-derived one).
+    fired = [r for r in results if r.get("status") == "executed"]
+    assert len(fired) == 5
 
 
-def test_direct_zone_single_band():
+async def test_direct_zone_single_band(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store,
+):
     """EXEC2-06 / D2-04 — max_stages=1 fires exactly ONE whole-zone entry (a
     synthesized whole-zone band), NOT the legacy v1.0 zone_mid single fill and
-    NOT the correlated 'no_bands' branch. Implemented in Plan 05.
+    NOT the correlated 'no_bands' branch.
     """
-    pytest.fail("Wave 0 stub — EXEC2-06 direct-zone single whole-zone band (implemented in Plan 05)")
+    await db.update_account_setting("test-acct", "max_stages", 1, actor="test")
+    await tm_with_store.settings_store.load_all()
+
+    # Price (2040.1/2040.2) sits inside the zone → the whole-zone band crosses.
+    open_signal = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2040-2050 SL 2030 TP 2080",
+        direction=Direction.BUY, entry_zone=(2040.0, 2050.0),
+        sl=2030.0, tps=[2080.0], target_tp=2080.0,
+    )
+    results = await tm_with_store.handle_signal(open_signal)
+
+    async with db._pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT stage_number, status, band_low, band_high, signal_sl, signal_tp "
+            "FROM staged_entries ORDER BY stage_number"
+        )
+    # Exactly ONE whole-zone band (low=zone_low, high=zone_high).
+    assert len(rows) == 1
+    assert rows[0]["stage_number"] == 1
+    assert rows[0]["band_low"] == pytest.approx(2040.0)
+    assert rows[0]["band_high"] == pytest.approx(2050.0)
+    assert rows[0]["status"] == "filled"
+    assert rows[0]["signal_sl"] == pytest.approx(2030.0)
+    assert rows[0]["signal_tp"] == pytest.approx(2080.0)
+    # Not the correlated no_bands branch.
+    assert not any(r.get("status") == "no_bands" for r in results)
+    fired = [r for r in results if r.get("status") == "executed"]
+    assert len(fired) == 1
 
 
-def test_direct_zone_arms_when_outside():
+async def test_direct_zone_arms_when_outside(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store,
+):
     """EXEC2-06 / D2-02 — when price is entirely outside the zone at arrival,
     NOTHING fires; all bands are armed (status='awaiting_zone') and the
-    _zone_watch_loop fires them later when price enters. Implemented in Plan 05.
+    _zone_watch_loop fires them later when price enters.
+
+    Price (2040.1/2040.2). Zone (2020, 2030) is BELOW price → for a BUY the
+    trigger is ask <= band.high; ask=2040.2 > every band.high (<=2030) →
+    NO band crossed → all armed.
     """
-    pytest.fail("Wave 0 stub — EXEC2-06/D2-02 direct-zone arms when outside (implemented in Plan 05)")
+    open_signal = SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD",
+        raw_text="Gold buy zone 2020-2030 SL 2010 TP 2060",
+        direction=Direction.BUY, entry_zone=(2020.0, 2030.0),
+        sl=2010.0, tps=[2060.0], target_tp=2060.0,
+    )
+    results = await tm_with_store.handle_signal(open_signal)
+
+    async with db._pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT stage_number, status FROM staged_entries ORDER BY stage_number"
+        )
+    # max_stages=5 → 5 bands, all armed (none crossed at arrival).
+    assert len(rows) == 5
+    for r in rows:
+        assert r["status"] == "awaiting_zone"
+    # Nothing fired at market.
+    assert not any(r.get("status") == "executed" for r in results)
+    # No zone_mid full-fill leaked through.
+    assert not any(r.get("status") == "filled" for r in results)
