@@ -806,6 +806,18 @@ class Executor:
             sl_price = entry_price + default_sl_pips * pip_size
             direction_enum = Direction.SELL
 
+        # EXEC2-01 / D2-05: carry the signal's REAL persisted SL/TP (set by
+        # Plan 01/03/05) so a late stage fired by this watchdog ends with the
+        # same protective levels as the rest of its sequence — not a rebuilt
+        # default_sl_pips SL with TP=0. NULL-safe: a pre-migration row whose
+        # signal_sl is NULL falls back to the default_sl_pips-derived sl_price
+        # (NEVER sl=0 — the D-08 backstop at _execute_open_on_account remains).
+        # signal_tp may be None for an orphan stage with no TP; that is
+        # acceptable here (the orphan-TP attach is Plan 03/04).
+        signal_sl = stage.get("signal_sl")
+        signal_tp = stage.get("signal_tp")
+        resolved_sl = sl_price if signal_sl is None else signal_sl
+
         synth = SignalAction(
             type=SignalType.OPEN,
             symbol=symbol,
@@ -814,9 +826,9 @@ class Executor:
             ),
             direction=direction_enum,
             entry_zone=(band_low, band_high),
-            sl=sl_price,
+            sl=resolved_sl,
             tps=[],
-            target_tp=None,
+            target_tp=signal_tp,
         )
 
         try:
