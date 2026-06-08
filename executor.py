@@ -534,6 +534,17 @@ class Executor:
                 if self._trading_paused:
                     continue
 
+                # EXEC2-05 (D2-09..D2-12) — orphan protective-TP watchdog.
+                # Runs FIRST and independently of awaiting_zone rows: an orphan
+                # stage-1 has no awaiting_zone siblings by definition, so it would
+                # never appear in get_active_stages() / by_pair below. At
+                # correlation-window expiry it gets an R=1:1 protective TP off its
+                # default-SL distance. Failure-isolated so it never aborts the loop.
+                try:
+                    await self._run_orphan_protective_tp_watchdog()
+                except Exception as exc:
+                    logger.warning("Zone watch: orphan-TP watchdog error: %s", exc)
+
                 try:
                     rows = await db.get_active_stages()
                 except Exception as exc:
@@ -775,6 +786,177 @@ class Executor:
                 break
             except Exception as exc:
                 logger.error("Zone watch loop error: %s", exc)
+
+    async def _run_orphan_protective_tp_watchdog(self) -> None:
+        """EXEC2-05 (D2-09..D2-12) — protective-TP watchdog for orphan stage-1.
+
+        An orphan text-only position (stage 1 filled at market with a default
+        SL, no follow-up in the correlation window) must never be left
+        unmanaged. At window expiry we attach a protective TP so it rides on
+        its default SL + an assigned target.
+
+        Runs independently of the awaiting_zone band-fire path: an orphan has
+        NO sibling stages by definition, so it never appears in
+        get_active_stages(). This watchdog fetches its own candidates and
+        per-(account,symbol) live positions.
+
+          - Window gate (D2-12): act ONLY after the signal is older than
+            ``correlation_window_seconds`` (a fast follow-up still gets to set
+            the real SL/TP first) AND only when there are NO sibling stages.
+            Both are enforced by ``db.get_orphan_candidate_stage1s``.
+          - R=1:1 (D2-10/D2-11): ``TP = entry ± (sl_distance × 1)`` where
+            ``sl_distance = default_sl_pips × pip_size`` (the same value used at
+            orphan stage-1 open). R is the literal constant 1 — no config knob.
+          - Idempotency (Open Q2): read the live position's CURRENT TP; skip if
+            already non-zero. Survives reconnects / loop re-ticks; no schema.
+          - Failure isolation (D-17 pattern): a modify_position error is logged
+            and swallowed — it must not abort the watchdog or the loop.
+        """
+        if self._trading_paused:
+            return
+
+        try:
+            window = int(getattr(self.cfg, "correlation_window_seconds", 600))
+        except Exception:
+            window = 600
+
+        try:
+            candidates = await db.get_orphan_candidate_stage1s(window)
+        except Exception as exc:
+            logger.warning("orphan-TP candidate fetch failed: %s", exc)
+            return
+        if not candidates:
+            return
+
+        # Group by (account, symbol) so get_positions runs once per connector.
+        by_pair: dict[tuple[str, str], list[dict]] = {}
+        for row in candidates:
+            by_pair.setdefault(
+                (row["account_name"], row["symbol"]), []
+            ).append(row)
+
+        for (acct_name, symbol), rows in by_pair.items():
+            if acct_name in self._reconnecting:
+                continue
+            connector = self.tm.connectors.get(acct_name)
+            if connector is None:
+                continue
+
+            try:
+                positions = await connector.get_positions()
+            except Exception as exc:
+                logger.warning(
+                    "%s: orphan-TP get_positions failed: %s", acct_name, exc,
+                )
+                continue
+
+            positions_by_comment = {
+                getattr(p, "comment", ""): p
+                for p in positions
+                if getattr(p, "comment", "")
+            }
+
+            for row in rows:
+                await self._attach_one_orphan_protective_tp(
+                    acct_name=acct_name, connector=connector,
+                    symbol=symbol, row=row,
+                    positions_by_comment=positions_by_comment,
+                )
+
+    async def _attach_one_orphan_protective_tp(
+        self,
+        *,
+        acct_name: str,
+        connector,
+        symbol: str,
+        row: dict,
+        positions_by_comment: dict,
+    ) -> None:
+        """Attach an R=1:1 protective TP to a single orphan stage-1 position.
+
+        Idempotent (skips an already-set TP) and failure-isolated. See
+        ``_run_orphan_protective_tp_watchdog`` for the locked constraints.
+        """
+        pip_size = GOLD_PIP_SIZE if symbol.upper() == "XAUUSD" else 0.0001
+
+        comment = row.get("mt5_comment") or f"telebot-{row['signal_id']}-s1"
+        position = positions_by_comment.get(comment)
+        if position is None:
+            # Row claims a live ticket but MT5 shows no matching position
+            # right now (e.g. just closed) — nothing to protect.
+            return
+
+        # Idempotency (Open Q2): skip if a TP is already set. Survives
+        # reconnect / loop re-ticks without a persisted flag.
+        current_tp = getattr(position, "tp", 0.0) or 0.0
+        if current_tp != 0.0:
+            return
+
+        # Resolve default_sl_pips from the frozen snapshot (parity with
+        # _fire_zone_stage / the orphan stage-1 open).
+        snapshot_dict = row.get("snapshot_settings")
+        if isinstance(snapshot_dict, str):
+            try:
+                snapshot_dict = json.loads(snapshot_dict)
+            except Exception:
+                snapshot_dict = {}
+        if not isinstance(snapshot_dict, dict):
+            snapshot_dict = {}
+        default_sl_pips = snapshot_dict.get("default_sl_pips", 100) or 100
+
+        sl_distance = default_sl_pips * pip_size  # R=1:1 → TP distance == SL distance
+        entry = getattr(position, "open_price", 0.0) or 0.0
+        direction = (row.get("direction") or getattr(position, "direction", "") or "").lower()
+        if direction == "buy":
+            protective_tp = entry + sl_distance
+        else:
+            protective_tp = entry - sl_distance
+
+        # Keep the existing SL unchanged (D-08 default SL preserved).
+        keep_sl = getattr(position, "sl", 0.0)
+        ticket = getattr(position, "ticket", None) or row.get("mt5_ticket")
+
+        try:
+            modify_result = await connector.modify_position(
+                ticket, sl=keep_sl, tp=protective_tp,
+            )
+        except Exception as exc:  # never let a connector error abort the loop
+            logger.warning(
+                "%s: orphan protective-TP raised ticket=%s — continuing: %s",
+                acct_name, ticket, exc,
+            )
+            return
+
+        if getattr(modify_result, "success", False):
+            logger.info(
+                "%s: orphan protective-TP attached ticket=%s tp=%.5f "
+                "(entry=%.5f sl_distance=%.5f R=1:1, signal_id=%d)",
+                acct_name, ticket, protective_tp, entry, sl_distance,
+                row["signal_id"],
+            )
+            try:
+                await db.log_signal(
+                    raw_text=(
+                        f"<orphan-protective-tp signal_id={row['signal_id']} "
+                        f"ticket={ticket}>"
+                    ),
+                    signal_type="orphan_protective_tp",
+                    action_taken=f"orphan_protective_tp ticket={ticket}",
+                    symbol=symbol,
+                    direction=direction,
+                    sl=keep_sl or 0.0,
+                    tp=protective_tp,
+                )
+            except Exception as exc:  # audit row failure must not abort
+                logger.warning(
+                    "%s: orphan protective-TP audit log failed: %s",
+                    acct_name, exc,
+                )
+        else:
+            logger.warning(
+                "%s: orphan protective-TP FAILED ticket=%s reason=%s",
+                acct_name, ticket, getattr(modify_result, "error", "unknown"),
+            )
 
     async def _fire_zone_stage(
         self,

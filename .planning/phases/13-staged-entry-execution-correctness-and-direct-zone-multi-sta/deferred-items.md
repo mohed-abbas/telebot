@@ -36,3 +36,29 @@ real schema, so this NEVER reproduces there.
 on the project's real dev Postgres) runs the full suite green. This is logged per the
 executor scope-boundary rule (out-of-scope, environment-only) and mirrors the same
 note 13-01 left for the wave-merge runner.
+
+## Plan-05 RED stubs failing in the 13-04 no-regression battery — out of scope
+
+**Discovered during:** Plan 13-04 Task 1 verification (no-regression battery
+`pytest tests/test_staged_safety_hooks.py tests/test_staged_executor.py` on the dev
+Postgres `tb13pg`).
+
+**Symptom:** 3 failures in `tests/test_staged_executor.py` —
+`test_direct_zone_multistage`, `test_direct_zone_single_band`,
+`test_direct_zone_arms_when_outside`.
+
+**Root cause:** these are intentional Wave-0 RED `pytest.fail` stubs for
+**EXEC2-06 (Plan 05)**, each explicitly self-documenting "implemented in Plan 05".
+They are unrelated to EXEC2-05 / Plan 13-04 (orphan protective-TP).
+
+**Evidence it is NOT a 13-04 regression:**
+- `tests/test_staged_executor.py` is byte-for-byte unmodified by Plan 13-04
+  (`git diff --name-only` shows only `db.py`, `executor.py`,
+  `tests/test_staged_safety_hooks.py`).
+- They are bare `pytest.fail(...)` stub bodies — they fail identically at the
+  13-04 baseline regardless of any executor/db change.
+- All 4 orphan tests (`-k orphan`) and the rest of the safety-hook battery pass
+  (40 passed in the combined run).
+
+**Resolution:** none required for 13-04. These turn green when Plan 13-05
+(EXEC2-06 direct-zone multistage) lands. Logged per the executor scope-boundary rule.

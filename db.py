@@ -1105,6 +1105,42 @@ async def get_active_stages() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def get_orphan_candidate_stage1s(window_seconds: int) -> list[dict]:
+    """EXEC2-05 — fetch filled stage-1 rows that are orphan candidates.
+
+    An orphan text-only position is a stage_number=1 row that:
+      - is `filled` with a live `mt5_ticket`,
+      - is older than `window_seconds` (the correlation window has expired,
+        so no follow-up will arrive), AND
+      - has NO sibling stage (no row with stage_number >= 2 for that
+        signal_id — a follow-up would have created siblings).
+
+    The window-expiry decision is made off the DB (the in-memory correlator
+    pops the orphan on pairing, so it cannot be queried at expiry — RESEARCH
+    Open Q1). Returns the rows the watchdog must consider for a protective-TP
+    attach; idempotency (skip if the live position TP is already set) is
+    decided by the caller off the live position (RESEARCH Open Q2).
+    """
+    rows = await _pool.fetch(
+        """SELECT se.id, se.signal_id, se.stage_number, se.account_name,
+                  se.symbol, se.direction, se.band_low, se.band_high,
+                  se.snapshot_settings, se.mt5_comment, se.mt5_ticket,
+                  se.signal_sl, se.signal_tp, se.created_at
+             FROM staged_entries se
+            WHERE se.stage_number = 1
+              AND se.status = 'filled'
+              AND se.mt5_ticket IS NOT NULL
+              AND se.created_at < NOW() - make_interval(secs => $1::double precision)
+              AND NOT EXISTS (
+                    SELECT 1 FROM staged_entries sib
+                     WHERE sib.signal_id = se.signal_id
+                       AND sib.stage_number >= 2
+              )""",
+        float(window_seconds),
+    )
+    return [dict(r) for r in rows]
+
+
 async def drain_staged_entries_for_kill_switch() -> int:
     """D-21 — terminal cancel all pending rows. Returns affected count."""
     result = await _pool.execute(

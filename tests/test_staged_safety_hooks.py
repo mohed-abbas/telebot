@@ -717,17 +717,152 @@ async def test_correlated_cascade_uses_persisted_tp(
                for rec in caplog.records)
 
 
-def test_orphan_protective_tp_at_expiry():
+# ── EXEC2-05 (D2-09..D2-12) orphan protective-TP attach ──────────────
+
+
+async def _backdate_stage(row_id: int, seconds: int) -> None:
+    """Push a staged row's created_at into the past to simulate window expiry."""
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE staged_entries "
+            "SET created_at = NOW() - make_interval(secs => $1::double precision) "
+            "WHERE id=$2",
+            float(seconds), row_id,
+        )
+
+
+async def test_orphan_protective_tp_at_expiry(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector, executor_fixture,
+):
     """EXEC2-05 / D2-12 — at correlation-window expiry without a follow-up, the
     orphan stage-1 position gets a protective TP = entry ± (sl_distance × 1)
-    (R=1:1) via modify_position. Implemented in Plan 03.
+    (R=1:1) via modify_position; the existing SL is left unchanged.
+
+    Setup:
+      - one stage-1 'filled' row with a live mt5_ticket, NO sibling stages,
+        backdated past correlation_window_seconds (600 default).
+      - a live BUY position with the canonical comment whose TP is 0 (unset).
+    Expect: the position's TP is set to entry + default_sl_pips*pip_size,
+    SL untouched.
     """
-    pytest.fail("Wave 0 stub — EXEC2-05 orphan protective TP at window expiry (implemented in Plan 03)")
+    from risk_calculator import GOLD_PIP_SIZE
+
+    sid = seeded_signal
+    # Price irrelevant to the orphan path, but keep a sane value.
+    priced_connector._prices = {"XAUUSD": (2041.0, 2041.2)}
+
+    entry = 2040.10
+    open_sl = 2030.0  # default-SL distance already on the position
+    priced_connector._fake_positions[444001] = Position(
+        ticket=444001, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=entry, sl=open_sl, tp=0.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    row_id = await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        direction="buy", band_low=2040.0, band_high=2040.2,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=444001,
+    )
+    # Backdate beyond the 600s correlation window → orphan, window expired.
+    await _backdate_stage(row_id, 1200)
+
+    await _run_one_zone_watch_tick(executor_fixture)
+
+    pos = priced_connector._fake_positions[444001]
+    expected_tp = entry + 100 * GOLD_PIP_SIZE  # default_sl_pips=100, R=1:1
+    assert pos.tp == pytest.approx(expected_tp), (
+        f"expected protective TP {expected_tp}, got {pos.tp}"
+    )
+    assert pos.sl == pytest.approx(open_sl), "default SL must be preserved"
 
 
-def test_orphan_no_tp_during_window():
+async def test_orphan_no_tp_during_window(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector, executor_fixture,
+):
     """EXEC2-05 — BEFORE the correlation window expires the orphan must NOT get a
     protective TP set (don't pre-empt a still-possible follow-up that would set
-    the real TP). Implemented in Plan 03.
+    the real TP).
+
+    Same orphan stage-1 + live position, but the row is freshly created (age <
+    window) → no modify_position; the position TP stays 0.
     """
-    pytest.fail("Wave 0 stub — EXEC2-05 orphan no TP during window (implemented in Plan 03)")
+    sid = seeded_signal
+    priced_connector._prices = {"XAUUSD": (2041.0, 2041.2)}
+    priced_connector._fake_positions[444002] = Position(
+        ticket=444002, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.10, sl=2030.0, tp=0.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        direction="buy", band_low=2040.0, band_high=2040.2,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=444002,
+    )
+    # NOT backdated — age < correlation_window_seconds → leave it alone.
+
+    await _run_one_zone_watch_tick(executor_fixture)
+
+    pos = priced_connector._fake_positions[444002]
+    assert pos.tp == 0.0, "no protective TP during the correlation window"
+
+
+async def test_orphan_tp_idempotent_when_already_set(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector, executor_fixture,
+):
+    """EXEC2-05 / Open Q2 — if the orphan's live position already has a TP, the
+    watchdog must NOT modify it again (idempotent across reconnect / re-ticks).
+    """
+    sid = seeded_signal
+    priced_connector._prices = {"XAUUSD": (2041.0, 2041.2)}
+    existing_tp = 2055.0
+    priced_connector._fake_positions[444003] = Position(
+        ticket=444003, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.10, sl=2030.0, tp=existing_tp,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    row_id = await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        direction="buy", band_low=2040.0, band_high=2040.2,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=444003,
+    )
+    await _backdate_stage(row_id, 1200)
+
+    await _run_one_zone_watch_tick(executor_fixture)
+
+    pos = priced_connector._fake_positions[444003]
+    assert pos.tp == pytest.approx(existing_tp), (
+        "an already-set TP must be left untouched (idempotency)"
+    )
+
+
+async def test_orphan_with_sibling_gets_no_protective_tp(
+    db_pool, seeded_staged_account, seeded_signal, priced_connector, executor_fixture,
+):
+    """EXEC2-05 — a stage-1 row that HAS a sibling (stage_number>=2, i.e. a
+    follow-up arrived) is NOT an orphan; no protective TP is attached even after
+    the window has elapsed.
+    """
+    sid = seeded_signal
+    priced_connector._prices = {"XAUUSD": (2041.0, 2041.2)}
+    priced_connector._fake_positions[444004] = Position(
+        ticket=444004, symbol="XAUUSD", direction="buy",
+        volume=0.10, open_price=2040.10, sl=2030.0, tp=0.0,
+        profit=0.0, comment=f"telebot-{sid}-s1",
+    )
+    row_id = await _insert_staged_row(
+        signal_id=sid, stage_number=1, account_name=seeded_staged_account,
+        direction="buy", band_low=2040.0, band_high=2040.2,
+        mt5_comment=f"telebot-{sid}-s1", status="filled", mt5_ticket=444004,
+    )
+    await _backdate_stage(row_id, 1200)
+    # A sibling stage 2 (the follow-up) — price OUTSIDE its band so it does not fire.
+    await _insert_staged_row(
+        signal_id=sid, stage_number=2, account_name=seeded_staged_account,
+        direction="buy", band_low=2100.0, band_high=2101.0,
+        mt5_comment=f"telebot-{sid}-s2", status="awaiting_zone",
+    )
+
+    await _run_one_zone_watch_tick(executor_fixture)
+
+    pos = priced_connector._fake_positions[444004]
+    assert pos.tp == 0.0, "sibling present → not an orphan → no protective TP"
