@@ -168,8 +168,8 @@ Plans:
 **Wave 0**
 - [x] 13-01-PLAN.md — DDL/persistence foundation (ALTER ADD COLUMN signal_sl/signal_tp; carry through create + get_active_stages) + all Wave-0 red test stubs (EXEC2-01..06)
 **Wave 1** *(blocked on Wave 0)*
-- [ ] 13-02-PLAN.md — EXEC2-01 read side: _fire_zone_stage sources persisted signal SL/TP (NULL-safe) + revive the dormant price-cascade (EXEC2-01)
-- [ ] 13-03-PLAN.md — EXEC2-02 percent risk split (risk_value/max_stages) + EXEC2-03 /staged target_lot contract + EXEC2-04 SL-less clean skip + create-site SL/TP persistence (EXEC2-02, EXEC2-03, EXEC2-04)
+- [x] 13-02-PLAN.md — EXEC2-01 read side: _fire_zone_stage sources persisted signal SL/TP (NULL-safe) + revive the dormant price-cascade (EXEC2-01)
+- [x] 13-03-PLAN.md — EXEC2-02 percent risk split (risk_value/max_stages) + EXEC2-03 /staged target_lot contract + EXEC2-04 SL-less clean skip + create-site SL/TP persistence (EXEC2-02, EXEC2-03, EXEC2-04)
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 13-04-PLAN.md — EXEC2-05 orphan protective-TP (R=1:1) at window expiry via the existing 10s loop, idempotent; live VPS checkpoint (EXEC2-05)
 - [ ] 13-05-PLAN.md — EXEC2-06 direct-zone multi-stage _handle_open rewrite (mirror correlated-followup; D2-04 whole-zone band; D2-14 stale guard); live VPS checkpoint (EXEC2-06)
