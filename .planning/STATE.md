@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
-status: executing
-last_updated: "2026-06-08T00:30:00.000Z"
+status: completed
+last_updated: "2026-06-08T10:31:52.173Z"
 last_activity: 2026-06-08 -- Phase 12 Plan 03 (HTMX/Jinja decommission, CUT-03) complete
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 8
-  total_plans: 42
+  total_plans: 41
   completed_plans: 42
-  percent: 100
+  percent: 89
 ---
 
 # Project State
@@ -112,6 +112,10 @@ Last activity: 2026-06-08 -- Phase 12 Plan 03 (HTMX/Jinja decommission, CUT-03) 
 
 ## Accumulated Context
 
+### Roadmap Evolution
+
+- Phase 13 added (2026-06-08): Staged-entry execution correctness and direct-zone multi-stage — 6 execution-engine gaps found in live real-money testing (EXEC2-01..06: late-stage SL/TP loss, percent-mode risk not split across stages, /staged display mismatch, SL-less signal crash, unmanaged orphan text-only, and the new behavior making direct zone+SL+TP signals multi-stage). Backend-only (Phase 6 lineage; `trade_manager.py`/`executor.py`/`signal_parser.py`); independent of the v1.2 dashboard chain; MT5 bridge untouched. Next: `/gsd:discuss-phase 13`.
+
 ### Decisions
 
 Decisions are logged in PROJECT.md Key Decisions table.
@@ -170,5 +174,5 @@ Last activity: 2026-06-08 — Phase 12 Plan 03 (HTMX/Jinja decommission, CUT-03)
 Prior: Phase 12 Plan 01 (Wave-0 cutover guards) COMPLETE. 3 tasks committed atomically (b7e9a88 test_cutover_redirects.py CUT-02 guard, 109af05 test_post_teardown.py CUT-03 guard, 789617c 12-CUTOVER-CHECKLIST.md D-04 sign-off). CUT-01 confirmed by existing routing (zero code change). Guards intentionally RED per-row until 12-02/12-03; collect-clean (16 items) verified in python:3.12 container.
 
 Prior: Phase 11 Plan 06 (Wave 3 — Overview PAGE-05 + routing/sidebar cutover) COMPLETE. 2 tasks committed atomically (c8293a5 OverviewView, 4d75984 router+sidebar wiring). OverviewView composes the embedded PositionsView (SC#3 inherited), per-account cards, TRADING PAUSED banner, top-5 pending stages (no new endpoint), and an /emergency entry. /app index now lands on Overview; Positions + Settings are live NavLinks; /app/settings preserved. npm run build green; dev_dashboard.py NOT staged. Phase 11 feature-complete (all 6 plans shipped: PAGE-05/06/07/08 + SUX). Phase 10 still has its live-DB human verification gate outstanding; Phase 11 has its own wave-merge MANUAL browser gate (VPS + MT5 demo).
-Resume file: .planning/phases/12-parallel-run-cutover-htmx-decommission/12-CONTEXT.md
+Resume file: .planning/phases/13-staged-entry-execution-correctness-and-direct-zone-multi-sta/13-CONTEXT.md
 Next action: (a) wave-merge MANUAL browser verification on VPS + MT5 demo (TRADING PAUSED banner, account-card/positions/pending-stages parity vs legacy /, SC#3 open modal/drilldown survives ≥2 refetch cycles) + full gate `pytest tests/ -x && cd frontend && npm run build && npx vitest run`; then (b) Phase 12 — parallel-run cutover + HTMX decommission; and/or (c) complete Phase 10's live-DB human verification gate via /gsd-verify-work 10.
