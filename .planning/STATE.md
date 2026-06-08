@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.2
 milestone_name: React/Vite dashboard rewrite
 status: executing
-last_updated: "2026-06-08T17:00:00.000Z"
-last_activity: 2026-06-08 -- Phase 13 Plan 05 (direct-zone multi-stage _handle_open, EXEC2-06) complete
+last_updated: "2026-06-08T18:30:00.000Z"
+last_activity: 2026-06-08 -- Phase 13 verified (6/6 EXEC2 gaps; target_lot display fix applied); 3 deferred items recorded
 progress:
   total_phases: 9
   completed_phases: 8
@@ -24,10 +24,17 @@ See: .planning/PROJECT.md (updated 2026-06-01)
 
 ## Current Position
 
-Phase: 13 (staged-entry-execution-correctness-and-direct-zone-multi-sta) — ALL PLANS EXECUTED (awaiting /gsd:verify-work 13)
+Phase: 13 (staged-entry-execution-correctness-and-direct-zone-multi-sta) — VERIFIED (see 13-VERIFICATION.md)
 Plan: 5 of 5 COMPLETE (13-01/02/03/04/05 all complete)
-Status: Phase 13 code-complete (all 6 EXEC2 gaps closed: EXEC2-01..06). Wave 2 done (13-04 EXEC2-05 + 13-05 EXEC2-06). Live MT5 sign-offs deferred to single VPS end-to-end acceptance (deploy-at-end).
-Last activity: 2026-06-08 -- Phase 13 Plan 05 (direct-zone multi-stage _handle_open, EXEC2-06) complete; live MT5 sign-off deferred to VPS end-to-end acceptance
+Status: Phase 13 verified. All 6 EXEC2 gaps closed (EXEC2-01..06) and confirmed against code. Verifier's lone EXEC2-03 display warning resolved (commit f513a8b — /stages now surfaces persisted target_lot verbatim). Money-correctness invariants all hold. 3 items deferred (see below).
+Last activity: 2026-06-08 -- Phase 13 verified; target_lot display fix applied; deferred items recorded
+
+## Phase 13 — Deferred / Open Items
+
+1. **Live MT5 sign-off (EXEC2-05 orphan protective-TP, 13-04)** — DEFERRED to single VPS end-to-end acceptance per deploy-at-end policy. 5-step smoke in 13-04-SUMMARY / deferred-items.md.
+2. **Live MT5 sign-off (EXEC2-06 direct-zone multistage, 13-05)** — DEFERRED to VPS acceptance. 5-step smoke in 13-05-SUMMARY.
+3. **Test-infra: full-suite non-determinism** — session-scoped asyncpg pool vs function-loop fixtures cause order-dependent "different loop" / "operation in progress" errors (pre-existing; 22 baseline api/* errors). All Phase-13 tests GREEN per-file in isolation. Follow-up test-infra plan recommended; CI must run DB test files in isolated processes. See deferred-items.md.
+4. **Multi-account staged mt5_comment collision (from 13-05)** — pre-existing Phase-6 UNIQUE-comment scheme limitation surfaced by making all standalone OPENs staged; safe under single-account deploy-at-end. Account-scoped-comment follow-up recommended. See deferred-items.md.
 
 ## v1.2 Milestone Map
 
