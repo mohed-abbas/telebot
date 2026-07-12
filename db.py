@@ -1194,7 +1194,10 @@ async def get_orphan_candidate_stage1s(window_seconds: int) -> list[dict]:
       - is older than `window_seconds` (the correlation window has expired,
         so no follow-up will arrive), AND
       - has NO sibling stage (no row with stage_number >= 2 for that
-        signal_id — a follow-up would have created siblings).
+        signal_id ON THE SAME account — a follow-up would have created
+        siblings). §1.4: the sibling check is account-scoped so another
+        account's siblings under a shared signal_id never mask this account's
+        genuine orphan (defense-in-depth; production signal_ids are per-account).
 
     The window-expiry decision is made off the DB (the in-memory correlator
     pops the orphan on pairing, so it cannot be queried at expiry — RESEARCH
@@ -1215,6 +1218,7 @@ async def get_orphan_candidate_stage1s(window_seconds: int) -> list[dict]:
               AND NOT EXISTS (
                     SELECT 1 FROM staged_entries sib
                      WHERE sib.signal_id = se.signal_id
+                       AND sib.account_name = se.account_name
                        AND sib.stage_number >= 2
               )""",
         float(window_seconds),
@@ -1235,31 +1239,61 @@ async def drain_staged_entries_for_kill_switch() -> int:
 
 async def cancel_unfilled_stages_for_signal(
     signal_id: int, reason: str = "stage1_closed",
+    account_name: str | None = None,
 ) -> int:
-    """D-16 — stage-1 exit cascade; cancels unfilled sibling stages."""
-    result = await _pool.execute(
-        "UPDATE staged_entries "
-        "SET status='cancelled_stage1_closed', cancelled_reason=$1 "
-        "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
-        reason, signal_id,
-    )
+    """D-16 — stage-1 exit cascade; cancels unfilled sibling stages.
+
+    §1.4: when account_name is given, the cancel is scoped to that account so a
+    shared signal_id can never cancel a sibling account's armed bands (defense-
+    in-depth; production signal_ids are per-account). None keeps the original
+    signal-wide behavior.
+    """
+    if account_name is None:
+        result = await _pool.execute(
+            "UPDATE staged_entries "
+            "SET status='cancelled_stage1_closed', cancelled_reason=$1 "
+            "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
+            reason, signal_id,
+        )
+    else:
+        result = await _pool.execute(
+            "UPDATE staged_entries "
+            "SET status='cancelled_stage1_closed', cancelled_reason=$1 "
+            "WHERE signal_id=$2 AND account_name=$3 "
+            "AND status IN ('awaiting_followup','awaiting_zone')",
+            reason, signal_id, account_name,
+        )
     return int(result.split()[-1]) if result.startswith("UPDATE") else 0
 
 
 async def cancel_unfilled_stages_target_reached(
-    signal_id: int, reason: str,
+    signal_id: int, reason: str, account_name: str | None = None,
 ) -> int:
     """Price-based cascade — cancels unfilled stages once live price has
     reached the signal's target_tp or sl. Faster than D-16 (broker-independent)
     and complements it. `reason` carries which level fired
     ('tp_reached' or 'sl_reached').
+
+    §1.4: when account_name is given, the cancel is scoped to that account so a
+    shared signal_id can never cancel a sibling account's armed bands (defense-
+    in-depth; production signal_ids are per-account). None keeps the original
+    signal-wide behavior.
     """
-    result = await _pool.execute(
-        "UPDATE staged_entries "
-        "SET status='cancelled_target_reached', cancelled_reason=$1 "
-        "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
-        reason, signal_id,
-    )
+    if account_name is None:
+        result = await _pool.execute(
+            "UPDATE staged_entries "
+            "SET status='cancelled_target_reached', cancelled_reason=$1 "
+            "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
+            reason, signal_id,
+        )
+    else:
+        result = await _pool.execute(
+            "UPDATE staged_entries "
+            "SET status='cancelled_target_reached', cancelled_reason=$1 "
+            "WHERE signal_id=$2 AND account_name=$3 "
+            "AND status IN ('awaiting_followup','awaiting_zone')",
+            reason, signal_id, account_name,
+        )
     return int(result.split()[-1]) if result.startswith("UPDATE") else 0
 
 

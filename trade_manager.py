@@ -235,8 +235,15 @@ class TradeManager:
             paired_signal_id = None
             correlator = getattr(self, "correlator", None)
             if correlator and signal.direction is not None:
+                # §1.4 account-scoped pairing: pair to THIS account's own
+                # orphan. In production every account runs in its own
+                # single-account temp TradeManager (Executor fan-out), so the
+                # follow-up can never bind to a different account's orphan
+                # signal_id. next(iter(...)) is that sole account.
+                followup_acct = next(iter(self.connectors), "")
                 paired_signal_id = await correlator.pair_followup(
                     symbol=signal.symbol, direction=signal.direction.value,
+                    account_name=followup_acct,
                 )
             if paired_signal_id is not None:
                 return await self._handle_correlated_followup(signal, paired_signal_id, source_name=source_name)
@@ -277,11 +284,18 @@ class TradeManager:
 
         correlator = getattr(self, "correlator", None)
         if correlator and signal.direction is not None:
-            await correlator.register_orphan(
-                signal_id=signal_id,
-                symbol=signal.symbol,
-                direction=signal.direction.value,
-            )
+            # §1.4 account-scoped registration so each account's follow-up pairs
+            # to its OWN orphan. In production this TM manages exactly one
+            # account (Executor's per-account temp TradeManager) → one orphan;
+            # a direct multi-account TM registers one per account under the
+            # shared signal_id.
+            for orphan_acct in self.connectors:
+                await correlator.register_orphan(
+                    signal_id=signal_id,
+                    symbol=signal.symbol,
+                    direction=signal.direction.value,
+                    account_name=orphan_acct,
+                )
 
         store = getattr(self, "settings_store", None)
         pip_size = _pip_size_for_symbol(signal.symbol)

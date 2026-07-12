@@ -690,7 +690,7 @@ class Executor:
                             continue
                         try:
                             cancelled = await db.cancel_unfilled_stages_target_reached(
-                                sid_iter, reason=hit_reason,
+                                sid_iter, reason=hit_reason, account_name=acct_name,
                             )
                         except Exception as exc:
                             logger.error(
@@ -747,6 +747,7 @@ class Executor:
                                     try:
                                         cancelled = await db.cancel_unfilled_stages_for_signal(
                                             signal_id, reason="stage1_closed",
+                                            account_name=acct_name,
                                         )
                                     except Exception as exc:
                                         logger.error(
