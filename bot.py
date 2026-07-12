@@ -244,6 +244,24 @@ async def _setup_trading(http: httpx.AsyncClient):
     return executor, notifier
 
 
+async def _startup_reconcile(executor) -> None:
+    """Reconcile staged rows / broker positions once at startup (D-24).
+
+    Reuses the same per-account sync the reconnect path calls
+    (``executor._sync_positions``) so a restart reconciles immediately instead
+    of waiting for the next disconnect/reconnect cycle. Only runs for connected
+    accounts, and a reconcile failure on one account is logged and does not
+    abort startup.
+    """
+    for acct_name, connector in executor.tm.connectors.items():
+        if not connector.connected:
+            continue
+        try:
+            await executor._sync_positions(acct_name, connector)
+        except Exception as exc:
+            logger.error("%s: Startup reconcile failed: %s", acct_name, exc)
+
+
 async def main() -> None:
     client = TelegramClient(
         StringSession(settings.tg_session),
@@ -283,6 +301,11 @@ async def main() -> None:
 
         # Start background tasks (pending order cleanup)
         await executor.start()
+
+        # Startup reconcile (D-24): after a crash/restart, immediately reconcile
+        # phantom 'armed' staged rows and broker positions opened just before the
+        # crash instead of waiting for the next disconnect/reconnect cycle.
+        await _startup_reconcile(executor)
 
     group_names = await resolve_group_names(client)
     for chat_id, name in group_names.items():
