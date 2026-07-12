@@ -3,6 +3,9 @@
 Runs on Windows VPS with a real MT5 terminal. One instance per account.
 """
 
+import asyncio
+import concurrent.futures
+import functools
 import logging
 import secrets
 from contextlib import asynccontextmanager
@@ -67,22 +70,97 @@ def _err(code: str, message: str, status: int = 400) -> dict:
     )
 
 
-async def _run(fn, *args, **kwargs):
-    """Call an MT5 function synchronously on the current (main) thread.
+# Single dedicated worker thread for ALL MT5 calls. The MetaTrader5 C-extension
+# is NOT thread-safe, so max_workers=1 serialises every call onto one thread —
+# preserving the library's call ordering while moving the blocking work off the
+# event loop. Without this, a single order_send/history_deals_get/order_check
+# (which can block for seconds) freezes every other endpoint (/ping, /price,
+# /positions) on FastAPI's single loop, causing client 15s ReadTimeouts and the
+# false heartbeat-driven re-login (retcode-10027) cascade.
+_mt5_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="mt5",
+)
+
+
+def _invoke_capture(fn, args, kwargs):
+    """Run an MT5 call and atomically read mt5.last_error() on the SAME thread.
 
     Must not expand an empty kwargs dict: MT5's C-extension functions
     (order_check, order_send, symbol_info_tick, etc.) are METH_O and reject
     any non-NULL kwargs object, even an empty one, with
     (-2, 'Unnamed arguments not allowed'). `fn(*args, **{})` triggers that;
     `fn(*args)` does not. See diag6.py variants A vs B.
+
+    last_error() reads MT5's global/thread-local error state. Capturing it in
+    the same executor job as the call keeps the (result, error) pair coherent —
+    a separate job could be interleaved with another coroutine's MT5 call on the
+    shared worker thread and clobber last_error before we read it.
     """
+    result = fn(*args, **kwargs) if kwargs else fn(*args)
+    return result, mt5.last_error()
+
+
+async def _run_err(fn, *args, **kwargs):
+    """Dispatch a blocking MT5 call to the dedicated worker thread.
+
+    Returns (result, last_error) with last_error captured atomically alongside
+    the call. On an exception the call is logged and (None, None) is returned.
+    """
+    loop = asyncio.get_running_loop()
     try:
-        if kwargs:
-            return fn(*args, **kwargs)
-        return fn(*args)
+        return await loop.run_in_executor(
+            _mt5_executor, functools.partial(_invoke_capture, fn, args, kwargs)
+        )
     except Exception as exc:
         logger.error("MT5 call raised: %s — %s", getattr(fn, "__name__", fn), exc)
-        return None
+        return None, None
+
+
+async def _run(fn, *args, **kwargs):
+    """Dispatch a blocking MT5 call to the dedicated worker thread, returning
+    only the result (last_error discarded). See _run_err for the error-aware
+    variant used where mt5.last_error() must be read after the call.
+    """
+    result, _ = await _run_err(fn, *args, **kwargs)
+    return result
+
+
+# ── Filling-mode negotiation ──────────────────────────────────────
+
+
+def _filling_choice(filling_mode: int, is_market: bool) -> str:
+    """Pure policy: pick 'IOC' | 'FOK' | 'RETURN' from a filling_mode bitmask.
+
+    symbol_info.filling_mode is a bitmask: bit 1 (=1) FOK, bit 2 (=2) IOC,
+    bit 4 (=4) RETURN. Pending orders (is_market=False) use RETURN: market-
+    execution brokers (e.g. Vantage) typically reject IOC/FOK on pendings.
+    For market deals prefer IOC, then FOK, else fall back to RETURN.
+
+    Kept free of any mt5 import so it is unit-testable without MetaTrader5.
+    """
+    if not is_market:
+        return "RETURN"
+    if filling_mode & 2:
+        return "IOC"
+    if filling_mode & 1:
+        return "FOK"
+    return "RETURN"
+
+
+def _negotiate_filling(sym_info, is_market: bool):
+    """Resolve _filling_choice to the concrete mt5 ORDER_FILLING_* constant.
+
+    Shared by create_order (open) and close_position (flatten) so a symbol that
+    the open path settled on FOK/RETURN is closed with the SAME supported mode —
+    hard-coding IOC on close makes every bot close (incl. the kill-switch
+    flatten) fail with retcode 10030 on such symbols.
+    """
+    filling_mode = int(sym_info.filling_mode) if sym_info is not None else 0
+    return {
+        "IOC": mt5.ORDER_FILLING_IOC,
+        "FOK": mt5.ORDER_FILLING_FOK,
+        "RETURN": mt5.ORDER_FILLING_RETURN,
+    }[_filling_choice(filling_mode, is_market)]
 
 
 # ── Auth ──────────────────────────────────────────────────────────
@@ -124,18 +202,17 @@ async def lifespan(app: FastAPI):
         init_kwargs["path"] = config.MT5_TERMINAL_PATH
 
     if init_kwargs:
-        result = await _run(mt5.initialize, **init_kwargs)
+        result, error = await _run_err(mt5.initialize, **init_kwargs)
     else:
-        result = await _run(mt5.initialize)
+        result, error = await _run_err(mt5.initialize)
 
     if not result:
-        error = mt5.last_error()
         logger.error("MT5 initialization failed: %s", error)
     else:
         logger.info("MT5 initialized")
         # Auto-login if credentials configured
         if config.MT5_LOGIN and config.MT5_PASSWORD and config.MT5_SERVER:
-            success = await _run(
+            success, error = await _run_err(
                 mt5.login,
                 config.MT5_LOGIN,
                 password=config.MT5_PASSWORD,
@@ -150,7 +227,6 @@ async def lifespan(app: FastAPI):
                         info.equity,
                     )
             else:
-                error = mt5.last_error()
                 logger.error("MT5 login failed: %s", error)
 
     yield
@@ -158,6 +234,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down MT5...")
     await _run(mt5.shutdown)
+    _mt5_executor.shutdown(wait=True)
     logger.info("MT5 shutdown complete")
 
 
@@ -181,9 +258,8 @@ async def ping():
 
 @app.post("/api/v1/connect", dependencies=[Depends(verify_api_key)])
 async def connect(req: ConnectRequest):
-    success = await _run(mt5.login, req.login, password=req.password, server=req.server)
+    success, error = await _run_err(mt5.login, req.login, password=req.password, server=req.server)
     if not success:
-        error = mt5.last_error()
         _err("LOGIN_FAILED", f"MT5 login failed: {error}")
     info = await _run(mt5.account_info)
     if info is None:
@@ -273,21 +349,9 @@ async def create_order(req: OrderRequest):
         price = req.price
 
     # Select filling mode based on what the broker/symbol actually supports.
-    # symbol_info.filling_mode is a bitmask: 1=FOK, 2=IOC, 4=RETURN.
-    # Market-execution brokers (e.g. Vantage) typically reject IOC for pending
-    # orders — only RETURN is valid. Fall back to a sane default per action.
+    # Shared with close_position via _negotiate_filling so opens and closes agree.
     sym_info = await _run(mt5.symbol_info, req.symbol)
-    supported = int(sym_info.filling_mode) if sym_info is not None else 0
-    if action == mt5.TRADE_ACTION_DEAL:
-        if supported & 2:
-            type_filling = mt5.ORDER_FILLING_IOC
-        elif supported & 1:
-            type_filling = mt5.ORDER_FILLING_FOK
-        else:
-            type_filling = mt5.ORDER_FILLING_RETURN
-    else:
-        # Pending orders: most brokers require RETURN.
-        type_filling = mt5.ORDER_FILLING_RETURN
+    type_filling = _negotiate_filling(sym_info, action == mt5.TRADE_ACTION_DEAL)
 
     request = {
         "action": action,
@@ -309,9 +373,9 @@ async def create_order(req: OrderRequest):
     # Pre-flight validation — order_check returns a structured retcode that
     # explains *why* order_send would fail, instead of the generic
     # (-2, 'Unnamed arguments not allowed') that surfaces otherwise.
-    check = await _run(mt5.order_check, request)
+    check, check_err = await _run_err(mt5.order_check, request)
     if check is None:
-        logger.warning("order_check returned None: last_error=%s", mt5.last_error())
+        logger.warning("order_check returned None: last_error=%s", check_err)
     else:
         logger.info(
             "order_check: retcode=%s comment=%s margin=%s",
@@ -326,9 +390,8 @@ async def create_order(req: OrderRequest):
                 "error": f"order_check retcode={check.retcode} {check.comment}",
             })
 
-    result = await _run(mt5.order_send, request)
+    result, error = await _run_err(mt5.order_send, request)
     if result is None:
-        error = mt5.last_error()
         return _ok({
             "success": False,
             "ticket": 0,
@@ -371,9 +434,8 @@ async def modify_position(ticket: int, req: ModifyRequest):
         "sl": req.sl if req.sl is not None else pos.sl,
         "tp": req.tp if req.tp is not None else pos.tp,
     }
-    result = await _run(mt5.order_send, request)
+    result, error = await _run_err(mt5.order_send, request)
     if result is None:
-        error = mt5.last_error()
         _err("MODIFY_FAILED", f"Modify failed: {error}")
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
@@ -402,6 +464,10 @@ async def close_position(ticket: int, req: CloseRequest = None):
         _err("SYMBOL_NOT_FOUND", f"Cannot get price for {pos.symbol}", 404)
     close_price = tick.bid if pos.type == 0 else tick.ask
 
+    # Negotiate the SAME supported filling mode the open path used — hard-coding
+    # IOC here makes every close fail with 10030 on symbols that fell back to
+    # FOK/RETURN, leaving positions the bot can open but never close.
+    sym_info = await _run(mt5.symbol_info, pos.symbol)
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
         "position": ticket,
@@ -412,12 +478,21 @@ async def close_position(ticket: int, req: CloseRequest = None):
         "deviation": 20,
         "magic": config.MT5_MAGIC_NUMBER,
         "comment": "telebot_close",
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _negotiate_filling(sym_info, True),
     }
-    result = await _run(mt5.order_send, request)
+    result, error = await _run_err(mt5.order_send, request)
     if result is None:
-        error = mt5.last_error()
         _err("CLOSE_FAILED", f"Close failed: {error}")
+
+    # Retry once with RETURN if the broker still rejects the negotiated mode.
+    if (
+        result.retcode == mt5.TRADE_RETCODE_INVALID_FILL
+        and request["type_filling"] != mt5.ORDER_FILLING_RETURN
+    ):
+        request["type_filling"] = mt5.ORDER_FILLING_RETURN
+        result, error = await _run_err(mt5.order_send, request)
+        if result is None:
+            _err("CLOSE_FAILED", f"Close failed: {error}")
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         _err("CLOSE_FAILED", f"retcode={result.retcode} {result.comment}")
@@ -501,9 +576,8 @@ async def cancel_pending_order(ticket: int):
         "action": mt5.TRADE_ACTION_REMOVE,
         "order": ticket,
     }
-    result = await _run(mt5.order_send, request)
+    result, error = await _run_err(mt5.order_send, request)
     if result is None:
-        error = mt5.last_error()
         _err("CANCEL_FAILED", f"Cancel failed: {error}")
 
     if result.retcode != mt5.TRADE_RETCODE_DONE:
