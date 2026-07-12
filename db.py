@@ -368,14 +368,39 @@ async def update_trade_close(ticket: int, account_name: str, pnl: float, close_p
     )
 
 
+async def mark_trade_closing(ticket: int, account_name: str, close_price: float) -> None:
+    """Flag a trade as 'closing' (close submitted to the broker, P&L not yet known).
+
+    The dashboard/API full-close path (api/actions.py) cannot know the authoritative
+    deal profit at submit time — floating profit != final deal profit. Writing a
+    finalized pnl=0.0 here would strand the trade at $0 forever, because the
+    history-sync reconciler only rescans trades the broker deal stream can still
+    match (see get_open_trade_tickets_for_account). Instead we park the trade in a
+    'closing' state: still scanned by history-sync, still EXCLUDED from closed
+    analytics/archive aggregates (which gate on status='closed'), until
+    _sync_history_for_account overwrites it with the real deal.profit and flips it
+    to 'closed'. close_price is recorded provisionally and is later overwritten by
+    the reconciler's authoritative deal price.
+    """
+    await _pool.execute(
+        """UPDATE trades SET status='closing', close_price=$1
+           WHERE ticket=$2 AND account_name=$3""",
+        close_price,
+        ticket,
+        account_name,
+    )
+
+
 async def get_open_trade_tickets_for_account(account_name: str) -> set[int]:
-    """Return the set of ticket numbers that are still status='opened' for
-    this account. Used by the history-sync loop to filter the broker deal
-    stream — we only care about deals whose position_id maps to one of OUR
-    open trades.
+    """Return the set of ticket numbers still in an unreconciled state ('opened'
+    or 'closing') for this account. Used by the history-sync loop to filter the
+    broker deal stream — we only care about deals whose position_id maps to one of
+    OUR trades that has not yet had its authoritative P&L reconciled. 'closing'
+    covers dashboard/API-initiated full closes (mark_trade_closing) whose real
+    deal.profit must still be backfilled.
     """
     rows = await _pool.fetch(
-        "SELECT ticket FROM trades WHERE account_name=$1 AND status='opened'",
+        "SELECT ticket FROM trades WHERE account_name=$1 AND status IN ('opened','closing')",
         account_name,
     )
     return {r["ticket"] for r in rows if r["ticket"]}
@@ -1396,14 +1421,18 @@ async def get_position_drilldown(ticket: int, account_name: str) -> dict | None:
     )
 
     for stage in stages:
-        settings = stage["snapshot_settings"] or {}
         result["fill_history"].append({
             "stage_number": stage["stage_number"],
             "filled_at": stage["filled_at"],
             "lot_size": stage["target_lot"],
             "band_low": stage["band_low"],
             "band_high": stage["band_high"],
-            "sl_at_fill": settings.get("default_sl_pips"),
+            # sl_at_fill is normalized to an ABSOLUTE PRICE (the position's SL) in
+            # BOTH branches — the single-stage branch below also uses trade["sl"].
+            # Previously this branch emitted default_sl_pips (a PIPS value), mixing
+            # units in one field; the position SL is the authoritative absolute SL
+            # shared by every stage of this ticket.
+            "sl_at_fill": trade["sl"],
             "status": stage["status"],
         })
 

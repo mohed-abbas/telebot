@@ -72,16 +72,25 @@ async def close(
 ) -> MutationResult:
     """Close a position fully.
 
-    Ports the connector lookup + `close_position(ticket)` + `db.update_trade_close`
-    verbatim (dashboard.py:1087-1093). Returns a JSON envelope instead of the
-    green/red HTML span; the toast notification side-effect is dropped (the SPA
-    renders its own toast from the JSON result).
+    Ports the connector lookup + `close_position(ticket)` from dashboard.py:1087-1093.
+    Returns a JSON envelope instead of the green/red HTML span; the toast
+    notification side-effect is dropped (the SPA renders its own toast).
+
+    P&L reconciliation (§4.6): we deliberately do NOT finalize the trade here with
+    a placeholder pnl=0.0. The authoritative deal profit is not known at submit
+    time (floating profit != final deal profit), and a finalized status='closed'
+    row would never be rescanned — stranding every dashboard-closed trade at $0 in
+    /history and corrupting win_rate/profit_factor/net_pnl. Instead we park it in
+    'closing' (db.mark_trade_closing); the history-sync loop still scans it
+    (get_open_trade_tickets_for_account) and backfills the real deal.profit before
+    flipping it to 'closed'. 'closing' is excluded from closed aggregates until
+    then, so analytics never see a spurious $0.
     """
     connector = _connector_or_404(account)
     result = await connector.close_position(ticket)
     if result.success:
-        # Verbatim DB write (dashboard.py:1093): pnl 0.0 placeholder, close price.
-        await db.update_trade_close(ticket, account, 0.0, result.price)
+        # Park as 'closing' for history-sync reconciliation (do NOT write pnl=0.0).
+        await db.mark_trade_closing(ticket, account, result.price)
     return MutationResult(
         ok=result.success,
         success=result.success,

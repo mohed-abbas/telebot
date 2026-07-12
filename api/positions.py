@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import db
 from api.deps import require_user
-from api.formatting import money_display, price_display, volume_display
+from api.formatting import money_display, price_display, ts_display, volume_display
 from api.schemas import Position
 
 router = APIRouter()
@@ -72,4 +72,25 @@ async def position_drilldown(
         pos["lot_size_display"] = volume_display(pos["lot_size"])
     if "pnl" in pos and pos["pnl"] is not None:
         pos["pnl_display"] = money_display(pos["pnl"])
+
+    # Fill-history + signal display twins (the SPA's PositionDrilldown renders the
+    # *_display fields ONLY; without them fill rows and the signal time show
+    # em-dashes). Raw numeric/time fields are left untouched — twins are additive.
+    for fill in detail.get("fill_history") or []:
+        if fill.get("filled_at") is not None:
+            fill["filled_at_display"] = ts_display(fill["filled_at"])
+        if fill.get("lot_size") is not None:
+            fill["lot_size_display"] = volume_display(fill["lot_size"])
+        if fill.get("band_low") is not None:
+            fill["band_low_display"] = price_display(symbol, fill["band_low"])
+        if fill.get("band_high") is not None:
+            fill["band_high_display"] = price_display(symbol, fill["band_high"])
+        # sl_at_fill is an absolute price (normalized in db.get_position_drilldown).
+        if fill.get("sl_at_fill") is not None:
+            fill["sl_at_fill_display"] = price_display(symbol, fill["sl_at_fill"])
+
+    signal = detail.get("signal")
+    if signal and signal.get("timestamp") is not None:
+        signal["timestamp_display"] = ts_display(signal["timestamp"])
+
     return detail
