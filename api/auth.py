@@ -27,6 +27,7 @@ rejects a request with no valid X-CSRF-Token (403).
 from __future__ import annotations
 
 import secrets as _secrets
+import time as _time
 
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -66,6 +67,13 @@ router = APIRouter()
 # tests/test_api_csrf.py::test_csrf_cookie_name_no_collision.
 CSRF_COOKIE = "telebot_csrf"
 
+# W3-AUTH(C): under TLS the CSRF cookie is ALSO emitted with the `__Host-` prefix
+# (mandatory Secure, Path=/, no Domain) so a sibling-subdomain cannot fixate a
+# forged cookie. api.deps.read_csrf_cookie prefers this variant; the plain name is
+# still emitted so the already-built SPA (which reads `telebot_csrf`) keeps working.
+# Mirrors api/deps.CSRF_COOKIE_HOST (kept local to avoid an eager cross-import).
+CSRF_COOKIE_HOST = "__Host-telebot_csrf"
+
 # §2.1 fix: the CSRF cookie MUST outlive a browser restart or a device that
 # auto-authenticates off the 30-day telebot_session cookie (dashboard.py:183)
 # would have no CSRF cookie and 403 every mutation forever. Match the session
@@ -73,16 +81,29 @@ CSRF_COOKIE = "telebot_csrf"
 CSRF_COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days — mirrors dashboard.py:183
 
 
-def _issue_csrf(resp: JSONResponse, secure: bool) -> str:
-    """Set a fresh telebot_csrf cookie on `resp` and return the token.
+def _set_csrf_cookie(resp: JSONResponse, token: str, secure: bool) -> None:
+    """Emit the double-submit CSRF cookie(s) carrying `token`.
 
     Pitfall 4: httponly=False so the SPA can read the token and echo it as the
     X-CSRF-Token header; path="/" so the cookie covers every /api/v2 route. This
     is the deliberate inverse of the legacy login cookie (httponly=True,
-    path="/login") — NEVER use those values here. `secure` is passed in by the
-    caller from the lazily-imported app_settings.session_cookie_secure.
+    path="/login") — NEVER use those values here.
+
+    W3-AUTH(C): when `secure` (prod/TLS) ALSO emit the `__Host-` prefixed variant
+    (mandatory Secure, Path=/, no Domain) as the injection-resistant authoritative
+    cookie; the plain name is still emitted for the built SPA. Insecure/dev emits
+    only the plain name (a `__Host-` cookie requires Secure and is dropped over http).
     """
-    token = _secrets.token_urlsafe(32)
+    if secure:
+        resp.set_cookie(
+            CSRF_COOKIE_HOST,
+            token,
+            max_age=CSRF_COOKIE_MAX_AGE,
+            httponly=False,
+            samesite="lax",
+            secure=True,
+            path="/",
+        )
     resp.set_cookie(
         CSRF_COOKIE,
         token,
@@ -92,6 +113,16 @@ def _issue_csrf(resp: JSONResponse, secure: bool) -> str:
         secure=secure,
         path="/",
     )
+
+
+def _issue_csrf(resp: JSONResponse, secure: bool) -> str:
+    """Set a fresh CSRF cookie on `resp` and return the token. See _set_csrf_cookie.
+
+    `secure` is passed in by the caller from the lazily-imported
+    app_settings.session_cookie_secure.
+    """
+    token = _secrets.token_urlsafe(32)
+    _set_csrf_cookie(resp, token, secure)
     return token
 
 
@@ -106,9 +137,12 @@ async def login(request: Request, body: LoginIn) -> JSONResponse:
     # `import api.auth` free of the dashboard -> config import chain.
     from dashboard import _client_ip, _password_hasher, app_settings
 
-    # 1. Double-submit CSRF (AUTH-04, D-15) — compare the telebot_csrf cookie to
-    #    the token in the request body in constant time.
-    cookie = request.cookies.get(CSRF_COOKIE, "")
+    from api.deps import read_csrf_cookie
+
+    # 1. Double-submit CSRF (AUTH-04, D-15) — compare the CSRF cookie (preferring
+    #    the __Host- variant under TLS, W3-AUTH(C)) to the token in the request
+    #    body in constant time.
+    cookie = read_csrf_cookie(request)
     if not cookie or not _secrets.compare_digest(cookie, body.csrf_token):
         raise HTTPException(status_code=403, detail="CSRF token invalid")
 
@@ -137,6 +171,9 @@ async def login(request: Request, body: LoginIn) -> JSONResponse:
 
     # 4. Success: set session, clear the failed-login counter.
     request.session["user"] = "admin"  # D-30 actor default
+    # W3-AUTH(B): stamp issued-at so the absolute session-lifetime cap
+    # (dashboard._session_within_absolute_lifetime) can reject an over-age cookie.
+    request.session["iat"] = int(_time.time())
     await db.clear_failed_logins(ip)
 
     resp = JSONResponse({"user": "admin"})
@@ -154,9 +191,13 @@ async def logout(request: Request) -> JSONResponse:
 
 @router.get("/auth/me")
 async def me(request: Request) -> JSONResponse:
-    """Return the authenticated user or 401 (no session)."""
+    """Return the authenticated user or 401 (no session / over-age session)."""
+    from dashboard import _session_within_absolute_lifetime  # lazy (see module note)
+
     user = request.session.get("user")
-    if not user:
+    if not user or not _session_within_absolute_lifetime(request.session):
+        if user:
+            request.session.clear()  # W3-AUTH(B): drop the over-age session
         raise HTTPException(status_code=401, detail="Session expired")
     return JSONResponse({"user": user})
 
@@ -173,13 +214,5 @@ async def csrf(request: Request) -> JSONResponse:
 
     token = _secrets.token_urlsafe(32)
     resp = JSONResponse({"csrf_token": token})
-    resp.set_cookie(
-        CSRF_COOKIE,
-        token,
-        max_age=CSRF_COOKIE_MAX_AGE,
-        httponly=False,
-        samesite="lax",
-        secure=app_settings.session_cookie_secure,
-        path="/",
-    )
+    _set_csrf_cookie(resp, token, secure=app_settings.session_cookie_secure)
     return resp

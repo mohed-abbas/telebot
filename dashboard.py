@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -80,6 +82,31 @@ def get_settings_store():
     return _get_settings_store()
 
 
+# W3-AUTH(B): absolute session-lifetime cap. The SessionMiddleware cookie is a
+# rolling 30-day signed cookie with no server-side revocation; a stolen cookie
+# would otherwise live forever as long as it keeps being used. login stamps an
+# issued-at (`iat`) into the session and every auth check rejects a session once
+# `iat` is older than this cap — even while the rolling window is still fresh.
+# Configurable (seconds); default 7 days. Read at import (config-safe, no TLS req).
+SESSION_ABSOLUTE_MAX_AGE = int(
+    os.environ.get("SESSION_ABSOLUTE_MAX_AGE", str(7 * 24 * 60 * 60))
+)
+
+
+def _session_within_absolute_lifetime(session) -> bool:
+    """W3-AUTH(B): True while the session's issued-at is within the absolute cap.
+
+    A session with no numeric `iat` (minted before this hardening, or forged) is
+    treated as over-age → the operator re-authenticates once. Shared by
+    dashboard._verify_auth, api.deps.require_user and api.auth.me so the cap is
+    enforced uniformly on both the page and JSON auth surfaces.
+    """
+    iat = session.get("iat")
+    if not isinstance(iat, (int, float)) or isinstance(iat, bool):
+        return False
+    return (time.time() - iat) <= SESSION_ABSOLUTE_MAX_AGE
+
+
 def _verify_auth(request: Request) -> str:
     """Session-based auth (AUTH-01 consumer contract).
 
@@ -91,7 +118,11 @@ def _verify_auth(request: Request) -> str:
     """
     user = request.session.get("user")
     if user:
-        return user
+        if _session_within_absolute_lifetime(request.session):
+            return user
+        # W3-AUTH(B): session exceeded the absolute cap — clear it so the still-
+        # fresh rolling cookie can't keep re-authenticating a stale login.
+        request.session.clear()
 
     if request.url.path.startswith("/api/"):
         raise HTTPException(
@@ -113,12 +144,29 @@ def _verify_auth(request: Request) -> str:
 # api/auth.py:100 does `from dashboard import _client_ip, _password_hasher, app_settings`.
 _password_hasher = PasswordHasher()  # RFC 9106 defaults
 
+# W3-AUTH(D): X-Real-IP / X-Forwarded-For are attacker-controlled on any request
+# that does NOT traverse the trusted nginx front, so keying the login lockout on
+# them unconditionally let an attacker rotate the lockout key by spoofing headers.
+# Only honour those headers when TRUST_PROXY is set (the nginx-fronted prod deploy
+# MUST set it — see concerns); otherwise fall back to the direct connection peer.
+_TRUST_PROXY = os.environ.get("TRUST_PROXY", "false").lower() in ("true", "1", "yes")
+
 
 def _client_ip(request: Request) -> str:
-    """Prefer X-Real-IP (set by nginx line 36 of telebot.conf); fallback to conn peer."""
-    xri = request.headers.get("x-real-ip", "").strip()
-    if xri:
-        return xri
+    """Client IP used as the per-IP login-lockout key.
+
+    W3-AUTH(D): trust the nginx-supplied X-Real-IP / X-Forwarded-For headers ONLY
+    when TRUST_PROXY is enabled; otherwise use the direct peer so the lockout can't
+    be evaded by header spoofing on a non-nginx path.
+    """
+    if _TRUST_PROXY:
+        xri = request.headers.get("x-real-ip", "").strip()
+        if xri:
+            return xri
+        xff = request.headers.get("x-forwarded-for", "").strip()
+        if xff:
+            # First hop is the original client (nginx appends downstream peers).
+            return xff.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -212,12 +260,36 @@ async def health():
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _expire_auth_cookies(resp: Response) -> None:
+    """W3-AUTH(A): explicitly delete both auth cookies so logout is effective
+    server-side rather than trusting the client to drop them. Attributes match the
+    set sites (path=/, secure gated on config) so the browser actually expires
+    them; the __Host- CSRF variant is only emitted (and thus only cleared) under TLS.
+    """
+    secure = app_settings.session_cookie_secure
+    resp.delete_cookie("telebot_session", path="/", samesite="lax", secure=secure)
+    resp.delete_cookie("telebot_csrf", path="/", samesite="lax", secure=secure)
+    if secure:
+        resp.delete_cookie("__Host-telebot_csrf", path="/", samesite="lax", secure=True)
+
+
 @app.post("/logout")
-@app.get("/logout")
 async def logout(request: Request):
-    """AUTH-06: clear session, redirect to /app/login. Accepts GET for plain-link logout."""
+    """AUTH-06 / W3-AUTH(A): CSRF-protected POST logout.
+
+    Previously also reachable via GET, which made it a state-changing endpoint that
+    a cross-site link could trigger to force-logout the operator. It is now
+    POST-only and guarded by the same double-submit CSRF check as every /api/v2
+    mutation, and it expires the session + CSRF cookies server-side. The SPA logs
+    out via POST /api/v2/auth/logout; this route is the plain-form fallback.
+    """
+    from api.deps import verify_csrf_token  # deferred (mirrors deps import discipline)
+
+    verify_csrf_token(request)
     request.session.clear()
-    return RedirectResponse(url="/app/login", status_code=303)
+    resp = RedirectResponse(url="/app/login", status_code=303)
+    _expire_auth_cookies(resp)
+    return resp
 
 
 @app.get("/")

@@ -36,8 +36,23 @@ from fastapi import HTTPException, Request
 # Double-submit CSRF cookie name. MUST be telebot_csrf — must NOT collide with
 # the legacy login-form cookie telebot_login_csrf (dashboard.py:142) — D-13.
 CSRF_COOKIE = "telebot_csrf"
+# W3-AUTH(C): under TLS the CSRF cookie is ALSO emitted with the `__Host-` prefix
+# (mandatory Secure, Path=/, no Domain) so a sibling-subdomain cannot inject a
+# forged cookie. The reader prefers this variant; the plain name is kept so the
+# built SPA (which reads `telebot_csrf`) keeps working. Mirrors api/auth.py.
+CSRF_COOKIE_HOST = "__Host-telebot_csrf"
 CSRF_HEADER = "x-csrf-token"
 _STATE_CHANGING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
+
+def read_csrf_cookie(request: Request) -> str:
+    """Read the double-submit CSRF cookie, preferring the injection-resistant
+    `__Host-` variant (set under TLS) over the plain name (W3-AUTH(C))."""
+    return (
+        request.cookies.get(CSRF_COOKIE_HOST)
+        or request.cookies.get(CSRF_COOKIE)
+        or ""
+    )
 
 
 def require_user(request: Request) -> str:
@@ -46,21 +61,29 @@ def require_user(request: Request) -> str:
     Reads the session `user`; raises 401 if absent. Unlike `_verify_auth`
     (dashboard.py:99) there is NO redirect branch — JSON API routes never 303.
     """
+    # W3-AUTH(B): enforce the absolute session-lifetime cap. Deferred import keeps
+    # `import api.deps` free of the dashboard -> config chain (see module note);
+    # dashboard is already imported by request time.
+    from dashboard import _session_within_absolute_lifetime
+
     user = request.session.get("user")
-    if user:
+    if user and _session_within_absolute_lifetime(request.session):
         return user
+    if user:
+        request.session.clear()  # drop the over-age session so the cookie stops re-authing
     raise HTTPException(status_code=401, detail="Session expired")
 
 
 def verify_csrf_token(request: Request) -> None:
     """Double-submit CSRF guard for /api/v2 mutations (T-08-01, D-15).
 
-    Only guards state-changing methods. Compares the `telebot_csrf` cookie to
-    the `X-CSRF-Token` header in constant time (secrets.compare_digest). GET and
-    other safe methods pass through untouched.
+    Only guards state-changing methods. Compares the `telebot_csrf` cookie
+    (preferring the `__Host-` variant under TLS) to the `X-CSRF-Token` header in
+    constant time (secrets.compare_digest). GET and other safe methods pass
+    through untouched.
     """
     if request.method in _STATE_CHANGING_METHODS:
-        cookie = request.cookies.get(CSRF_COOKIE, "")
+        cookie = read_csrf_cookie(request)
         header = request.headers.get(CSRF_HEADER, "")
         if not cookie or not header or not _secrets.compare_digest(cookie, header):
             raise HTTPException(status_code=403, detail="CSRF token invalid")
