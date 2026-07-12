@@ -16,10 +16,14 @@ existing HTML routes are unaffected (these handlers only reshape responses on th
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 # Map common HTTP status codes to stable machine codes the SPA can branch on.
 _STATUS_CODES = {
@@ -80,8 +84,26 @@ async def _validation_exception_handler(request: Request, exc: RequestValidation
     )
 
 
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Catch-all so an unexpected error still returns the envelope, not a bare 500.
+
+    The specific HTTPException / RequestValidationError handlers take precedence
+    (FastAPI dispatches by the most specific registered type), so this only fires
+    for genuinely unhandled exceptions. Never leaks the traceback/detail (V13).
+    """
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    if not _is_api_v2(request):
+        # Preserve default behaviour for legacy HTML / HTMX routes.
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+    return JSONResponse(
+        status_code=500,
+        content=_envelope("error", "Internal server error"),
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     """Install the enveloped-error handlers. Called once from dashboard.py wiring."""
     app.add_exception_handler(HTTPException, _http_exception_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_exception_handler)
+    app.add_exception_handler(Exception, _unhandled_exception_handler)

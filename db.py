@@ -54,6 +54,20 @@ def _utc_today() -> date:
 # ── Lifecycle ────────────────────────────────────────────────────────
 
 
+async def _init_connection(conn: asyncpg.Connection) -> None:
+    """Per-connection setup: decode JSONB columns to Python objects, not raw strings.
+
+    Without this codec asyncpg returns JSONB as JSON text, so callers that expect a
+    dict (e.g. get_position_drilldown) hit AttributeError on `.get(...)` (§3.1).
+    """
+    await conn.set_type_codec(
+        "jsonb",
+        encoder=json.dumps,
+        decoder=json.loads,
+        schema="pg_catalog",
+    )
+
+
 async def init_db(database_url: str) -> None:
     """Initialize the connection pool and create tables."""
     global _pool
@@ -62,6 +76,7 @@ async def init_db(database_url: str) -> None:
         min_size=2,
         max_size=5,
         command_timeout=30,
+        init=_init_connection,
     )
     await _create_tables()
     logger.info("Database initialized (PostgreSQL pool: min=2, max=5)")
@@ -1036,7 +1051,10 @@ async def create_staged_entries(rows: list[dict]) -> list[int]:
                     r["signal_id"], r["stage_number"], r["account_name"],
                     r["symbol"], r["direction"],
                     r["zone_low"], r["zone_high"], r["band_low"], r["band_high"],
-                    r["target_lot"], json.dumps(r["snapshot_settings"]),
+                    # §3.1: the jsonb codec (encoder=json.dumps) now serializes on
+                    # the way in — pass the dict directly, or it double-encodes to a
+                    # JSON string scalar and get_position_drilldown crashes again.
+                    r["target_lot"], r["snapshot_settings"],
                     r["mt5_comment"], r.get("status", "awaiting_zone"),
                     # EXEC2-01: .get() so callers not yet updated (Plan 03/05) insert
                     # NULL rather than raising KeyError; NULL is read-path-safe.
