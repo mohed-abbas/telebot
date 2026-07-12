@@ -212,6 +212,29 @@ def validate_tp_for_direction(direction: str, open_price: float, new_tp: float) 
     return False
 
 
+def is_bot_position(pos) -> bool:
+    """True if this position was opened by the bot.
+
+    The bot tags every order it places with a 'telebot' comment prefix
+    (Position carries no magic field via the REST bridge — see mt5_connector),
+    so foreign/manual positions on the same symbol are excluded from the
+    MODIFY/CLOSE fan-out. Mirrors the sibling-comment probe used in
+    _execute_open_on_account.
+    """
+    return getattr(pos, "comment", "").startswith("telebot")
+
+
+def is_no_change_result(result: OrderResult) -> bool:
+    """True if a modify was a no-op, not a failure.
+
+    MT5 retcode 10025 (TRADE_RETCODE_NO_CHANGES) means the position already
+    carries the requested SL/TP. The REST bridge surfaces the retcode only as
+    text in OrderResult.error, so match on the numeric code / message.
+    """
+    err = (result.error or "").lower()
+    return "10025" in err or "no change" in err
+
+
 class TradeManager:
     def __init__(
         self,
@@ -396,6 +419,30 @@ class TradeManager:
         if signal.entry_zone is None or signal.direction is None:
             logger.warning("correlated follow-up missing entry_zone/direction — ignoring")
             return results
+
+        # ── EXEC2-04 / D2-13: SL-less follow-up → clean skip (mirror _handle_open) ──
+        # A follow-up whose signal.sl is None would raise TypeError in
+        # calculate_sl_with_jitter (jitter>0) during stage-1 align, or fail every
+        # band via calculate_sl_distance(entry, None) when fired. Detect it here
+        # and degrade gracefully instead of crashing — D-08 requires a stop.
+        if signal.sl is None:
+            logger.info(
+                "SL-less correlated follow-up — skipping (D-08 requires a stop): %s",
+                signal.symbol,
+            )
+            await db.log_signal(
+                raw_text=signal.raw_text,
+                signal_type="open",
+                action_taken="skipped",
+                symbol=signal.symbol,
+                direction=signal.direction.value if signal.direction else "",
+                source_name=source_name,
+            )
+            return [{
+                "account": "*",
+                "status": "skipped",
+                "reason": "Skipped: follow-up has no SL (D-08 requires a stop)",
+            }]
 
         store = getattr(self, "settings_store", None)
 
@@ -1166,6 +1213,8 @@ class TradeManager:
 
             positions = await connector.get_positions(signal.symbol)
             for pos in positions:
+                if not is_bot_position(pos):
+                    continue  # never touch manual/foreign positions
                 result = await connector.close_position(pos.ticket)
                 await db.increment_daily_stat(acct_name, "server_messages")
                 if result.success:
@@ -1201,6 +1250,8 @@ class TradeManager:
 
             positions = await connector.get_positions(signal.symbol)
             for pos in positions:
+                if not is_bot_position(pos):
+                    continue  # never touch manual/foreign positions
                 close_vol = round(pos.volume * close_fraction, 2)
                 close_vol = max(close_vol, 0.01)
                 if close_vol >= pos.volume:
@@ -1238,6 +1289,8 @@ class TradeManager:
 
             positions = await connector.get_positions(signal.symbol)
             for pos in positions:
+                if not is_bot_position(pos):
+                    continue  # never touch manual/foreign positions
                 new_sl = signal.new_sl
                 if new_sl == 0.0:
                     # Breakeven: set SL to entry price
@@ -1254,7 +1307,7 @@ class TradeManager:
 
                 result = await connector.modify_position(pos.ticket, sl=new_sl)
                 await db.increment_daily_stat(acct_name, "server_messages")
-                if result.success:
+                if result.success or is_no_change_result(result):
                     results.append({
                         "account": acct_name, "status": "sl_modified",
                         "ticket": pos.ticket, "new_sl": new_sl,
@@ -1284,6 +1337,8 @@ class TradeManager:
 
             positions = await connector.get_positions(signal.symbol)
             for pos in positions:
+                if not is_bot_position(pos):
+                    continue  # never touch manual/foreign positions
                 # EXEC-03: Validate TP direction before sending to MT5
                 if not validate_tp_for_direction(pos.direction, pos.open_price, signal.new_tp):
                     results.append({
@@ -1295,7 +1350,7 @@ class TradeManager:
 
                 result = await connector.modify_position(pos.ticket, tp=signal.new_tp)
                 await db.increment_daily_stat(acct_name, "server_messages")
-                if result.success:
+                if result.success or is_no_change_result(result):
                     results.append({
                         "account": acct_name, "status": "tp_modified",
                         "ticket": pos.ticket, "new_tp": signal.new_tp,
@@ -1324,12 +1379,14 @@ class TradeManager:
             mt5_tickets = {o["ticket"] for o in mt5_orders}
 
             if order["ticket"] not in mt5_tickets:
-                # Order no longer pending on MT5 — check if it filled
+                # Order no longer pending on MT5 — check if it filled.
+                # When an MT5 pending order triggers, the resulting position
+                # takes the SAME ticket as the order that opened it
+                # (POSITION_TICKET == opening order ticket). Match on that
+                # identity — the old str(ticket)-in-comment probe was always
+                # false because comments never carry the ticket.
                 positions = await connector.get_positions(order["symbol"])
-                filled = any(
-                    p.comment and str(order["ticket"]) in p.comment
-                    for p in positions
-                )
+                filled = any(p.ticket == order["ticket"] for p in positions)
                 if filled:
                     await db.mark_pending_filled(order["ticket"], acct_name)
                     logger.info(

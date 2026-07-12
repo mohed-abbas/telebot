@@ -113,7 +113,7 @@ class TestDetermineOrderType:
 class TestCloseSignal:
     async def test_close_all_positions(self, db_pool, tm, connector):
         # Open a position first
-        await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
+        await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0, comment="telebot")
         positions = await connector.get_positions("XAUUSD")
         assert len(positions) == 1
 
@@ -130,7 +130,7 @@ class TestCloseSignal:
 @pytest.mark.asyncio(loop_scope="session")
 class TestModifySL:
     async def test_move_sl_to_breakeven(self, db_pool, tm, connector):
-        await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0)
+        await connector.open_order("XAUUSD", OrderType.MARKET_SELL, 0.10, price=4980.0, sl=4986.0, tp=4973.0, comment="telebot")
 
         signal = SignalAction(
             type=SignalType.MODIFY_SL, symbol="XAUUSD", raw_text="Move SL to BE",

@@ -214,7 +214,7 @@ class TestCloseAndModify:
         """Open a position, then send CLOSE signal -> position removed."""
         await priced_connector.open_order(
             "XAUUSD", OrderType.MARKET_SELL, 0.10,
-            price=4980.0, sl=4986.0, tp=4973.0,
+            price=4980.0, sl=4986.0, tp=4973.0, comment="telebot",
         )
         positions = await priced_connector.get_positions("XAUUSD")
         assert len(positions) == 1
@@ -233,7 +233,7 @@ class TestCloseAndModify:
         """Open position at 4980, send MODIFY_SL with new_sl=0.0 -> SL becomes 4980.0."""
         await priced_connector.open_order(
             "XAUUSD", OrderType.MARKET_SELL, 0.10,
-            price=4980.0, sl=4986.0, tp=4973.0,
+            price=4980.0, sl=4986.0, tp=4973.0, comment="telebot",
         )
 
         modify_signal = SignalAction(
@@ -249,7 +249,7 @@ class TestCloseAndModify:
         """Open position vol=0.10, send CLOSE_PARTIAL 50% -> volume becomes 0.05."""
         await priced_connector.open_order(
             "XAUUSD", OrderType.MARKET_SELL, 0.10,
-            price=4980.0, sl=4986.0, tp=4973.0,
+            price=4980.0, sl=4986.0, tp=4973.0, comment="telebot",
         )
 
         partial_signal = SignalAction(
