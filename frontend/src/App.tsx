@@ -9,9 +9,11 @@
 // T-09-10 (EoP): the shell never renders before this guard resolves 200; and every data call is
 // independently auth-gated server-side (require_user → 401), so there is no client-trusted auth.
 
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/shell/AppShell";
+import { readCsrfCookie, seedCsrf } from "@/auth/csrf";
 import { api } from "@/lib/http";
 
 function App() {
@@ -21,6 +23,18 @@ function App() {
     queryKey: ["auth-me"],
     queryFn: () => api("/api/v2/auth/me"),
   });
+
+  // §2.1 boot reseed: a device that auto-authenticates off the persistent session cookie after a
+  // browser restart may have NO telebot_csrf cookie (the SPA otherwise only seeds it in LoginView),
+  // so every mutation would 403 forever. Once /auth/me resolves 200, reseed via the SAME seedCsrf
+  // helper LoginView uses — but only if the cookie is actually absent (no needless churn).
+  useEffect(() => {
+    if (isSuccess && !readCsrfCookie()) {
+      void seedCsrf().catch(() => {
+        /* reseed failures self-heal on the first mutation via the http.ts 403 retry */
+      });
+    }
+  }, [isSuccess]);
 
   if (isSuccess) {
     return <AppShell />;

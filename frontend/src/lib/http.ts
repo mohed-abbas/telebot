@@ -11,6 +11,12 @@
 //     and MutationCache `onError` see 401s (queryClient.ts wires the single global handler).
 //   - Relative `/api/v2/...` URLs only — never absolute http://localhost:8090 (T-09-09):
 //     same-origin via the dev proxy + prod nginx keeps the cookie attached.
+//   - §2.1 self-heal: if a mutation 403s because the telebot_csrf cookie is missing/stale (the
+//     enveloped message contains "CSRF"), reseed the cookie ONCE via seedCsrf() and retry the
+//     request exactly once. A device that auto-authenticates off the persistent session cookie
+//     after a browser restart may have no CSRF cookie; this recovers it transparently.
+
+import { seedCsrf } from "@/auth/csrf";
 
 export class HttpError extends Error {
   readonly status: number;
@@ -39,11 +45,25 @@ export function readCookie(name: string): string {
   return match ? decodeURIComponent(match.slice(prefix.length)) : "";
 }
 
+/** True when a non-2xx body is the enveloped CSRF-rejection from api/deps.verify_csrf_token. */
+function isCsrfError(status: number, body: unknown): boolean {
+  if (status !== 403) return false;
+  const message = (body as { error?: { message?: string } } | undefined)?.error?.message;
+  return typeof message === "string" && message.includes("CSRF");
+}
+
 /**
  * The one fetch path for the whole SPA. Echoes CSRF on mutations, sends the
  * same-origin session cookie, and throws HttpError on non-2xx.
+ *
+ * `_retried` is internal: it guards the §2.1 CSRF self-heal so a request is
+ * reseeded-and-retried at most once (never an infinite loop).
  */
-export async function api(path: string, init: RequestInit = {}): Promise<unknown> {
+export async function api(
+  path: string,
+  init: RequestInit = {},
+  _retried = false,
+): Promise<unknown> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
 
@@ -64,6 +84,13 @@ export async function api(path: string, init: RequestInit = {}): Promise<unknown
       body = await res.json(); // {error:{code,message,fields?}} envelope from api/errors.py
     } catch {
       /* non-JSON / empty body — tolerate */
+    }
+    // §2.1 self-heal: a missing/stale CSRF cookie yields a 403 "CSRF ..." envelope. Reseed the
+    // cookie once (GET /auth/csrf is not a mutation, so it cannot itself CSRF-403) and retry the
+    // original request exactly once; if it still fails, propagate.
+    if (!_retried && isCsrfError(res.status, body)) {
+      await seedCsrf();
+      return api(path, init, true);
     }
     throw new HttpError(res.status, body);
   }

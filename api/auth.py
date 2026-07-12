@@ -66,6 +66,12 @@ router = APIRouter()
 # tests/test_api_csrf.py::test_csrf_cookie_name_no_collision.
 CSRF_COOKIE = "telebot_csrf"
 
+# §2.1 fix: the CSRF cookie MUST outlive a browser restart or a device that
+# auto-authenticates off the 30-day telebot_session cookie (dashboard.py:183)
+# would have no CSRF cookie and 403 every mutation forever. Match the session
+# cookie lifetime exactly (30 days) so the two cookies die together.
+CSRF_COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 days — mirrors dashboard.py:183
+
 
 def _issue_csrf(resp: JSONResponse, secure: bool) -> str:
     """Set a fresh telebot_csrf cookie on `resp` and return the token.
@@ -80,6 +86,7 @@ def _issue_csrf(resp: JSONResponse, secure: bool) -> str:
     resp.set_cookie(
         CSRF_COOKIE,
         token,
+        max_age=CSRF_COOKIE_MAX_AGE,
         httponly=False,
         samesite="lax",
         secure=secure,
@@ -169,6 +176,7 @@ async def csrf(request: Request) -> JSONResponse:
     resp.set_cookie(
         CSRF_COOKIE,
         token,
+        max_age=CSRF_COOKIE_MAX_AGE,
         httponly=False,
         samesite="lax",
         secure=app_settings.session_cookie_secure,
