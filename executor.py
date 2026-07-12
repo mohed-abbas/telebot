@@ -118,6 +118,18 @@ class Executor:
                 logger.debug("Stagger delay: %.1fs before %s", delay, acct_name)
                 await asyncio.sleep(delay)
 
+            # Kill-switch mid-stagger re-check (mirror of D-21). If the kill
+            # switch fired during a stagger sleep, do not open new positions on
+            # any remaining account — record them as skipped and break.
+            if self._trading_paused:
+                for remaining in account_names[i:]:
+                    all_results.append({
+                        "account": remaining,
+                        "status": "skipped",
+                        "reason": "Trading paused (kill switch)",
+                    })
+                break
+
             connector = self.tm.connectors.get(acct_name)
             acct = self.tm.accounts.get(acct_name)
             if not connector or not acct or not acct.enabled or not connector.connected:
