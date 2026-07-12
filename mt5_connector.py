@@ -605,8 +605,29 @@ class RestApiConnector(MT5Connector):
                     logger.warning("%s: REST API error: %s — %s", self.account_name, error.get("code"), error.get("message"))
                     return None
                 return body.get("data")
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                # The request provably never left the client, so no side effect
+                # could have occurred on the broker. Safe to retry any method.
                 last_exc = exc
+                if attempt < 2:
+                    logger.warning("%s: REST request failed (attempt %d): %s", self.account_name, attempt + 1, exc)
+                    await asyncio.sleep(1)
+                continue
+            except httpx.ReadTimeout as exc:
+                # DOUBLE-FILL HAZARD: a ReadTimeout means the request WAS sent but
+                # the response never arrived — the server may already have processed
+                # it. Retrying a non-idempotent call (e.g. POST /api/v1/order) would
+                # submit a SECOND identical market order. Only retry idempotent
+                # methods (GET); fail fast otherwise so no order is auto-resubmitted.
+                last_exc = exc
+                if method.upper() != "GET":
+                    logger.error(
+                        "%s: REST %s %s timed out awaiting response; NOT retrying "
+                        "(possible double-fill) — failing fast",
+                        self.account_name, method.upper(), path,
+                    )
+                    self._connected = False
+                    return None
                 if attempt < 2:
                     logger.warning("%s: REST request failed (attempt %d): %s", self.account_name, attempt + 1, exc)
                     await asyncio.sleep(1)
