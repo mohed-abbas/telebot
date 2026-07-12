@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 
 class Executor:
+    # §1.3(b): bounded re-modify attempts before escalating an unverified
+    # SL/TP to the operator (prevents every-tick modify spam on a stuck broker).
+    _SLTP_VERIFY_MAX_ATTEMPTS = 3
+
     def __init__(self, trade_manager: TradeManager, global_config: GlobalConfig,
                  notifier: Notifier | None = None, price_simulator=None):
         self.tm = trade_manager
@@ -46,6 +50,11 @@ class Executor:
         # Per-account high-water mark (UTC) of the last successful history-sync
         # poll. Initialised lazily to (now - lookback_hours) on first iteration.
         self._last_history_sync: dict[str, datetime] = {}
+        # §1.3(b) post-trade SL/TP verification sweep — bounded-retry bookkeeping.
+        # stage_id -> consecutive failed re-modify attempts; stage_ids already
+        # escalated to the operator (so we notify once, not every 10s tick).
+        self._sltp_verify_attempts: dict[int, int] = {}
+        self._sltp_verify_notified: set[int] = set()
 
     def is_accepting_signals(self) -> bool:
         """Check if executor can process new signals."""
@@ -557,6 +566,16 @@ class Executor:
                 except Exception as exc:
                     logger.warning("Zone watch: orphan-TP watchdog error: %s", exc)
 
+                # §1.3(b) — post-trade SL/TP verification sweep. Confirms every
+                # filled stage's live broker position actually carries the
+                # intended SL/TP; re-issues a bounded modify when it deviated
+                # (e.g. a stage-1 align that silently failed). Failure-isolated
+                # so it never aborts the loop.
+                try:
+                    await self._run_stage_sltp_verification_sweep()
+                except Exception as exc:
+                    logger.warning("Zone watch: SL/TP verification sweep error: %s", exc)
+
                 try:
                     rows = await db.get_active_stages()
                 except Exception as exc:
@@ -970,6 +989,180 @@ class Executor:
                 acct_name, ticket, getattr(modify_result, "error", "unknown"),
             )
 
+    async def _run_stage_sltp_verification_sweep(self) -> None:
+        """§1.3(b) — confirm filled positions actually carry their SL/TP.
+
+        For every FILLED stage that persisted an authoritative SL/TP
+        (``db.get_filled_stages_for_sltp_verification``) and still has a live
+        broker position, compare the position's live SL/TP against the targets
+        and re-issue ``modify_position`` when they deviate beyond a tolerance
+        that swallows humanization jitter. The canonical failure this closes: a
+        stage-1 align (correlated follow-up) whose immediate modify failed —
+        the position is then left on its default SL with TP=0 forever, and the
+        orphan watchdog excludes any stage-1 that has sibling rows.
+
+        Idempotent (a matched position is a no-op), bounded (``N`` failed
+        re-modifies then an operator notification), and safe (never touches a
+        position the operator/broker has already closed).
+        """
+        if self._trading_paused:
+            return
+
+        try:
+            rows = await db.get_filled_stages_for_sltp_verification()
+        except Exception as exc:
+            logger.warning("SL/TP sweep: candidate fetch failed: %s", exc)
+            return
+        if not rows:
+            return
+
+        by_pair: dict[tuple[str, str], list[dict]] = {}
+        for row in rows:
+            by_pair.setdefault(
+                (row["account_name"], row["symbol"]), []
+            ).append(row)
+
+        for (acct_name, symbol), stages in by_pair.items():
+            if acct_name in self._reconnecting:
+                continue
+            connector = self.tm.connectors.get(acct_name)
+            if connector is None:
+                continue
+
+            try:
+                positions = await connector.get_positions()
+            except Exception as exc:
+                logger.warning(
+                    "%s: SL/TP sweep get_positions failed: %s", acct_name, exc,
+                )
+                continue
+
+            positions_by_comment = {
+                getattr(p, "comment", ""): p
+                for p in positions
+                if getattr(p, "comment", "")
+            }
+
+            for stage in stages:
+                await self._verify_one_stage_sltp(
+                    acct_name=acct_name, connector=connector,
+                    symbol=symbol, stage=stage,
+                    positions_by_comment=positions_by_comment,
+                )
+
+    async def _verify_one_stage_sltp(
+        self,
+        *,
+        acct_name: str,
+        connector,
+        symbol: str,
+        stage: dict,
+        positions_by_comment: dict,
+    ) -> None:
+        """Verify/repair one filled stage's live SL/TP. See the sweep docstring."""
+        stage_id = stage["id"]
+        comment = stage.get("mt5_comment") or ""
+        position = positions_by_comment.get(comment)
+        if position is None:
+            # No live position with our comment — the operator/broker closed it
+            # (or it never opened). Do NOT re-modify a ghost. Clear any tracked
+            # retry/notify state so a future re-fill starts clean.
+            self._sltp_verify_attempts.pop(stage_id, None)
+            self._sltp_verify_notified.discard(stage_id)
+            return
+
+        target_sl = stage.get("signal_sl")
+        target_tp = stage.get("signal_tp")
+        live_sl = getattr(position, "sl", 0.0) or 0.0
+        live_tp = getattr(position, "tp", 0.0) or 0.0
+
+        # Tolerance swallows the SL/TP humanization jitter (the live values were
+        # jittered at open; the persisted targets are the raw plan) so we only
+        # act on GROSS deviation — chiefly an unset level (0.0) that should be
+        # protected. Respect the symbol's pip size for the cushion.
+        pip_size = GOLD_PIP_SIZE if symbol.upper() == "XAUUSD" else 0.0001
+        jitter = float(getattr(self.cfg, "sl_tp_jitter_points", 0.0) or 0.0)
+        tol = jitter + 2 * pip_size
+
+        needs_fix = False
+        if target_sl is not None:
+            if live_sl == 0.0 or abs(live_sl - float(target_sl)) > tol:
+                needs_fix = True
+        if target_tp is not None:
+            if live_tp == 0.0 or abs(live_tp - float(target_tp)) > tol:
+                needs_fix = True
+
+        if not needs_fix:
+            # In sync — idempotent no-op. Reset any prior retry/notify state.
+            self._sltp_verify_attempts.pop(stage_id, None)
+            self._sltp_verify_notified.discard(stage_id)
+            return
+
+        attempts = self._sltp_verify_attempts.get(stage_id, 0)
+        if attempts >= self._SLTP_VERIFY_MAX_ATTEMPTS:
+            # Exhausted retries — escalate ONCE, then stop hammering the broker.
+            if stage_id not in self._sltp_verify_notified:
+                self._sltp_verify_notified.add(stage_id)
+                ticket = getattr(position, "ticket", None) or stage.get("mt5_ticket")
+                logger.error(
+                    "%s: SL/TP UNVERIFIED after %d attempts — ticket=%s "
+                    "signal_id=%d stage=%d live_sl=%.5f live_tp=%.5f "
+                    "target_sl=%s target_tp=%s",
+                    acct_name, attempts, ticket, stage["signal_id"],
+                    stage["stage_number"], live_sl, live_tp,
+                    target_sl, target_tp,
+                )
+                if self.notifier:
+                    try:
+                        await self.notifier.notify_alert(
+                            f"STAGE SL/TP UNVERIFIED: {acct_name} ticket={ticket} "
+                            f"(signal_id={stage['signal_id']} stage={stage['stage_number']}) "
+                            f"— live sl={live_sl} tp={live_tp}, target sl={target_sl} "
+                            f"tp={target_tp}; broker rejected {attempts} re-modify attempts"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "%s: SL/TP unverified notify failed: %s", acct_name, exc,
+                        )
+            return
+
+        # Snap the position to the authoritative targets. Pass None for a level
+        # with no target so the REST bridge preserves the existing value
+        # (0.0 would be read as an explicit "remove"). A non-null target always
+        # wins — this is what protects the stage-1-align-failed position.
+        sl_to_send = float(target_sl) if target_sl is not None else None
+        tp_to_send = float(target_tp) if target_tp is not None else None
+        ticket = getattr(position, "ticket", None) or stage.get("mt5_ticket")
+
+        try:
+            result = await connector.modify_position(
+                ticket, sl=sl_to_send, tp=tp_to_send,
+            )
+        except Exception as exc:  # never let a connector error abort the sweep
+            self._sltp_verify_attempts[stage_id] = attempts + 1
+            logger.warning(
+                "%s: SL/TP sweep modify raised ticket=%s — continuing: %s",
+                acct_name, ticket, exc,
+            )
+            return
+
+        if getattr(result, "success", False):
+            self._sltp_verify_attempts.pop(stage_id, None)
+            self._sltp_verify_notified.discard(stage_id)
+            logger.info(
+                "%s: SL/TP re-aligned ticket=%s sl=%s tp=%s "
+                "(signal_id=%d stage=%d)",
+                acct_name, ticket, sl_to_send, tp_to_send,
+                stage["signal_id"], stage["stage_number"],
+            )
+        else:
+            self._sltp_verify_attempts[stage_id] = attempts + 1
+            logger.warning(
+                "%s: SL/TP sweep modify FAILED ticket=%s reason=%s (attempt %d)",
+                acct_name, ticket, getattr(result, "error", "unknown"),
+                attempts + 1,
+            )
+
     async def _fire_zone_stage(
         self,
         *,
@@ -1094,6 +1287,12 @@ class Executor:
             # Only write 'failed' if the row is still open (don't overwrite any terminal
             # state _execute_open_on_account may have set, e.g. via the D-25 probe).
             reason = result.get("reason", "unknown")
+            # §4.2: a lost firing claim means the at-arrival path already owns
+            # this row and is mid-submit. Writing 'failed' here would strand the
+            # winner's fill (its 'firing'->'filled' would no-op the row back).
+            # Leave it alone — the owning path finalizes it.
+            if reason == "claim_lost":
+                return
             try:
                 await db.update_stage_status(
                     stage["id"], "failed",

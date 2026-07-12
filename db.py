@@ -1072,10 +1072,15 @@ async def update_stage_status(
 ) -> None:
     """Status mutation; sets filled_at=NOW() when status='filled'."""
     if status == "filled":
+        # §4.2: the 'filled' transition is guarded by a status precondition so a
+        # late/duplicate fill can NEVER resurrect a terminal (cancelled/failed/
+        # abandoned) row. Only a row still in the firing lifecycle
+        # ('awaiting_zone' or the transient claim state 'firing') may flip to
+        # 'filled'; otherwise this is a silent no-op (last-writer-wins removed).
         await _pool.execute(
             """UPDATE staged_entries
                SET status=$1, mt5_ticket=$2, filled_at=NOW()
-               WHERE id=$3""",
+               WHERE id=$3 AND status IN ('awaiting_zone','firing')""",
             status, mt5_ticket, stage_id,
         )
     else:
@@ -1087,17 +1092,56 @@ async def update_stage_status(
         )
 
 
+async def claim_stage_for_firing(stage_id: int) -> int | None:
+    """§4.2 — atomic compare-and-set claim taken BEFORE a stage is fired.
+
+    Flips status 'awaiting_zone' -> 'firing' and returns the row id iff THIS
+    caller won the claim. Returns None when the row is not (or no longer) in
+    'awaiting_zone' — i.e. another fire path (the at-arrival dispatcher or the
+    independent _zone_watch_loop) already owns it, or it is already
+    firing/filled/cancelled. A None return means the caller MUST NOT submit the
+    order: the duplicate-fire race (2x lot exposure) is closed here, at the DB.
+    """
+    return await _pool.fetchval(
+        "UPDATE staged_entries SET status='firing' "
+        "WHERE id=$1 AND status='awaiting_zone' RETURNING id",
+        stage_id,
+    )
+
+
+async def update_stage_targets(
+    stage_id: int, signal_sl: float | None, signal_tp: float | None,
+) -> None:
+    """§1.3(a) — persist the authoritative protective SL/TP onto a stage row.
+
+    Called at correlated follow-up pairing time so the post-fill SL/TP
+    verification sweep has the real targets even if the immediate align modify
+    fails. Overwrites unconditionally (the follow-up's plan supersedes the
+    text-only stage-1 default SL / NULL TP).
+    """
+    await _pool.execute(
+        "UPDATE staged_entries SET signal_sl=$1, signal_tp=$2 WHERE id=$3",
+        signal_sl, signal_tp, stage_id,
+    )
+
+
 async def get_pending_stages(
     account_name: str | None = None,
     limit: int | None = None,
 ) -> list[dict]:
-    """Rows with status IN ('awaiting_followup','awaiting_zone'). Newest first."""
+    """Rows with status IN ('awaiting_followup','awaiting_zone','firing'). Newest first.
+
+    §4.2: 'firing' is the transient claim state. A row left in 'firing' by a
+    crash/disconnect mid-fire is reclaimable — the reconnect reconcile
+    (_sync_positions) re-derives its fate: 'filled' if a matching MT5 comment
+    exists, else 'abandoned_reconnect' once it ages out. Never strand it.
+    """
     base_sql = (
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
         "mt5_comment, mt5_ticket, status, created_at "
         "FROM staged_entries "
-        "WHERE status IN ('awaiting_followup','awaiting_zone') "
+        "WHERE status IN ('awaiting_followup','awaiting_zone','firing') "
     )
     if account_name:
         base_sql += "AND account_name=$1 "
@@ -1119,6 +1163,25 @@ async def get_active_stages() -> list[dict]:
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
         "mt5_comment, signal_sl, signal_tp "
         "FROM staged_entries WHERE status='awaiting_zone'"
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_filled_stages_for_sltp_verification() -> list[dict]:
+    """§1.3(b) — filled stages that carry authoritative protective levels.
+
+    Feeds the post-trade SL/TP verification sweep in _zone_watch_loop: every
+    'filled' row with a live mt5_ticket and a non-null signal_sl OR signal_tp.
+    The sweep compares the live broker position's SL/TP against these targets
+    and re-issues a modify when they deviate, so a failed/skipped stage-1 align
+    can never leave a position unprotected.
+    """
+    rows = await _pool.fetch(
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "mt5_comment, mt5_ticket, signal_sl, signal_tp "
+        "FROM staged_entries "
+        "WHERE status='filled' AND mt5_ticket IS NOT NULL "
+        "AND (signal_sl IS NOT NULL OR signal_tp IS NOT NULL)"
     )
     return [dict(r) for r in rows]
 

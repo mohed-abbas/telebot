@@ -423,6 +423,24 @@ class TradeManager:
                     new_tp = calculate_tp_with_jitter(
                         signal.target_tp, self.cfg.sl_tp_jitter_points, signal.direction,
                     )
+                # §1.3(a): PERSIST the follow-up's real SL/TP onto the stage-1
+                # row BEFORE the modify. The text-only stage-1 row was written
+                # with signal_sl=default-SL and signal_tp=None; overwrite it with
+                # the aligned levels so the post-trade SL/TP verification sweep
+                # (executor._run_stage_sltp_verification_sweep) has authoritative
+                # targets even if the immediate modify below fails — closing the
+                # "single failed align leaves the position unprotected" gap. The
+                # persisted values are the JITTERED ones we send to the broker so
+                # the sweep stays idempotent once the modify lands.
+                try:
+                    await db.update_stage_targets(
+                        stage1["id"], signal_sl=new_sl, signal_tp=new_tp,
+                    )
+                except Exception as exc:  # persistence failure must not abort align
+                    logger.warning(
+                        "%s: stage-1 target persist failed — sweep may lack "
+                        "targets: %s", acct_name, exc,
+                    )
                 try:
                     modify_result = await connector.modify_position(
                         stage1["mt5_ticket"], sl=new_sl, tp=new_tp,
@@ -966,6 +984,24 @@ class TradeManager:
                         "account": name, "status": "filled",
                         "ticket": p.ticket, "idempotent": True,
                     }
+
+        # ── §4.2 atomic firing claim (staged path only) ─────────────────
+        # Flip 'awaiting_zone' -> 'firing' as a compare-and-set immediately
+        # before submitting. The at-arrival dispatchers and the independent
+        # _zone_watch_loop both funnel their broker submits through here, so a
+        # single row can be reached by two coroutines inside the multi-second
+        # open_order window. Only the claim winner submits; the loser returns a
+        # 'skipped'/'claim_lost' no-op WITHOUT touching the row (the winner owns
+        # it). This closes the duplicate-fire race → 2x lot exposure.
+        if staged and stage_row_id is not None:
+            claimed = await db.claim_stage_for_firing(stage_row_id)
+            if claimed is None:
+                logger.info(
+                    "%s: stage firing claim lost — another path owns it "
+                    "(signal_id=%d stage=%d); skipping submit",
+                    name, signal_id, stage_number,
+                )
+                return {"account": name, "status": "skipped", "reason": "claim_lost"}
 
         # ── Execute ─────────────────────────────────────────────────────
         if use_market:

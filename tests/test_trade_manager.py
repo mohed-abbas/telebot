@@ -633,6 +633,10 @@ async def test_open_with_real_sl_unchanged(tm, monkeypatch):
     # Stub the db.* calls the staged success path touches so it runs DB-free.
     # create_staged_entries returns one stage id (max_stages=1 → 1 whole-zone band).
     monkeypatch.setattr(tm_mod.db, "create_staged_entries", AsyncMock(return_value=[101]))
+    # §4.2: the fire path now atomically claims the row before submitting; echo the
+    # stage_id so the claim succeeds and firing proceeds (return 0/None = "claim lost").
+    monkeypatch.setattr(tm_mod.db, "claim_stage_for_firing",
+                        AsyncMock(side_effect=lambda stage_id: stage_id))
     for name in ("get_daily_stat", "increment_daily_stat", "mark_signal_counted_today",
                  "update_stage_status", "log_trade", "log_pending_order",
                  "get_stage_by_comment"):
