@@ -415,7 +415,10 @@ class TradeManager:
                 new_sl = calculate_sl_with_jitter(
                     signal.sl, self.cfg.sl_tp_jitter_points, signal.direction,
                 )
-                new_tp = 0.0
+                # No numeric TP → pass tp=None so the REST bridge's
+                # is-not-None guard preserves the position's existing TP
+                # (tp=0.0 would be treated as an explicit "remove the TP").
+                new_tp = None
                 if signal.target_tp:
                     new_tp = calculate_tp_with_jitter(
                         signal.target_tp, self.cfg.sl_tp_jitter_points, signal.direction,
@@ -434,8 +437,9 @@ class TradeManager:
                     )
                 if modify_result.success:
                     logger.info(
-                        "%s: stage-1 aligned ticket=%d sl=%.5f tp=%.5f",
-                        acct_name, stage1["mt5_ticket"], new_sl, new_tp,
+                        "%s: stage-1 aligned ticket=%d sl=%.5f tp=%s",
+                        acct_name, stage1["mt5_ticket"], new_sl,
+                        f"{new_tp:.5f}" if new_tp is not None else "unchanged",
                     )
                     results.append({
                         "account": acct_name,
@@ -500,6 +504,12 @@ class TradeManager:
                     "snapshot_settings": asdict(snapshot) if snapshot else {},
                     "mt5_comment": f"telebot-{paired_signal_id}-s{b.stage_number}",
                     "status": "awaiting_zone",
+                    # EXEC2-01: persist the OPEN's real SL/TP so a band that arms
+                    # and later fires via the zone watcher carries them (mirrors
+                    # the direct-zone path); without these both insert NULL and
+                    # the fired position opens with tp=0.0 and a wrong SL.
+                    "signal_sl": signal.sl,
+                    "signal_tp": signal.target_tp,
                 }
                 for b in bands
             ]

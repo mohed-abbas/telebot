@@ -556,11 +556,14 @@ class TestCorrelatedFollowupStage1Align:
         assert modify_spy.await_count == 1
         kwargs = modify_spy.call_args.kwargs
         assert kwargs["sl"] == expected_sl
-        assert kwargs["tp"] == 0.0
+        # §1.2: no numeric TP → tp must be None (not 0.0) so the REST bridge's
+        # is-not-None guard preserves the position's existing TP; 0.0 would be
+        # treated as an explicit "remove the TP".
+        assert kwargs["tp"] is None
 
         aligned = [r for r in results if r.get("status") == "stage1_aligned"]
         assert len(aligned) == 1
-        assert aligned[0]["tp"] == 0.0
+        assert aligned[0]["tp"] is None
 
 
 # ── Phase 13 Wave-0 RED stubs (trade_manager) ────────────────────────

@@ -67,6 +67,11 @@ class Notifier:
                 lines.append(f"  {acct}: SKIPPED — {r.get('reason', '?')}")
             elif status == "failed":
                 lines.append(f"  {acct}: FAILED — {r.get('reason', '?')}")
+            elif status == "stage1_align_failed":
+                lines.append(
+                    f"  {acct}: ⚠️ Stage-1 TP/SL alignment FAILED (#{r.get('ticket', '?')}) — "
+                    f"position may be unprotected — {r.get('reason', '?')}"
+                )
 
         msg = "\n".join(lines)
         await send_message(self.http, self.executions_url, msg)
