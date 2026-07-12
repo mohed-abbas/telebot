@@ -568,6 +568,12 @@ class RestApiConnector(MT5Connector):
         scheme = "https" if use_tls else "http"
         self._base_url = f"{scheme}://{host}:{port}"
         self._http: httpx.AsyncClient | None = None
+        # Structured broker error (code + message) from the most recent
+        # _request that failed with a REST error body. Callers read this when
+        # _request returns None so the broker reason (e.g. 10016 invalid stops,
+        # 10030 unsupported filling) reaches OrderResult.error instead of a
+        # generic "REST API request failed".
+        self._last_error: str = ""
 
     def _ensure_client(self) -> httpx.AsyncClient:
         """Create or return the HTTP client."""
@@ -582,6 +588,7 @@ class RestApiConnector(MT5Connector):
     async def _request(self, method: str, path: str, **kwargs) -> dict | None:
         """Make an HTTP request with retry logic. Returns parsed data or None on error."""
         client = self._ensure_client()
+        self._last_error = ""
         last_exc = None
         for attempt in range(3):  # up to 3 attempts
             try:
@@ -602,7 +609,13 @@ class RestApiConnector(MT5Connector):
                     body = body["detail"]
                 if not body.get("ok"):
                     error = body.get("error") or {}
-                    logger.warning("%s: REST API error: %s — %s", self.account_name, error.get("code"), error.get("message"))
+                    code = error.get("code")
+                    message = error.get("message")
+                    # Capture the structured broker error so callers can surface
+                    # the real reason (code + message) in OrderResult.error rather
+                    # than a generic string.
+                    self._last_error = f"broker error {code}: {message}"
+                    logger.warning("%s: REST API error: %s — %s", self.account_name, code, message)
                     return None
                 return body.get("data")
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
@@ -733,7 +746,7 @@ class RestApiConnector(MT5Connector):
             "magic": self.magic_number,
         })
         if data is None:
-            return OrderResult(success=False, error="REST API request failed")
+            return OrderResult(success=False, error=self._last_error or "REST API request failed")
         if data.get("success"):
             logger.info(
                 "%s: Order opened — ticket=%d price=%.2f vol=%.2f",
@@ -755,7 +768,7 @@ class RestApiConnector(MT5Connector):
             "tp": tp,
         })
         if data is None:
-            return OrderResult(success=False, ticket=ticket, error="REST API request failed")
+            return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
         if data.get("success"):
             return OrderResult(success=True, ticket=ticket)
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
@@ -766,7 +779,7 @@ class RestApiConnector(MT5Connector):
             body["volume"] = volume
         data = await self._request("DELETE", f"/api/v1/position/{ticket}", json=body if body else None)
         if data is None:
-            return OrderResult(success=False, ticket=ticket, error="REST API request failed")
+            return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
         if data.get("success"):
             return OrderResult(
                 success=True,
@@ -779,7 +792,7 @@ class RestApiConnector(MT5Connector):
     async def cancel_pending(self, ticket: int) -> OrderResult:
         data = await self._request("DELETE", f"/api/v1/pending-order/{ticket}")
         if data is None:
-            return OrderResult(success=False, ticket=ticket, error="REST API request failed")
+            return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
         if data.get("success"):
             return OrderResult(success=True, ticket=ticket)
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))

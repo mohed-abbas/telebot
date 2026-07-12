@@ -297,7 +297,10 @@ class TestOpenOrder:
         result = await conn.open_order("XAUUSD", OrderType.MARKET_BUY, 999.0)
 
         assert result.success is False
-        assert "REST API request failed" in result.error
+        # W3-CONNECTOR: the broker's structured code+message are now surfaced
+        # verbatim instead of a generic "REST API request failed".
+        assert "ORDER_REJECTED" in result.error
+        assert "Volume too large" in result.error
 
 
 # ═══════════════════════════════════════════════════════════════════════
