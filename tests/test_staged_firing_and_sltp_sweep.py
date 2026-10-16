@@ -228,3 +228,88 @@ async def test_sweep_bounded_retries_then_notifies_once(monkeypatch):
     )
     assert len(notifier.alerts) == 1, "operator must be alerted exactly once"
     assert "UNVERIFIED" in notifier.alerts[0]
+
+
+async def test_sweep_retries_again_after_cooldown(monkeypatch):
+    """A temporary refusal (e.g. market closed) must not disable the re-align
+    for good: after the cooldown a new round runs, without a second alert."""
+    pos = _FakePos(ticket=555, comment="telebot-1-s1", sl=1990.0, tp=0.0)
+    conn = _FakeConnector([pos], modify_success=False)
+    notifier = _FakeNotifier()
+    ex = _make_executor(conn, notifier=notifier)
+
+    async def fake_fetch():
+        return [_stage()]
+
+    monkeypatch.setattr(db, "get_filled_stages_for_sltp_verification", fake_fetch)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("executor.time.monotonic", lambda: clock["now"])
+
+    for _ in range(ex._SLTP_VERIFY_MAX_ATTEMPTS + 2):
+        await ex._run_stage_sltp_verification_sweep()
+    assert len(conn.modify_calls) == ex._SLTP_VERIFY_MAX_ATTEMPTS
+    assert len(notifier.alerts) == 1
+
+    # Market reopens after the cooldown: the broker now accepts the modify.
+    clock["now"] += ex._SLTP_VERIFY_COOLDOWN_SECONDS
+    conn._modify_success = True
+    await ex._run_stage_sltp_verification_sweep()
+
+    assert len(conn.modify_calls) == ex._SLTP_VERIFY_MAX_ATTEMPTS + 1
+    assert conn.modify_calls[-1] == (555, 1990.0, 2020.0)
+    assert len(notifier.alerts) == 2, "one UNVERIFIED alert, then one RESTORED notice"
+    assert "RESTORED" in notifier.alerts[1]
+    assert 1 not in ex._sltp_verify_attempts
+
+
+async def test_sweep_cooldown_grows_each_round(monkeypatch):
+    """A permanent rejection doesn't hit the broker every 5 minutes forever."""
+    pos = _FakePos(ticket=555, comment="telebot-1-s1", sl=1990.0, tp=0.0)
+    conn = _FakeConnector([pos], modify_success=False)
+    ex = _make_executor(conn, notifier=_FakeNotifier())
+
+    async def fake_fetch():
+        return [_stage()]
+
+    monkeypatch.setattr(db, "get_filled_stages_for_sltp_verification", fake_fetch)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("executor.time.monotonic", lambda: clock["now"])
+    n = ex._SLTP_VERIFY_MAX_ATTEMPTS
+    base = ex._SLTP_VERIFY_COOLDOWN_SECONDS
+
+    async def tick(times=1):
+        for _ in range(times):
+            await ex._run_stage_sltp_verification_sweep()
+
+    await tick(n + 1)                 # round 0 exhausted, cooldown starts
+    clock["now"] += base
+    await tick(n + 1)                 # round 1 runs, then exhausts
+    assert len(conn.modify_calls) == 2 * n
+
+    clock["now"] += base              # only 1x base: round 2 must wait 2x
+    await tick()
+    assert len(conn.modify_calls) == 2 * n
+    clock["now"] += base
+    await tick()
+    assert len(conn.modify_calls) == 2 * n + 1
+
+
+async def test_sweep_forgets_stages_that_leave_the_candidate_list(monkeypatch):
+    pos = _FakePos(ticket=555, comment="telebot-1-s1", sl=1990.0, tp=0.0)
+    conn = _FakeConnector([pos], modify_success=False)
+    ex = _make_executor(conn, notifier=_FakeNotifier())
+    rows = [_stage()]
+
+    async def fake_fetch():
+        return rows
+
+    monkeypatch.setattr(db, "get_filled_stages_for_sltp_verification", fake_fetch)
+    for _ in range(ex._SLTP_VERIFY_MAX_ATTEMPTS + 1):
+        await ex._run_stage_sltp_verification_sweep()
+    assert ex._sltp_verify_attempts and ex._sltp_verify_notified
+
+    rows.clear()  # stage closed / reconciled elsewhere
+    await ex._run_stage_sltp_verification_sweep()
+    assert not ex._sltp_verify_attempts
+    assert not ex._sltp_verify_notified
+    assert not ex._sltp_verify_exhausted_at

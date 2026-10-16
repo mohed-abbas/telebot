@@ -540,6 +540,18 @@ class DryRunConnector(MT5Connector):
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _bridge_success(data: dict) -> bool:
+    """True when an ok=true bridge payload reports a completed action.
+
+    The production bridge (mt5-rest-server) signals failure on PUT/DELETE
+    endpoints through ok=false (``_request`` then returns None) and does NOT
+    include a "success" key in the data payload. The dev simulator and
+    POST /order do include one. So a missing key means success; only an
+    explicit falsy "success" is a failure.
+    """
+    return bool(data.get("success", True))
+
+
 class RestApiConnector(MT5Connector):
     """Connects to MT5 via a REST API server (production backend).
 
@@ -769,7 +781,7 @@ class RestApiConnector(MT5Connector):
         })
         if data is None:
             return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
-        if data.get("success"):
+        if _bridge_success(data):
             return OrderResult(success=True, ticket=ticket)
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 
@@ -780,12 +792,14 @@ class RestApiConnector(MT5Connector):
         data = await self._request("DELETE", f"/api/v1/position/{ticket}", json=body if body else None)
         if data is None:
             return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
-        if data.get("success"):
+        if _bridge_success(data):
             return OrderResult(
                 success=True,
                 ticket=data.get("ticket", ticket),
                 price=data.get("price", 0.0),
-                volume=data.get("volume", 0.0),
+                # The production bridge reports "closed_volume"; the dev
+                # simulator reports "volume".
+                volume=data.get("closed_volume", data.get("volume", 0.0)),
             )
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 
@@ -793,7 +807,7 @@ class RestApiConnector(MT5Connector):
         data = await self._request("DELETE", f"/api/v1/pending-order/{ticket}")
         if data is None:
             return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
-        if data.get("success"):
+        if _bridge_success(data):
             return OrderResult(success=True, ticket=ticket)
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 

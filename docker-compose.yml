@@ -4,6 +4,13 @@ services:
     container_name: telebot
     restart: unless-stopped
     env_file: .env
+    environment:
+      # No published ports: browsers reach the app only through the shared
+      # nginx, so trust its X-Real-IP header. Without this every visitor shares
+      # nginx's IP and one login-lockout bucket. Other containers on proxy-net /
+      # data-net could still send forged headers directly; set TRUST_PROXY=false
+      # in .env to turn this off.
+      TRUST_PROXY: "${TRUST_PROXY:-true}"
     volumes:
       - ./data:/app/data
       - ./accounts.json:/app/accounts.json:ro

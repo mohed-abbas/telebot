@@ -14,7 +14,7 @@ import asyncio
 import logging
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
 import db
 from models import (
@@ -34,6 +34,8 @@ from risk_calculator import (
 )
 
 logger = logging.getLogger(__name__)
+
+KILL_SWITCH_REASON = "Trading paused (kill switch)"
 
 
 # ── Phase 6 staged-entry pure helpers (D-11..D-15) ───────────────────
@@ -248,6 +250,28 @@ class TradeManager:
         # Phase 5 (D-27): optional SettingsStore; bot.py attaches after construction.
         # Falls back to AccountConfig values when None (v1.0 unit tests, dry-run demos).
         self.settings_store = None  # type: ignore[assignment]
+        # Kill-switch probe; the Executor replaces this with a view of its
+        # _trading_paused flag. Defaults to "never paused" for standalone use.
+        self.is_trading_paused: Callable[[], bool] = lambda: False
+
+    async def _kill_switch_gate(self) -> bool:
+        """Return True (and drain armed stages) if the kill switch is active.
+
+        A handler can already be past the executor's pause check when the kill
+        switch fires, and then insert stage rows after the D-21 drain ran. Call
+        this after inserting stages and right before submitting an order: it
+        re-drains so those rows end 'cancelled_by_kill_switch' (terminal, D-22)
+        instead of firing after resume.
+        """
+        if not self.is_trading_paused():
+            return False
+        try:
+            drained = await db.drain_staged_entries_for_kill_switch()
+            if drained:
+                logger.warning("Kill switch active: drained %d late stage(s)", drained)
+        except Exception as exc:
+            logger.error("Kill switch late drain failed: %s", exc)
+        return True
 
     async def handle_signal(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """Process a parsed signal. Returns list of execution results for notification."""
@@ -375,6 +399,9 @@ class TradeManager:
                 logger.warning("%s: stage 1 insert failed (idempotency?): %s", acct_name, exc)
                 results.append({"account": acct_name, "status": "skipped", "reason": "duplicate"})
                 continue
+            if await self._kill_switch_gate():
+                results.append({"account": acct_name, "status": "skipped", "reason": KILL_SWITCH_REASON})
+                continue
 
             synth = SignalAction(
                 type=SignalType.OPEN_TEXT_ONLY,
@@ -468,6 +495,18 @@ class TradeManager:
             stage1 = await db.get_stage_by_signal_account(
                 paired_signal_id, acct_name, 1,
             )
+            if stage1 and stage1.get("status") == "cancelled_by_kill_switch":
+                # The kill switch cancelled this sequence's anchor (D-22): its
+                # follow-up must not open a new sequence after resume.
+                logger.info(
+                    "%s: follow-up skipped — stage 1 of signal %d was cancelled "
+                    "by the kill switch", acct_name, paired_signal_id,
+                )
+                results.append({
+                    "account": acct_name, "status": "skipped",
+                    "reason": "Stage 1 cancelled by kill switch",
+                })
+                continue
             if (
                 stage1
                 and stage1.get("status") == "filled"
@@ -593,6 +632,9 @@ class TradeManager:
                 for b in bands
             ]
             stage_ids = await db.create_staged_entries(rows)
+            if await self._kill_switch_gate():
+                results.append({"account": acct_name, "status": "skipped", "reason": KILL_SWITCH_REASON})
+                continue
 
             price_data = await connector.get_price(signal.symbol)
             if price_data is None:
@@ -802,6 +844,9 @@ class TradeManager:
                 for b in bands
             ]
             stage_ids = await db.create_staged_entries(rows)
+            if await self._kill_switch_gate():
+                results.append({"account": acct_name, "status": "skipped", "reason": KILL_SWITCH_REASON})
+                continue
 
             # Price (bid/ask) was fetched above for the pre-band stale guard and
             # is reused here for the at-arrival fire decision.
@@ -1063,6 +1108,18 @@ class TradeManager:
                     name, signal_id, stage_number,
                 )
                 return {"account": name, "status": "skipped", "reason": "claim_lost"}
+
+        # Last kill-switch check before anything is sent to the broker. It sits
+        # after the claim so there is no await between it and open_order. The
+        # drain doesn't touch the 'firing' row this path just claimed, so
+        # cancel that one explicitly.
+        if await self._kill_switch_gate():
+            if staged and stage_row_id is not None:
+                await db.update_stage_status(
+                    stage_row_id, "cancelled_by_kill_switch",
+                    cancelled_reason="kill_switch",
+                )
+            return {"account": name, "status": "skipped", "reason": KILL_SWITCH_REASON}
 
         # ── Execute ─────────────────────────────────────────────────────
         if use_market:

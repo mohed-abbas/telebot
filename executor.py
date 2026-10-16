@@ -24,7 +24,9 @@ import db
 from models import AccountSettings, Direction, GlobalConfig, SignalAction, SignalType
 from notifier import Notifier
 from risk_calculator import GOLD_PIP_SIZE
-from trade_manager import Band, TradeManager, stage_is_in_zone_at_arrival
+from trade_manager import (
+    KILL_SWITCH_REASON, Band, TradeManager, stage_is_in_zone_at_arrival,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +35,20 @@ class Executor:
     # §1.3(b): bounded re-modify attempts before escalating an unverified
     # SL/TP to the operator (prevents every-tick modify spam on a stuck broker).
     _SLTP_VERIFY_MAX_ATTEMPTS = 3
+    # After the attempts are exhausted, wait and then start a new round, so a
+    # temporary refusal (e.g. market closed) doesn't disable the re-align for
+    # good. The wait doubles each round (5 min, 10 min, ... capped at 1 h) so a
+    # permanent rejection doesn't keep hitting the broker. The operator alert
+    # fires once; a later success sends a "restored" notice.
+    _SLTP_VERIFY_COOLDOWN_SECONDS = 300.0
+    _SLTP_VERIFY_COOLDOWN_MAX_SECONDS = 3600.0
 
     def __init__(self, trade_manager: TradeManager, global_config: GlobalConfig,
                  notifier: Notifier | None = None, price_simulator=None):
         self.tm = trade_manager
+        # Lets the trade manager re-check the kill switch right before it
+        # submits an order (a handler may already be in flight when it fires).
+        self.tm.is_trading_paused = lambda: self._trading_paused
         self.cfg = global_config
         self.notifier = notifier
         self._price_simulator = price_simulator
@@ -55,6 +67,10 @@ class Executor:
         # escalated to the operator (so we notify once, not every 10s tick).
         self._sltp_verify_attempts: dict[int, int] = {}
         self._sltp_verify_notified: set[int] = set()
+        # stage_id -> monotonic time the attempts ran out (cooldown start), and
+        # how many cooldowns that stage has already been through.
+        self._sltp_verify_exhausted_at: dict[int, float] = {}
+        self._sltp_verify_rounds: dict[int, int] = {}
 
     def is_accepting_signals(self) -> bool:
         """Check if executor can process new signals."""
@@ -175,6 +191,7 @@ class Executor:
         )
         temp_tm.settings_store = getattr(self.tm, "settings_store", None)
         temp_tm.correlator = getattr(self.tm, "correlator", None)
+        temp_tm.is_trading_paused = self.tm.is_trading_paused
         return await temp_tm.handle_signal(signal, source_name=source_name)
 
     # ── Heartbeat & Reconnect ────────────────────────────────────────
@@ -184,27 +201,47 @@ class Executor:
         while True:
             try:
                 await asyncio.sleep(30)
-                for acct_name, connector in self.tm.connectors.items():
-                    if acct_name in self._reconnecting:
-                        continue  # Already reconnecting
-                    if self._trading_paused:
-                        continue  # Kill switch active, don't bother checking
-                    # Skip accounts that were never connected (e.g. no password configured)
-                    if not connector.password and not (
-                        connector.password_env and os.environ.get(connector.password_env)
-                    ):
-                        continue
-                    alive = await connector.ping()
-                    if not alive:
-                        # Connection lost or broker disconnected — start reconnect
-                        logger.warning("%s: Heartbeat failed — starting reconnect", acct_name)
-                        asyncio.create_task(self._reconnect_account(acct_name, connector))
+                await self._heartbeat_tick()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error("Heartbeat loop error: %s", exc)
 
-    async def _reconnect_account(self, acct_name: str, connector) -> None:
+    async def _heartbeat_tick(self) -> None:
+        """One heartbeat pass: start a reconnect for any account that needs it."""
+        for acct_name, connector in self.tm.connectors.items():
+            if acct_name in self._reconnecting:
+                continue  # Already reconnecting
+            if self._trading_paused:
+                continue  # Kill switch active, don't bother checking
+            # Skip accounts that were never connected (e.g. no password configured)
+            if not connector.password and not (
+                connector.password_env and os.environ.get(connector.password_env)
+            ):
+                continue
+            alive = await connector.ping()
+            if not alive:
+                # Connection lost or broker disconnected — start reconnect
+                logger.warning("%s: Heartbeat failed — starting reconnect", acct_name)
+                asyncio.create_task(self._reconnect_account(acct_name, connector))
+            elif not connector.connected:
+                # Bridge is alive but this session is not usable: a failed
+                # request (e.g. a timed-out order) marked it lost, or the
+                # initial login failed. Reconnect + resync so the account
+                # doesn't stay disabled until a restart.
+                logger.warning(
+                    "%s: Bridge alive but session disconnected — reconnecting",
+                    acct_name,
+                )
+                asyncio.create_task(self._reconnect_account(
+                    acct_name, connector,
+                    reason="Session disconnected — reconnecting and resyncing",
+                ))
+
+    async def _reconnect_account(
+        self, acct_name: str, connector,
+        reason: str = "Heartbeat failed — reconnecting",
+    ) -> None:
         """Reconnect a single account with exponential backoff (1s -> 60s max)."""
         # Skip accounts without a password (no point reconnecting)
         if not connector.password and not (
@@ -216,7 +253,7 @@ class Executor:
 
         self._reconnecting.add(acct_name)
         if self.notifier:
-            await self.notifier.notify_connection_lost(acct_name, "Heartbeat failed — reconnecting")
+            await self.notifier.notify_connection_lost(acct_name, reason)
 
         delay = 1.0
         max_delay = 60.0
@@ -1014,6 +1051,9 @@ class Executor:
         except Exception as exc:
             logger.warning("SL/TP sweep: candidate fetch failed: %s", exc)
             return
+        # Forget retry state for stages that are no longer candidates (closed,
+        # reconciled elsewhere) so the maps don't grow for the process lifetime.
+        self._prune_sltp_verify_state({row["id"] for row in rows})
         if not rows:
             return
 
@@ -1051,6 +1091,20 @@ class Executor:
                     positions_by_comment=positions_by_comment,
                 )
 
+    def _reset_sltp_verify_state(self, stage_id: int) -> None:
+        self._sltp_verify_attempts.pop(stage_id, None)
+        self._sltp_verify_notified.discard(stage_id)
+        self._sltp_verify_exhausted_at.pop(stage_id, None)
+        self._sltp_verify_rounds.pop(stage_id, None)
+
+    def _prune_sltp_verify_state(self, live_stage_ids: set[int]) -> None:
+        tracked = (
+            set(self._sltp_verify_attempts) | self._sltp_verify_notified
+            | set(self._sltp_verify_exhausted_at) | set(self._sltp_verify_rounds)
+        )
+        for stage_id in tracked - live_stage_ids:
+            self._reset_sltp_verify_state(stage_id)
+
     async def _verify_one_stage_sltp(
         self,
         *,
@@ -1068,8 +1122,7 @@ class Executor:
             # No live position with our comment — the operator/broker closed it
             # (or it never opened). Do NOT re-modify a ghost. Clear any tracked
             # retry/notify state so a future re-fill starts clean.
-            self._sltp_verify_attempts.pop(stage_id, None)
-            self._sltp_verify_notified.discard(stage_id)
+            self._reset_sltp_verify_state(stage_id)
             return
 
         target_sl = stage.get("signal_sl")
@@ -1095,11 +1148,24 @@ class Executor:
 
         if not needs_fix:
             # In sync — idempotent no-op. Reset any prior retry/notify state.
-            self._sltp_verify_attempts.pop(stage_id, None)
-            self._sltp_verify_notified.discard(stage_id)
+            self._reset_sltp_verify_state(stage_id)
             return
 
         attempts = self._sltp_verify_attempts.get(stage_id, 0)
+        if attempts >= self._SLTP_VERIFY_MAX_ATTEMPTS:
+            now = time.monotonic()
+            exhausted_at = self._sltp_verify_exhausted_at.setdefault(stage_id, now)
+            rounds = self._sltp_verify_rounds.get(stage_id, 0)
+            cooldown = min(
+                self._SLTP_VERIFY_COOLDOWN_SECONDS * (2 ** rounds),
+                self._SLTP_VERIFY_COOLDOWN_MAX_SECONDS,
+            )
+            if now - exhausted_at >= cooldown:
+                # Cooldown over — start a new round of attempts below. The
+                # notified flag is kept so the operator isn't re-alerted.
+                self._sltp_verify_exhausted_at.pop(stage_id, None)
+                self._sltp_verify_rounds[stage_id] = rounds + 1
+                attempts = 0
         if attempts >= self._SLTP_VERIFY_MAX_ATTEMPTS:
             # Exhausted retries — escalate ONCE, then stop hammering the broker.
             if stage_id not in self._sltp_verify_notified:
@@ -1148,8 +1214,19 @@ class Executor:
             return
 
         if getattr(result, "success", False):
-            self._sltp_verify_attempts.pop(stage_id, None)
-            self._sltp_verify_notified.discard(stage_id)
+            was_escalated = stage_id in self._sltp_verify_notified
+            self._reset_sltp_verify_state(stage_id)
+            if was_escalated and self.notifier:
+                try:
+                    await self.notifier.notify_alert(
+                        f"STAGE SL/TP RESTORED: {acct_name} ticket={ticket} "
+                        f"(signal_id={stage['signal_id']} stage={stage['stage_number']}) "
+                        f"— sl={sl_to_send} tp={tp_to_send}"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "%s: SL/TP restored notify failed: %s", acct_name, exc,
+                    )
             logger.info(
                 "%s: SL/TP re-aligned ticket=%s sl=%s tp=%s "
                 "(signal_id=%d stage=%d)",
@@ -1293,6 +1370,10 @@ class Executor:
             # winner's fill (its 'firing'->'filled' would no-op the row back).
             # Leave it alone — the owning path finalizes it.
             if reason == "claim_lost":
+                return
+            # The kill switch fired mid-tick: the trade manager already drained
+            # the row to the terminal 'cancelled_by_kill_switch' (D-22).
+            if reason == KILL_SWITCH_REASON:
                 return
             try:
                 await db.update_stage_status(
