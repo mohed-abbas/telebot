@@ -30,6 +30,10 @@ from trade_manager import (
 
 logger = logging.getLogger(__name__)
 
+# Reasons sent with the CONNECTION LOST notification when a reconnect starts.
+RECONNECT_REASON_PING_FAILED = "Heartbeat failed — reconnecting"
+RECONNECT_REASON_SESSION_LOST = "Session disconnected — reconnecting and resyncing"
+
 
 class Executor:
     # §1.3(b): bounded re-modify attempts before escalating an unverified
@@ -127,7 +131,7 @@ class Executor:
         to avoid identical execution patterns.
         """
         if self._trading_paused:
-            return [{"account": "all", "status": "skipped", "reason": "Trading paused (kill switch)"}]
+            return [{"account": "all", "status": "skipped", "reason": KILL_SWITCH_REASON}]
 
         account_names = list(self.tm.connectors.keys())
         random.shuffle(account_names)
@@ -151,7 +155,7 @@ class Executor:
                     all_results.append({
                         "account": remaining,
                         "status": "skipped",
-                        "reason": "Trading paused (kill switch)",
+                        "reason": KILL_SWITCH_REASON,
                     })
                 break
 
@@ -223,7 +227,9 @@ class Executor:
             if not alive:
                 # Connection lost or broker disconnected — start reconnect
                 logger.warning("%s: Heartbeat failed — starting reconnect", acct_name)
-                asyncio.create_task(self._reconnect_account(acct_name, connector))
+                asyncio.create_task(self._reconnect_account(
+                    acct_name, connector, reason=RECONNECT_REASON_PING_FAILED,
+                ))
             elif not connector.connected:
                 # Bridge is alive but this session is not usable: a failed
                 # request (e.g. a timed-out order) marked it lost, or the
@@ -235,12 +241,12 @@ class Executor:
                 )
                 asyncio.create_task(self._reconnect_account(
                     acct_name, connector,
-                    reason="Session disconnected — reconnecting and resyncing",
+                    reason=RECONNECT_REASON_SESSION_LOST,
                 ))
 
     async def _reconnect_account(
         self, acct_name: str, connector,
-        reason: str = "Heartbeat failed — reconnecting",
+        reason: str = RECONNECT_REASON_PING_FAILED,
     ) -> None:
         """Reconnect a single account with exponential backoff (1s -> 60s max)."""
         # Skip accounts without a password (no point reconnecting)

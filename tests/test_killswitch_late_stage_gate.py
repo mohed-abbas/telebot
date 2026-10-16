@@ -21,17 +21,6 @@ from trade_manager import KILL_SWITCH_REASON
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
-@pytest.fixture(autouse=True)
-async def _empty_stage_tables(db_pool):
-    # conftest's clean_tables is a no-op until the pool exists, so the first
-    # DB test of a run can see rows left by a previous run.
-    async with db._pool.acquire() as conn:
-        await conn.execute(
-            "TRUNCATE signals, trades, staged_entries, signal_daily_counted "
-            "RESTART IDENTITY CASCADE"
-        )
-
-
 def _in_zone_buy() -> SignalAction:
     # priced_connector quotes 2040.1/2040.2 — every band of 2040-2060 is
     # already crossed at arrival, so without the gate they would all fire.

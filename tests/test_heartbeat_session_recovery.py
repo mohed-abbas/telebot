@@ -12,7 +12,9 @@ import types
 
 import httpx
 
-from executor import Executor
+from executor import (
+    RECONNECT_REASON_PING_FAILED, RECONNECT_REASON_SESSION_LOST, Executor,
+)
 from models import GlobalConfig
 from mt5_connector import RestApiConnector
 
@@ -51,7 +53,7 @@ def _executor(conn):
     ex = Executor(trade_manager=tm, global_config=GlobalConfig(), notifier=None)
     calls = []
 
-    async def fake_reconnect(acct_name, connector, reason="Heartbeat failed — reconnecting"):
+    async def fake_reconnect(acct_name, connector, *, reason):
         calls.append((acct_name, reason))
 
     ex._reconnect_account = fake_reconnect
@@ -69,7 +71,7 @@ async def test_heartbeat_reconnects_alive_bridge_with_lost_session(monkeypatch):
     ex, calls = _executor(_FakeConn(alive=True, connected=False))
     await _run_tick(ex)
     assert len(calls) == 1
-    assert "Session disconnected" in calls[0][1]
+    assert calls[0][1] == RECONNECT_REASON_SESSION_LOST
 
 
 async def test_heartbeat_leaves_healthy_account_alone(monkeypatch):
@@ -84,7 +86,7 @@ async def test_heartbeat_still_reconnects_when_ping_fails(monkeypatch):
     ex, calls = _executor(_FakeConn(alive=False, connected=True))
     await _run_tick(ex)
     assert len(calls) == 1
-    assert "Heartbeat failed" in calls[0][1]
+    assert calls[0][1] == RECONNECT_REASON_PING_FAILED
 
 
 async def test_heartbeat_skips_accounts_without_credentials(monkeypatch):

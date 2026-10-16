@@ -36,6 +36,11 @@ async def db_pool():
     """Session-scoped asyncpg pool -- created once, shared across all tests."""
     try:
         await db.init_db(TEST_DATABASE_URL)
+        # idempotency_keys is created by the dashboard lifespan, not
+        # db.init_db. clean_tables truncates it, so without it that TRUNCATE
+        # fails (silently) and no table is ever cleaned between tests.
+        from api.idempotency import ensure_table
+        await ensure_table()
     except Exception as exc:
         pytest.skip(
             f"PostgreSQL not available at {TEST_DATABASE_URL}: {exc}\n"
