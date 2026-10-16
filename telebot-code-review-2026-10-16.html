@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telebot Code Review</title>
+<style>
+:root{
+  --bg:#f6f7f9; --surface:#ffffff; --surface2:#f1f3f6; --text:#1b1f24; --muted:#5b6470; --line:#dde1e7;
+  --red:#d33a3a; --red-bg:#fdecec; --red-fg:#a32020;
+  --amber:#c27a00; --amber-bg:#fff4dc; --amber-fg:#8a5600;
+  --green:#1f8a4c; --green-bg:#e6f6ec; --green-fg:#14653a;
+  --blue:#2f6fde; --blue-bg:#e8f0fd; --blue-fg:#1f4fa6;
+  --gray-bg:#eef0f3;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111317; --surface:#1a1d22; --surface2:#22262c; --text:#e7eaee; --muted:#9aa3ae; --line:#323840;
+    --red:#ef6b6b; --red-bg:#3a1d1f; --red-fg:#ffb3b3;
+    --amber:#f0a73a; --amber-bg:#3a2c14; --amber-fg:#ffd59a;
+    --green:#4cc782; --green-bg:#16301f; --green-fg:#a6ebc3;
+    --blue:#6b9cff; --blue-bg:#18263f; --blue-fg:#b5ceff;
+    --gray-bg:#2a2f36;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111317; --surface:#1a1d22; --surface2:#22262c; --text:#e7eaee; --muted:#9aa3ae; --line:#323840;
+  --red:#ef6b6b; --red-bg:#3a1d1f; --red-fg:#ffb3b3;
+  --amber:#f0a73a; --amber-bg:#3a2c14; --amber-fg:#ffd59a;
+  --green:#4cc782; --green-bg:#16301f; --green-fg:#a6ebc3;
+  --blue:#6b9cff; --blue-bg:#18263f; --blue-fg:#b5ceff;
+  --gray-bg:#2a2f36;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:20px;margin:40px 0 12px}
+.sub{color:var(--muted);margin:0 0 24px}
+code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat b{display:block;font-size:28px;line-height:1.1}
+.stat span{color:var(--muted);font-size:13px}
+.stat.high b{color:var(--red)} .stat.med b{color:var(--amber)} .stat.low b{color:var(--muted)}
+
+/* map */
+.map{display:flex;flex-direction:column;gap:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px}
+.layer{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-radius:10px;background:var(--surface2)}
+.layer .name{font-weight:600;min-width:210px}
+.layer .name small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.down{text-align:center;color:var(--muted);font-size:18px;line-height:1;padding:4px 0}
+.side{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+@media (max-width:640px){.side{grid-template-columns:1fr}.layer .name{min-width:0;width:100%}}
+
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:26px;height:26px;padding:0 7px;border-radius:13px;font-weight:700;font-size:13px;text-decoration:none}
+.badge.high{background:var(--red);color:#fff} .badge.med{background:var(--amber);color:#fff}
+
+/* filters */
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.filters button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:20px;padding:5px 14px;cursor:pointer}
+.filters button[aria-pressed="true"]{background:var(--text);color:var(--bg);border-color:var(--text)}
+
+/* cards */
+.card{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--amber);border-radius:12px;padding:18px 18px 16px;margin-bottom:16px}
+.card.high{border-left-color:var(--red)}
+.card header{display:flex;gap:10px;align-items:flex-start;margin-bottom:12px}
+.card h3{margin:0;font-size:17px;line-height:1.3}
+.loc{display:inline-block;margin-top:4px;color:var(--muted)}
+.tag{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:6px;margin-left:auto;white-space:nowrap}
+.tag.high{background:var(--red-bg);color:var(--red-fg)} .tag.med{background:var(--amber-bg);color:var(--amber-fg)}
+
+.diagram{background:var(--surface2);border-radius:10px;padding:12px;margin:10px 0}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.step{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;line-height:1.35}
+.step small{display:block;color:var(--muted);font-size:11px}
+.step.bad{background:var(--red-bg);border-color:var(--red);color:var(--red-fg);font-weight:600}
+.step.warn{background:var(--amber-bg);border-color:var(--amber);color:var(--amber-fg)}
+.step.ok{background:var(--green-bg);border-color:var(--green);color:var(--green-fg)}
+.step.info{background:var(--blue-bg);border-color:var(--blue);color:var(--blue-fg)}
+.arr{color:var(--muted);font-weight:700}
+.lane{display:grid;grid-template-columns:110px 1fr;gap:10px;align-items:center;padding:6px 0}
+.lane + .lane{border-top:1px dashed var(--line)}
+.lane .who{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+@media (max-width:560px){.lane{grid-template-columns:1fr;gap:4px}}
+.result{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px}
+
+.rows{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:14px;margin-top:10px}
+.rows dt{font-weight:700}
+.rows dt.b{color:var(--red)} .rows dt.f{color:var(--green)}
+.rows dd{margin:0}
+
+.prio{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.prio div{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:14px}
+.prio .n{font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase}
+
+table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--surface2);font-size:12px;text-transform:uppercase;color:var(--muted)}
+tr:last-child td{border-bottom:0}
+.tblwrap{overflow-x:auto}
+.note{background:var(--blue-bg);color:var(--blue-fg);border-radius:10px;padding:12px 14px;font-size:14px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:8px}
+.legend span{display:inline-flex;gap:6px;align-items:center}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block;border:1px solid}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Telebot code review</h1>
+<p class="sub">The 14 audit-fix commits <code>93ec594..HEAD</code> (2026-07-12, about 1,000 lines in 16 files) · reviewed 2026-10-16 · 15 confirmed problems</p>
+
+<div class="stats">
+  <div class="stat high"><b>6</b><span>High: can lose money or leave positions unprotected</span></div>
+  <div class="stat med"><b>9</b><span>Medium: wrong state, stalls, lockouts</span></div>
+  <div class="stat low"><b>~10</b><span>Minor or cleanup (list at the bottom)</span></div>
+  <div class="stat"><b>4</b><span>Fix first: #4 → #1 → #2 → #3</span></div>
+</div>
+
+<h2>Where the problems are</h2>
+<div class="map">
+  <div class="layer"><div class="name">Telegram signals<small>provider messages</small></div></div>
+  <div class="down">↓</div>
+  <div class="layer"><div class="name">bot.py<small>startup and reconnect</small></div>
+    <a class="badge high" href="#f6">6</a></div>
+  <div class="down">↓</div>
+  <div class="layer"><div class="name">trade_manager.py<small>open, close, modify, stages</small></div>
+    <a class="badge high" href="#f3">3</a><a class="badge med" href="#f10">10</a><a class="badge med" href="#f11">11</a><a class="badge med" href="#f13">13</a><a class="badge med" href="#f14">14</a></div>
+  <div class="down">↓</div>
+  <div class="layer"><div class="name">executor.py<small>zone watch + SL/TP check</small></div>
+    <a class="badge high" href="#f1">1</a><a class="badge high" href="#f5">5</a><a class="badge med" href="#f12">12</a><a class="badge med" href="#f15">15</a></div>
+  <div class="down">↓</div>
+  <div class="layer"><div class="name">mt5_connector.py<small>REST client</small></div>
+    <a class="badge high" href="#f2">2</a><a class="badge high" href="#f4">4</a></div>
+  <div class="down">↓</div>
+  <div class="layer"><div class="name">mt5-rest-server/server.py<small>Windows bridge</small></div>
+    <a class="badge med" href="#f9">9</a></div>
+  <div class="down">↓</div>
+  <div class="layer"><div class="name">MetaTrader 5 broker</div></div>
+  <div class="side">
+    <div class="layer"><div class="name">dashboard.py<small>login</small></div><a class="badge med" href="#f8">8</a></div>
+    <div class="layer"><div class="name">api/actions.py<small>dashboard close</small></div><a class="badge med" href="#f7">7</a></div>
+  </div>
+</div>
+
+<h2>Findings</h2>
+<div class="filters" role="group" aria-label="Filter by severity">
+  <button type="button" data-f="all" aria-pressed="true">All 15</button>
+  <button type="button" data-f="high" aria-pressed="false">High (6)</button>
+  <button type="button" data-f="med" aria-pressed="false">Medium (9)</button>
+</div>
+<div class="legend">
+  <span><i style="background:var(--surface);border-color:var(--line)"></i>normal step</span>
+  <span><i style="background:var(--amber-bg);border-color:var(--amber)"></i>where it goes wrong</span>
+  <span><i style="background:var(--red-bg);border-color:var(--red)"></i>bad outcome</span>
+  <span><i style="background:var(--green-bg);border-color:var(--green)"></i>looks fine</span>
+</div>
+<br>
+
+<!-- 1 -->
+<article class="card high" id="f1" data-sev="high">
+  <header><span class="badge high">1</span><div><h3>The SL/TP check undoes breakeven and TP edits</h3><code class="loc">executor.py:1090</code></div><span class="tag high">High</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">Signal opens<small>SL 2330 · TP 2360</small></div><span class="arr">→</span>
+    <div class="step">DB saves<small>signal_sl = 2330</small></div><span class="arr">→</span>
+    <div class="step ok">"SL to BE"<small>SL moved to 2340</small></div><span class="arr">→</span>
+    <div class="step warn">DB not updated<small>still 2330</small></div><span class="arr">→</span>
+    <div class="step">Check runs (≤10s)<small>2340 ≠ 2330</small></div><span class="arr">→</span>
+    <div class="step bad">SL set back to 2330</div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>Breakeven, MODIFY_TP and dashboard level edits are reverted on nearly every bot position. A reversal then takes the full original loss.</dd>
+    <dt class="f">Fix</dt><dd>Write <code>signal_sl</code>/<code>signal_tp</code> on every MODIFY_SL, MODIFY_TP and levels edit.</dd>
+  </dl>
+</article>
+
+<!-- 2 -->
+<article class="card high" id="f2" data-sev="high">
+  <header><span class="badge high">2</span><div><h3>One slow request marks the account disconnected until restart</h3><code class="loc">mt5_connector.py:642</code></div><span class="tag high">High</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">Order / modify / close<small>takes &gt;15s</small></div><span class="arr">→</span>
+    <div class="step warn">connected = False</div><span class="arr">→</span>
+    <div class="step ok">Heartbeat /ping<small>OK</small></div><span class="arr">→</span>
+    <div class="step">No reconnect<small>ping OK, so connect() never runs</small></div><span class="arr">→</span>
+    <div class="step bad">Account skipped forever</div>
+  </div>
+  <div class="result">Skipped from then on: OPEN, CLOSE, MODIFY, history sync and <b>kill-switch flattening</b>. The zone watcher still opens bands on it.</div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>One slow call silently disables a healthy account. Before this batch it took 3 timeouts in a row.</dd>
+    <dt class="f">Fix</dt><dd>Set <code>connected = True</code> again when ping succeeds, or don't flip it on a single timeout.</dd>
+  </dl>
+</article>
+
+<!-- 3 -->
+<article class="card high" id="f3" data-sev="high">
+  <header><span class="badge high">3</span><div><h3>A timed-out order is treated as rejected, even if it filled</h3><code class="loc">trade_manager.py:1151</code></div><span class="tag high">High</span></header>
+  <div class="diagram">
+    <div class="lane"><span class="who">Bot</span><div class="flow">
+      <div class="step">Send order</div><span class="arr">→</span>
+      <div class="step warn">15s timeout</div><span class="arr">→</span>
+      <div class="step">Logged "failed"<small>ticket = 0, stage failed</small></div>
+    </div></div>
+    <div class="lane"><span class="who">Bridge / MT5</span><div class="flow">
+      <div class="step">Still running order_send</div><span class="arr">→</span>
+      <div class="step ok">Order filled</div><span class="arr">→</span>
+      <div class="step bad">Live position nobody tracks</div>
+    </div></div>
+  </div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>No SL/TP check, no P&amp;L booking, no cascade. With #2 the account is also flagged disconnected, so CLOSE signals miss it too.</dd>
+    <dt class="f">Fix</dt><dd>On a timeout, look up the position by its unique comment and adopt it (the audit's §4.1 remedy).</dd>
+  </dl>
+</article>
+
+<!-- 4 -->
+<article class="card high" id="f4" data-sev="high">
+  <header><span class="badge high">4</span><div><h3>Every successful modify, close or cancel is reported as a failure</h3><code class="loc">mt5_connector.py:772</code></div><span class="tag high">High</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step ok">Bridge replies<small><code>{ok: true, data: {...}}</code></small></div><span class="arr">→</span>
+    <div class="step warn">Connector checks<small><code>data.success</code> (missing)</small></div><span class="arr">→</span>
+    <div class="step">"Unknown error"</div><span class="arr">→</span>
+    <div class="step bad">False alerts · wrong counts</div>
+  </div>
+  <div class="result">Hidden because the simulator and test mocks <i>do</i> send <code>success: true</code>. Close also reads <code>volume</code>, but the bridge sends <code>closed_volume</code>.</div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>A false "Stage-1 alignment FAILED" alert on every follow-up. CLOSE/MODIFY report FAILED, the kill switch counts every close as failed, and dashboard close skips <code>mark_trade_closing</code>.</dd>
+    <dt class="f">Fix</dt><dd>Treat <code>ok: true</code> as success, read <code>closed_volume</code>, and make the mocks match the real bridge. Probably the smallest fix here.</dd>
+  </dl>
+</article>
+
+<!-- 5 -->
+<article class="card high" id="f5" data-sev="high">
+  <header><span class="badge high">5</span><div><h3>Two fire paths race, and the loser overwrites "filled"</h3><code class="loc">executor.py:1298</code></div><span class="tag high">High</span></header>
+  <div class="diagram">
+    <div class="lane"><span class="who">Zone watch</span><div class="flow">
+      <div class="step">Snapshot: s2 awaiting</div><span class="arr">→</span>
+      <div class="step">· · ·</div><span class="arr">→</span>
+      <div class="step">Probe: already filled</div><span class="arr">→</span>
+      <div class="step bad">Writes s2 = "failed"</div>
+    </div></div>
+    <div class="lane"><span class="who">At-arrival</span><div class="flow">
+      <div class="step">Claims s2</div><span class="arr">→</span>
+      <div class="step ok">Fills s2 → "filled"</div>
+    </div></div>
+    <div class="result">Result: <b>a live position whose row says "failed"</b>. The same thing happens with "capped". It hit 7–34 of 150 tick offsets in simulation.</div>
+  </div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>The row drops out of the SL/TP check. If it's stage 1, the D-16 cascade also stops, so siblings keep firing after it closes.</dd>
+    <dt class="f">Fix</dt><dd>Guard <i>every</i> status write with the allowed previous states (<code>WHERE status IN (...)</code>), not just "filled".</dd>
+  </dl>
+</article>
+
+<!-- 6 -->
+<article class="card high" id="f6" data-sev="high">
+  <header><span class="badge high">6</span><div><h3>Restarting the bot cancels armed scale-ins</h3><code class="loc">bot.py:308</code></div><span class="tag high">High</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step ok">10:00<small>stage 1 filled</small></div><span class="arr">→</span>
+    <div class="step">10:01<small>bands 2–3 armed</small></div><span class="arr">→</span>
+    <div class="step warn">10:45 deploy restart<small>bands &gt;30 min old</small></div><span class="arr">→</span>
+    <div class="step">Bands "abandoned"<small>log warning only</small></div><span class="arr">→</span>
+    <div class="step bad">11:00 price hits band<small>nothing fires</small></div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>Any restart silently kills scale-ins while stage 1 is still open. This breaks D-16 ("sequence lifetime = stage-1 lifetime").</dd>
+    <dt class="f">Fix</dt><dd>On startup, abandon bands only when stage 1 is closed. Keep the 30-min age rule for reconnects only.</dd>
+  </dl>
+</article>
+
+<!-- 7 -->
+<article class="card" id="f7" data-sev="med">
+  <header><span class="badge med">7</span><div><h3>Dashboard close stays "closing" forever in dry-run or on the simulator</h3><code class="loc">api/actions.py:93</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">Click Close</div><span class="arr">→</span>
+    <div class="step">Status = "closing"</div><span class="arr">→</span>
+    <div class="step warn">Wait for history deal</div><span class="arr">→</span>
+    <div class="step">Dry-run returns <code>[]</code></div><span class="arr">→</span>
+    <div class="step bad">Stuck "closing"</div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>Dry-run is the default (<code>TRADING_DRY_RUN=true</code>), and these trades vanish from analytics. Possibly live too, if a history fetch fails (plausible, not proven).</dd>
+    <dt class="f">Fix</dt><dd>Close directly when the backend has no history, and add a status guard and a timeout fallback.</dd>
+  </dl>
+</article>
+
+<!-- 8 -->
+<article class="card" id="f8" data-sev="med">
+  <header><span class="badge med">8</span><div><h3>One login lockout covers every visitor behind nginx</h3><code class="loc">dashboard.py:152</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">All visitors</div><span class="arr">→</span>
+    <div class="step">nginx</div><span class="arr">→</span>
+    <div class="step warn">Telebot sees one IP<small>TRUST_PROXY not set</small></div><span class="arr">→</span>
+    <div class="step">Anyone: 5 bad passwords</div><span class="arr">→</span>
+    <div class="step bad">You're locked out 15 min<small>repeatable</small></div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>A stranger can keep you out of the dashboard, and so out of its kill switch.</dd>
+    <dt class="f">Fix</dt><dd>Set <code>TRUST_PROXY=true</code> in compose and <code>.env.example</code>, and document it.</dd>
+  </dl>
+</article>
+
+<!-- 9 -->
+<article class="card" id="f9" data-sev="med">
+  <header><span class="badge med">9</span><div><h3>Two modifies at once on the bridge lose one change</h3><code class="loc">mt5-rest-server/server.py:434</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram">
+    <div class="lane"><span class="who">Move SL</span><div class="flow">
+      <div class="step">Read 1980 / 2020</div><span class="arr">→</span>
+      <div class="step">Write SL 1990 / TP 2020</div>
+    </div></div>
+    <div class="lane"><span class="who">Move TP</span><div class="flow">
+      <div class="step">Read 1980 / 2020</div><span class="arr">→</span>
+      <div class="step bad">Write SL 1980 / TP 2050</div>
+    </div></div>
+    <div class="result">Final: <b>1980 / 2050</b>. The SL move is silently lost, though both calls return 200 OK. The old code ended at 1990 / 2050.</div>
+  </div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>Lost SL moves, and partial plus full closes that fail with 10038. The <code>/ping</code> delay this change was meant to fix is unchanged (0.95s before and after).</dd>
+    <dt class="f">Fix</dt><dd>Run read + send as a single worker job, or add a per-ticket lock.</dd>
+  </dl>
+</article>
+
+<!-- 10 -->
+<article class="card" id="f10" data-sev="med">
+  <header><span class="badge med">10</span><div><h3>Stages can get stuck in "firing"</h3><code class="loc">trade_manager.py:1058</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">Claim → "firing"</div><span class="arr">→</span>
+    <div class="step ok">open_order OK</div><span class="arr">→</span>
+    <div class="step warn">log_trade raises<small>e.g. DB pool timeout</small></div><span class="arr">→</span>
+    <div class="step bad">Stuck "firing"<small>no ticket, no SL/TP check</small></div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>A live position goes unprotected until the next restart or reconnect. A crash mid-fire leaves the row neither fired nor abandoned.</dd>
+    <dt class="f">Fix</dt><dd>Use try/finally to always move the row to filled or failed, and have the reconcile pick up "firing" rows.</dd>
+  </dl>
+</article>
+
+<!-- 11 -->
+<article class="card" id="f11" data-sev="med">
+  <header><span class="badge med">11</span><div><h3>A follow-up that arrives too early skips the stage-1 alignment</h3><code class="loc">trade_manager.py:471</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">"BUY GOLD NOW"<small>stage 1 submitting</small></div><span class="arr">→</span>
+    <div class="step warn">Follow-up 0.4s later<small>stage 1 = "firing"</small></div><span class="arr">→</span>
+    <div class="step">Align skipped<small>debug log only</small></div><span class="arr">→</span>
+    <div class="step bad">Stage 1: default SL, TP = 0<small>never fixed</small></div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>The SL/TP check sees it as "in sync", and the orphan-TP watchdog skips it because siblings exist.</dd>
+    <dt class="f">Fix</dt><dd>Always save the follow-up's targets, and let the check align stage 1 once it fills.</dd>
+  </dl>
+</article>
+
+<!-- 12 -->
+<article class="card" id="f12" data-sev="med">
+  <header><span class="badge med">12</span><div><h3>One dead bridge delays fires on all accounts</h3><code class="loc">executor.py:1027</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step">Tick</div><span class="arr">→</span>
+    <div class="step warn">SL/TP check on account A<small>bridge dead · ~47s</small></div><span class="arr">→</span>
+    <div class="step">Only then: fire bands</div><span class="arr">→</span>
+    <div class="step bad">Account B fires late or skips</div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>Repeats on every tick. Also, a short outage reads as "no positions", which resets the retry counters and sends duplicate alerts.</dd>
+    <dt class="f">Fix</dt><dd>Skip disconnected accounts, and run the check after the fires (or in parallel, with a timeout).</dd>
+  </dl>
+</article>
+
+<!-- 13 -->
+<article class="card" id="f13" data-sev="med">
+  <header><span class="badge med">13</span><div><h3>A failed read looks like "no positions"</h3><code class="loc">trade_manager.py:1378</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step warn">Bridge read fails</div><span class="arr">→</span>
+    <div class="step">Returns <code>[]</code></div><span class="arr">→</span>
+    <div class="step">"Order / stage 1 is gone"</div><span class="arr">→</span>
+    <div class="step bad">Marked cancelled<small>still live at broker</small></div>
+    <div class="step bad">Armed bands cancelled<small>stage 1 still open</small></div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>A limit order can fill later with nothing tracking it, and valid scale-ins are killed.</dd>
+    <dt class="f">Fix</dt><dd>Return <code>None</code> or raise on failure, so "error" and "empty" are different results.</dd>
+  </dl>
+</article>
+
+<!-- 14 -->
+<article class="card" id="f14" data-sev="med">
+  <header><span class="badge med">14</span><div><h3>A trade can open after the kill switch has flattened</h3><code class="loc">trade_manager.py:1057</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram">
+    <div class="lane"><span class="who">Kill switch</span><div class="flow">
+      <div class="step">Pause</div><span class="arr">→</span>
+      <div class="step">Drain bands (0 found)</div><span class="arr">→</span>
+      <div class="step ok">Close all positions</div>
+    </div></div>
+    <div class="lane"><span class="who">Signal handler</span><div class="flow">
+      <div class="step">Waiting on price…</div><span class="arr">→</span>
+      <div class="step">Insert bands</div><span class="arr">→</span>
+      <div class="step bad">open_order → new position</div>
+    </div></div>
+  </div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>A position opens after the flatten, and leftover bands fire after you resume trading.</dd>
+    <dt class="f">Fix</dt><dd>Check <code>_trading_paused</code> right before <code>open_order</code> and before inserting bands.</dd>
+  </dl>
+</article>
+
+<!-- 15 -->
+<article class="card" id="f15" data-sev="med">
+  <header><span class="badge med">15</span><div><h3>The SL/TP check gives up permanently after 3 tries</h3><code class="loc">executor.py:1103</code></div><span class="tag med">Medium</span></header>
+  <div class="diagram"><div class="flow">
+    <div class="step warn">Market closed<small>modify rejected ×3</small></div><span class="arr">→</span>
+    <div class="step">Alert "UNVERIFIED"</div><span class="arr">→</span>
+    <div class="step ok">Market reopens</div><span class="arr">→</span>
+    <div class="step bad">Never retried<small>default SL, TP = 0</small></div>
+  </div></div>
+  <dl class="rows">
+    <dt class="b">Impact</dt><dd>A temporary broker refusal leaves the position unprotected for good (reproduced: 100 open-market ticks, no retry).</dd>
+    <dt class="f">Fix</dt><dd>Reset the retry counter after a cooldown (backoff), not only on success.</dd>
+  </dl>
+</article>
+
+<h2>Suggested fix order</h2>
+<div class="prio">
+  <div><span class="n">1st · #4</span><br>Success check in the connector. Small fix, and it stops false alerts everywhere.</div>
+  <div><span class="n">2nd · #1</span><br>Keep the DB targets in sync so breakeven isn't undone.</div>
+  <div><span class="n">3rd · #2</span><br>Restore <code>connected</code> when ping succeeds.</div>
+  <div><span class="n">4th · #3</span><br>Adopt timed-out orders by comment.</div>
+</div>
+
+<h2>Minor items (not in the top 15)</h2>
+<div class="tblwrap"><table>
+  <thead><tr><th>Where</th><th>What</th></tr></thead>
+  <tbody>
+    <tr><td><code>mt5_connector.py:591</code></td><td>The shared <code>_last_error</code> can leak one call's error into another call's result.</td></tr>
+    <tr><td><code>trade_manager.py:235</code></td><td>The <code>"10025"</code> text match also hits ticket numbers like 41002537.</td></tr>
+    <tr><td><code>db.py:403</code></td><td>Trades in "pending" (limit orders) are never reconciled. Already deferred in the backlog.</td></tr>
+    <tr><td><code>trade_manager.py:1221</code></td><td>A CLOSE signal records floating P&amp;L from before the close. Already deferred.</td></tr>
+    <tr><td>SL/TP check query</td><td>Re-reads all filled history on every tick, with no limit.</td></tr>
+    <tr><td>Startup reconcile</td><td>Delays Telegram handler registration, so signals that arrive meanwhile are lost.</td></tr>
+    <tr><td><code>api/idempotency.py:112</code></td><td>Cached results are JSON-encoded twice.</td></tr>
+    <tr><td>Logout</td><td>Cookie expiry is wired only into the unused legacy /logout. SPA logout leaves the CSRF cookies.</td></tr>
+    <tr><td><code>api/positions.py:83/85</code></td><td>"Lots" shows the risk-percent value. Text-only stage 1 shows "0.00 – 0.00" instead of "Market".</td></tr>
+    <tr><td>Cleanup</td><td>Duplicated SQL, a 3rd pip-size copy, 500 errors logged twice, a stale CSRF retry body, an unguarded <code>int()</code> on the session max-age.</td></tr>
+  </tbody>
+</table></div>
+
+</div>
+<script>
+document.querySelectorAll('.filters button').forEach(function(b){
+  b.addEventListener('click',function(){
+    var f=b.dataset.f;
+    document.querySelectorAll('.filters button').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false')});
+    document.querySelectorAll('.card').forEach(function(c){c.style.display=(f==='all'||c.dataset.sev===f)?'':'none'});
+  });
+});
+</script>
+</body>
+</html>
