@@ -26,7 +26,13 @@ from models import (
     SignalAction,
     SignalType,
 )
-from mt5_connector import MT5Connector, DryRunConnector, OrderType, OrderResult
+from mt5_connector import (
+    ConnectorReadError,
+    DryRunConnector,
+    MT5Connector,
+    OrderResult,
+    OrderType,
+)
 from risk_calculator import (
     calculate_lot_size,
     calculate_sl_distance,
@@ -37,6 +43,14 @@ from risk_calculator import (
 logger = logging.getLogger(__name__)
 
 KILL_SWITCH_REASON = "Trading paused (kill switch)"
+
+# Review 2026-10-16 #13: a positions read failed before the submit. The stage
+# row is left exactly as it was (still armed) and the next tick retries.
+READ_FAILED_REASON = "broker_read_failed"
+
+# Review 2026-10-16 #3: open_order timed out after the request was sent. The
+# stage row stays 'firing' and the stale-firing reconcile adopts or fails it.
+OUTCOME_UNKNOWN_REASON = "outcome_unknown"
 
 # Review 2026-10-16 (batch-1 leftover): the kill-switch epoch a signal handler
 # observed when it started. Set by handle_signal for the duration of the
@@ -1019,7 +1033,14 @@ class TradeManager:
         # ── Check max open trades (Phase 5: via SettingsStore when attached) ─
         # D-19: for staged submissions, over-cap stages are marked 'capped' (not skipped)
         # so they show correctly on the /staged panel and don't resurrect on reconnect.
-        positions = await connector.get_positions(signal.symbol)
+        try:
+            positions = await connector.get_positions(signal.symbol)
+        except ConnectorReadError as exc:
+            # #13: without a trustworthy position list neither the cap check, the
+            # duplicate check nor the D-25 probe can run. Skip without touching
+            # the stage row; it stays armed for the next tick.
+            logger.warning("%s: positions read failed before submit — skipping: %s", name, exc)
+            return {"account": name, "status": "skipped", "reason": READ_FAILED_REASON}
         _, _, max_open = _effective(self, acct)
         if len(positions) >= max_open:
             if staged:
@@ -1241,6 +1262,18 @@ class TradeManager:
                 )
             raise
 
+        if not result.success and result.outcome_unknown:
+            # #3: the submit reached the bridge but no answer came back. The
+            # order may be live. This is NOT a rejection: no 'failed' trade row,
+            # no 'failed' stage. The row stays 'firing' tagged outcome_unknown;
+            # executor._reconcile_stale_firing_stages adopts the position by its
+            # unique comment (or fails the row once it is clearly absent).
+            return await self._handle_unknown_open_outcome(
+                name=name, signal=signal, signal_id=signal_id, result=result,
+                staged=staged, owns_row=owns_row, stage_row_id=stage_row_id,
+                lot_size=lot_size, sl=jittered_sl, tp=jittered_tp or 0.0,
+            )
+
         if result.success:
             # The position exists on the broker NOW. Record the fill before any
             # other bookkeeping so a later DB hiccup can never leave a live
@@ -1332,6 +1365,60 @@ class TradeManager:
             except Exception as exc:
                 logger.error("%s: failed-order bookkeeping failed: %s", name, exc)
             return {"account": name, "status": "failed", "reason": result.error}
+
+    async def _handle_unknown_open_outcome(
+        self,
+        *,
+        name: str,
+        signal: SignalAction,
+        signal_id: int,
+        result: OrderResult,
+        staged: bool,
+        owns_row: bool,
+        stage_row_id: int | None,
+        lot_size: float,
+        sl: float,
+        tp: float,
+    ) -> dict:
+        """open_order timed out after the request was sent (#3).
+
+        Staged path: keep the 'firing' claim and tag it outcome_unknown so the
+        reconcile picks it up at once. Legacy path (no stage row): record an
+        'unknown' trade row so the operator sees it — nothing else can track it.
+        Never raises.
+        """
+        logger.error(
+            "%s: open_order outcome UNKNOWN (signal_id=%s) — %s; not treating as a "
+            "rejection, reconcile will adopt the position if it exists",
+            name, signal_id, result.error,
+        )
+        if owns_row:
+            try:
+                await db.mark_stage_outcome_unknown(stage_row_id)
+            except Exception as exc:
+                logger.error("%s: mark_stage_outcome_unknown failed stage_id=%s: %s", name, stage_row_id, exc)
+        try:
+            await db.increment_daily_stat(name, "server_messages")
+            if not staged:
+                await db.log_trade(
+                    signal_id=signal_id,
+                    account_name=name,
+                    symbol=signal.symbol,
+                    direction=signal.direction.value,
+                    entry_price=0,
+                    sl=sl,
+                    tp=tp,
+                    lot_size=lot_size,
+                    ticket=0,
+                    status="unknown",
+                    raw_signal=signal.raw_text,
+                )
+        except Exception as exc:
+            logger.error("%s: unknown-outcome bookkeeping failed: %s", name, exc)
+        return {
+            "account": name, "status": "unknown",
+            "reason": OUTCOME_UNKNOWN_REASON, "error": result.error,
+        }
 
     async def _finalize_claimed_stage(
         self,
@@ -1432,7 +1519,14 @@ class TradeManager:
             if not acct or not acct.enabled or not connector.connected:
                 continue
 
-            positions = await connector.get_positions(signal.symbol)
+            try:
+                positions = await connector.get_positions(signal.symbol)
+            except ConnectorReadError as exc:
+                # #13: an unreadable broker is not an empty broker — report and
+                # move on; nothing is modified or closed blind.
+                logger.warning("%s: positions read failed — account skipped: %s", acct_name, exc)
+                results.append({"account": acct_name, "status": "failed", "reason": READ_FAILED_REASON})
+                continue
             for pos in positions:
                 if not is_bot_position(pos):
                     continue  # never touch manual/foreign positions
@@ -1469,7 +1563,14 @@ class TradeManager:
             if not acct or not acct.enabled or not connector.connected:
                 continue
 
-            positions = await connector.get_positions(signal.symbol)
+            try:
+                positions = await connector.get_positions(signal.symbol)
+            except ConnectorReadError as exc:
+                # #13: an unreadable broker is not an empty broker — report and
+                # move on; nothing is modified or closed blind.
+                logger.warning("%s: positions read failed — account skipped: %s", acct_name, exc)
+                results.append({"account": acct_name, "status": "failed", "reason": READ_FAILED_REASON})
+                continue
             for pos in positions:
                 if not is_bot_position(pos):
                     continue  # never touch manual/foreign positions
@@ -1508,7 +1609,14 @@ class TradeManager:
             if not acct or not acct.enabled or not connector.connected:
                 continue
 
-            positions = await connector.get_positions(signal.symbol)
+            try:
+                positions = await connector.get_positions(signal.symbol)
+            except ConnectorReadError as exc:
+                # #13: an unreadable broker is not an empty broker — report and
+                # move on; nothing is modified or closed blind.
+                logger.warning("%s: positions read failed — account skipped: %s", acct_name, exc)
+                results.append({"account": acct_name, "status": "failed", "reason": READ_FAILED_REASON})
+                continue
             for pos in positions:
                 if not is_bot_position(pos):
                     continue  # never touch manual/foreign positions
@@ -1557,7 +1665,14 @@ class TradeManager:
             if not acct or not acct.enabled or not connector.connected:
                 continue
 
-            positions = await connector.get_positions(signal.symbol)
+            try:
+                positions = await connector.get_positions(signal.symbol)
+            except ConnectorReadError as exc:
+                # #13: an unreadable broker is not an empty broker — report and
+                # move on; nothing is modified or closed blind.
+                logger.warning("%s: positions read failed — account skipped: %s", acct_name, exc)
+                results.append({"account": acct_name, "status": "failed", "reason": READ_FAILED_REASON})
+                continue
             for pos in positions:
                 if not is_bot_position(pos):
                     continue  # never touch manual/foreign positions
@@ -1597,8 +1712,21 @@ class TradeManager:
             if not connector or not connector.connected:
                 continue
 
-            # REL-04: Check MT5 state before cancelling
-            mt5_orders = await connector.get_pending_orders(order["symbol"])
+            # REL-04: Check MT5 state before cancelling. #13: a failed read is
+            # NOT "no orders" — the order may still rest at the broker, and
+            # marking it cancelled here would leave it live and untracked.
+            try:
+                mt5_orders = await connector.get_pending_orders(order["symbol"])
+            except ConnectorReadError as exc:
+                logger.warning(
+                    "%s: pending-orders read failed; expired order #%d retried next cycle: %s",
+                    acct_name, order["ticket"], exc,
+                )
+                results.append({
+                    "account": acct_name, "status": "read_failed",
+                    "ticket": order["ticket"], "symbol": order["symbol"],
+                })
+                continue
             mt5_tickets = {o["ticket"] for o in mt5_orders}
 
             if order["ticket"] not in mt5_tickets:
@@ -1608,7 +1736,18 @@ class TradeManager:
                 # (POSITION_TICKET == opening order ticket). Match on that
                 # identity — the old str(ticket)-in-comment probe was always
                 # false because comments never carry the ticket.
-                positions = await connector.get_positions(order["symbol"])
+                try:
+                    positions = await connector.get_positions(order["symbol"])
+                except ConnectorReadError as exc:
+                    logger.warning(
+                        "%s: positions read failed; expired order #%d retried next cycle: %s",
+                        acct_name, order["ticket"], exc,
+                    )
+                    results.append({
+                        "account": acct_name, "status": "read_failed",
+                        "ticket": order["ticket"], "symbol": order["symbol"],
+                    })
+                    continue
                 filled = any(p.ticket == order["ticket"] for p in positions)
                 if filled:
                     await db.mark_pending_filled(order["ticket"], acct_name)

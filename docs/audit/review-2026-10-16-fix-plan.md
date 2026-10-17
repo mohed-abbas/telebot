@@ -10,7 +10,7 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 |---|---|---|
 | 1 — quick wins | #4, #2, #8, #14, #15 | **Done** — `7de138f` (+ follow-up commit for test cleanup and constants) |
 | 2 — stage tracking | #1, #5, #10, #6, #11 + kill-switch epoch | **Done** — full suite green (511 passed, 0 failed); 22 regression tests in `tests/test_review_batch2_stage_tracking.py` |
-| 3 — harder fixes | #3, #13, #12, #7, #9 | To do |
+| 3 — harder fixes | #3, #13, #12, #7, #9 | **Done** — full suite green (531 passed, 0 failed); 20 regression tests in `tests/test_review_batch3_bridge_reads_and_closes.py`. #9 needs a deploy of `mt5-rest-server/server.py` to the Windows bridge. |
 | 4 — minor items | ~10 small items | To do |
 | Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
 
@@ -142,7 +142,92 @@ These all touch how a stage row's `status` / targets stay in step with the broke
 
 ---
 
-## Batch 3 — harder fixes
+## Batch 3 — done
+
+Suite after the batch: `531 passed, 8 skipped, 1 xfailed, 0 failed` (was 511). Two existing tests were updated because they asserted the old behaviour: `test_rest_api_connector` (empty list on a failed read) and the one-tick helper in `test_staged_safety_hooks` (the maintenance passes now live in their own loop).
+
+### #3 — timed-out order
+
+```
+open_order ──► POST /order ──► ReadTimeout (request WAS sent)
+                                   │
+          before: OrderResult(success=False)  ──► stage 'failed', trade 'failed', ticket 0
+                                                  (a fill nobody tracks)
+          now:    OrderResult(outcome_unknown=True)
+                    │
+                    ├─ staged:   row stays 'firing', cancelled_reason='outcome_unknown'
+                    │            (no trade row yet) ──► stale-firing reconcile, EVERY tick:
+                    │               position with the row's comment ──► 'filled' + ticket
+                    │                                                  + trades row created
+                    │                                                    from the position
+                    │               no position, claim < 300 s  ──► wait (bridge may still work)
+                    │               no position, claim > 300 s  ──► 'failed'
+                    │                                        (…_after_unknown_outcome)
+                    └─ unstaged: trades row status='unknown', ticket 0 (operator-visible;
+                                 nothing can reconcile the legacy comment "telebot")
+```
+
+`RestApiConnector._last_outcome_unknown` is set by the non-GET ReadTimeout branch; every `OrderResult` built from a `None` response carries it. The adoption helper (`Executor._adopt_stage_position`) is also used by the startup/reconnect sync, so a fill whose bookkeeping died gets its trades row there too.
+
+### #13 — failed read looked like "nothing there"
+
+```
+get_positions / get_pending_orders / get_history_deals  on a failed request
+   before: []            now: raise ConnectorReadError
+
+caller                         on ConnectorReadError
+──────────────────────────────  ─────────────────────────────────────────────
+_execute_open_on_account        skipped/broker_read_failed → stage stays armed
+cleanup_expired_orders          'read_failed' result, order stays 'active', no cancel
+CLOSE / CLOSE_PARTIAL /         account result failed/broker_read_failed, nothing touched
+MODIFY_SL / MODIFY_TP
+history sync                    watermark NOT advanced (no deal window skipped)
+zone watch / sweep / orphan /   account skipped this tick (already try/except)
+stale reconcile / sync
+API levels, partial close       503 "broker read failed" (was 404 "position gone")
+```
+
+### #12 — one dead bridge delayed everyone
+
+```
+before, one task:   [orphan-TP] [SL/TP sweep] [stale reconcile] [band fires]   every 10 s
+                     ^^^ each read every account, no connected check, 3×15 s timeouts
+
+now, two tasks:     _zone_watch_loop        ──► _zone_watch_tick()  (fires only)
+                    _stage_maintenance_loop ──► orphan-TP, sweep, stale reconcile
+
+                    every broker read in both: asyncio.wait_for(…, 8 s)  (_read_bounded)
+                    disconnected accounts: skipped (heartbeat owns them)
+```
+
+### #7 — dashboard close stuck in 'closing'
+
+```
+POST /positions/{acct}/{ticket}/close
+   read floating profit (estimate) ──► close_position
+      backend has deal history (REST)  ──► mark_trade_closing(close_price, pnl_estimate)
+                                             │  guarded: only 'opened'/'closing' rows move;
+                                             │  a reconciled 'closed' row never reopens
+                                             └─ history sync finalizes with the real deal …
+                                                … or after 600 s with no deal: finalized
+                                                  from the estimate (warning logged)
+      dry-run / simulator (no history)  ──► update_trade_close(estimate) immediately
+```
+
+### #9 — concurrent modifies on the bridge
+
+`modify_position` and `close_position` in `mt5-rest-server/server.py` now take a per-ticket `asyncio.Lock` around read + `order_send`. The regression test loads the server against a fake `MetaTrader5` module and reproduces the lost update without the lock. **Deploy to the Windows bridge is required** for this one; nothing else in the batch touches the bridge.
+
+### Judgment calls to confirm in the end-to-end test
+
+- A trade with `status='unknown'` is a new value (legacy, non-staged path only). Dashboard/history filters that enumerate statuses will not list it until Batch 4 adds it.
+- The stale-closing fallback writes the pre-close floating profit as the final P&L. It only runs after 600 s without a broker deal, and it logs a warning each time, so a misbehaving history sync is visible rather than silent.
+- Reconcile of an outcome-unknown row without a position waits the normal 300 s before failing it, on the assumption the bridge's single MT5 thread may still be working the order.
+- `_READ_TIMEOUT_SECONDS = 8` applies to zone-watch and maintenance reads only; emergency close and signal handlers keep the connector's own 15 s × 3 budget.
+
+---
+
+## Batch 3 — harder fixes (original plan)
 
 ### #3 Timed-out order is treated as rejected — `trade_manager.py` (~1150), `mt5_connector.py` `_request` ReadTimeout branch
 - **Problem.** A non-GET ReadTimeout means the outcome is unknown (the bridge keeps running `order_send`), but it is reported like a broker rejection: trade logged `failed` with ticket 0, stage `failed`.

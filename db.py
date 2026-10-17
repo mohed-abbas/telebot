@@ -375,7 +375,9 @@ async def update_trade_close(ticket: int, account_name: str, pnl: float, close_p
     )
 
 
-async def mark_trade_closing(ticket: int, account_name: str, close_price: float) -> None:
+async def mark_trade_closing(
+    ticket: int, account_name: str, close_price: float, *, pnl_estimate: float | None = None,
+) -> bool:
     """Flag a trade as 'closing' (close submitted to the broker, P&L not yet known).
 
     The dashboard/API full-close path (api/actions.py) cannot know the authoritative
@@ -388,14 +390,52 @@ async def mark_trade_closing(ticket: int, account_name: str, close_price: float)
     _sync_history_for_account overwrites it with the real deal.profit and flips it
     to 'closed'. close_price is recorded provisionally and is later overwritten by
     the reconciler's authoritative deal price.
+
+    Review 2026-10-16 #7: guarded — only an 'opened' (or already 'closing') row
+    moves; a trade the reconciler already finalized is never dragged back to
+    'closing'. close_time marks when the close was submitted so the stale-closing
+    fallback (get_stale_closing_trades) can age it. pnl_estimate is the floating
+    profit seen just before the close; it is kept in `pnl` while the row is
+    'closing' (excluded from closed aggregates) and becomes the final value only
+    if the broker never shows the deal. Returns True when a row was updated.
     """
-    await _pool.execute(
-        """UPDATE trades SET status='closing', close_price=$1
-           WHERE ticket=$2 AND account_name=$3""",
+    tag = await _pool.execute(
+        """UPDATE trades
+           SET status='closing', close_price=$1, close_time=NOW(),
+               pnl=COALESCE($4::double precision, pnl)
+           WHERE ticket=$2 AND account_name=$3 AND status IN ('opened', 'closing')""",
         close_price,
         ticket,
         account_name,
+        pnl_estimate,
     )
+    return _rows_affected(tag) == 1
+
+
+async def get_stale_closing_trades(account_name: str, older_than_seconds: int) -> list[dict]:
+    """Review 2026-10-16 #7 — 'closing' rows whose close was submitted more than
+    the given age ago and that history-sync still has not finalized (the broker
+    never produced a matching deal, or the backend has no deal history)."""
+    rows = await _pool.fetch(
+        """SELECT id, ticket, account_name, symbol, pnl, close_price, close_time
+           FROM trades
+           WHERE account_name=$1 AND status='closing'
+             AND close_time IS NOT NULL
+             AND close_time < NOW() - make_interval(secs => $2)""",
+        account_name,
+        float(older_than_seconds),
+    )
+    return [dict(r) for r in rows]
+
+
+async def trade_exists_for_ticket(ticket: int, account_name: str) -> bool:
+    """True when a trades row already records this broker ticket for the account."""
+    row = await _pool.fetchrow(
+        "SELECT 1 FROM trades WHERE ticket=$1 AND account_name=$2 LIMIT 1",
+        ticket,
+        account_name,
+    )
+    return row is not None
 
 
 async def get_open_trade_tickets_for_account(account_name: str) -> set[int]:
@@ -1269,19 +1309,41 @@ async def get_active_stages() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Review 2026-10-16 #3: cancelled_reason marker on a 'firing' row whose
+# open_order timed out after the request was sent. The row stays 'firing' (the
+# order may have filled) and the stale-firing reconcile checks it on every
+# tick, without waiting for the normal stale age.
+STAGE_OUTCOME_UNKNOWN = "outcome_unknown"
+
+
+async def mark_stage_outcome_unknown(stage_id: int) -> bool:
+    """Tag a 'firing' row as outcome-unknown (#3). Status is NOT changed."""
+    tag = await _pool.execute(
+        "UPDATE staged_entries SET cancelled_reason=$2 WHERE id=$1 AND status='firing'",
+        stage_id,
+        STAGE_OUTCOME_UNKNOWN,
+    )
+    return _rows_affected(tag) == 1
+
+
 async def get_stale_firing_stages(older_than_seconds: int) -> list[dict]:
     """Review 2026-10-16 #10 — 'firing' rows whose claim is older than the given
     age. A healthy fire leaves 'firing' within seconds (the claim owner writes
     'filled' or 'failed'); anything older is a stranded claim to reconcile.
     Pre-migration rows without firing_at fall back to created_at.
+
+    #3: rows tagged outcome_unknown are returned regardless of age so a fill
+    behind a timed-out submit is adopted on the next tick.
     """
     rows = await _pool.fetch(
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
-        "mt5_comment, mt5_ticket, status, created_at, firing_at "
+        "mt5_comment, mt5_ticket, status, cancelled_reason, created_at, firing_at "
         "FROM staged_entries "
         "WHERE status='firing' "
-        "AND COALESCE(firing_at, created_at) < NOW() - make_interval(secs => $1)",
+        "AND (COALESCE(firing_at, created_at) < NOW() - make_interval(secs => $1) "
+        "     OR cancelled_reason = $2)",
         float(older_than_seconds),
+        STAGE_OUTCOME_UNKNOWN,
     )
     return [dict(r) for r in rows]
 

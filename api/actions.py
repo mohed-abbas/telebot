@@ -44,6 +44,7 @@ from api import idempotency
 from api.deps import require_executor, require_user, verify_csrf_token
 from api.formatting import volume_display
 from api.schemas import CloseLevelsIn, EmergencyResult, MutationResult, PartialCloseIn
+from mt5_connector import ConnectorReadError
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +92,32 @@ async def close(
     then, so analytics never see a spurious $0.
     """
     connector = _connector_or_404(account)
+    # Review 2026-10-16 #7: remember the floating profit right before the close.
+    # It is the best estimate we have if the broker never shows the deal, and
+    # the final value on backends without deal history (dry-run / simulator).
+    pnl_estimate: float | None = None
+    try:
+        positions = await connector.get_positions()
+    except ConnectorReadError as exc:
+        logger.warning("%s: positions read failed before close #%d: %s", account, ticket, exc)
+        positions = []
+    pos = next((p for p in positions if p.ticket == ticket), None)
+    if pos is not None:
+        pnl_estimate = float(getattr(pos, "profit", 0.0) or 0.0)
+
     result = await connector.close_position(ticket)
     if result.success:
-        # Park as 'closing' for history-sync reconciliation (do NOT write pnl=0.0).
-        await db.mark_trade_closing(ticket, account, result.price)
+        if getattr(connector, "supports_history_sync", True):
+            # Park as 'closing' for history-sync reconciliation (do NOT write a
+            # final pnl); the estimate rides along for the stale-closing fallback.
+            await db.mark_trade_closing(
+                ticket, account, result.price, pnl_estimate=pnl_estimate,
+            )
+        else:
+            # No deal stream will ever confirm this close — finalize now (#7).
+            await db.update_trade_close(
+                ticket, account, pnl_estimate if pnl_estimate is not None else 0.0, result.price,
+            )
     return MutationResult(
         ok=result.success,
         success=result.success,
@@ -122,7 +145,11 @@ async def levels(
     HTML). A no-op (nothing changed) returns ok with an empty `changed`.
     """
     connector = _connector_or_404(account)
-    positions = await connector.get_positions()
+    try:
+        positions = await connector.get_positions()
+    except ConnectorReadError as exc:
+        # #13: unreadable is not "gone" — never answer 404 for a broker outage.
+        raise HTTPException(status_code=503, detail=f"broker read failed: {exc}")
     pos = next((p for p in positions if p.ticket == ticket), None)
     if pos is None:
         raise HTTPException(status_code=404, detail="Position no longer open")
@@ -232,7 +259,11 @@ async def close_partial(
 
     # state == "new": validate against the live position. On rejection, release the
     # placeholder so a corrected same-request_id retry is not poisoned (CR-01/WR-01).
-    positions = await connector.get_positions()
+    try:
+        positions = await connector.get_positions()
+    except ConnectorReadError as exc:
+        await idempotency.release(body.request_id)
+        raise HTTPException(status_code=503, detail=f"broker read failed: {exc}")
     pos = next((p for p in positions if p.ticket == ticket), None)
     if pos is None:
         await idempotency.release(body.request_id)

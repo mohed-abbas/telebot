@@ -37,6 +37,21 @@ class OrderResult:
     price: float = 0.0
     volume: float = 0.0
     error: str = ""
+    # Review 2026-10-16 #3: True when the request reached the bridge but no
+    # answer came back (ReadTimeout). The order may or may not have been
+    # placed; the caller must NOT treat this like a broker rejection.
+    outcome_unknown: bool = False
+
+
+class ConnectorReadError(RuntimeError):
+    """A read (positions / pending orders / history) failed.
+
+    Review 2026-10-16 #13: the REST connector used to return [] for a failed
+    read, which every caller took as "the broker has nothing" and acted on
+    (cancelling limit orders that were still resting, cascading armed bands
+    because stage 1 looked gone). A failed read now raises so callers skip the
+    tick instead.
+    """
 
 
 @dataclass
@@ -97,6 +112,12 @@ class MT5Connector:
     @property
     def connected(self) -> bool:
         return self._connected
+
+    # False for backends whose broker-side deal history never shows up in
+    # get_history_deals (dry-run / simulator). The dashboard close route then
+    # finalizes the trade itself instead of parking it in 'closing' for a
+    # history sync that will never come (review 2026-10-16 #7).
+    supports_history_sync: bool = True
 
     def _clear_password(self) -> None:
         """Clear password from memory after successful connection."""
@@ -164,6 +185,9 @@ class MT5Connector:
 
 class DryRunConnector(MT5Connector):
     """Simulates MT5 with live prices, SL/TP monitoring, and P&L tracking."""
+
+    # No broker deal stream: get_history_deals is always empty (#7).
+    supports_history_sync = False
 
     _fake_positions: dict[int, Position]
 
@@ -586,6 +610,9 @@ class RestApiConnector(MT5Connector):
         # 10030 unsupported filling) reaches OrderResult.error instead of a
         # generic "REST API request failed".
         self._last_error: str = ""
+        # Set when the most recent _request timed out AFTER the request was
+        # sent (non-GET ReadTimeout): the outcome on the broker is unknown.
+        self._last_outcome_unknown: bool = False
 
     def _ensure_client(self) -> httpx.AsyncClient:
         """Create or return the HTTP client."""
@@ -601,6 +628,7 @@ class RestApiConnector(MT5Connector):
         """Make an HTTP request with retry logic. Returns parsed data or None on error."""
         client = self._ensure_client()
         self._last_error = ""
+        self._last_outcome_unknown = False
         last_exc = None
         for attempt in range(3):  # up to 3 attempts
             try:
@@ -650,6 +678,12 @@ class RestApiConnector(MT5Connector):
                         "%s: REST %s %s timed out awaiting response; NOT retrying "
                         "(possible double-fill) — failing fast",
                         self.account_name, method.upper(), path,
+                    )
+                    # #3: the request was sent; the broker may have acted on it.
+                    self._last_outcome_unknown = True
+                    self._last_error = (
+                        f"{method.upper()} {path} timed out awaiting response "
+                        "(outcome unknown)"
                     )
                     self._connected = False
                     return None
@@ -721,7 +755,10 @@ class RestApiConnector(MT5Connector):
             params["symbol"] = symbol
         data = await self._request("GET", "/api/v1/positions", params=params)
         if data is None:
-            return []
+            raise ConnectorReadError(
+                f"{self.account_name}: positions read failed: "
+                f"{self._last_error or 'REST API request failed'}"
+            )
         return [
             Position(
                 ticket=p["ticket"],
@@ -758,7 +795,11 @@ class RestApiConnector(MT5Connector):
             "magic": self.magic_number,
         })
         if data is None:
-            return OrderResult(success=False, error=self._last_error or "REST API request failed")
+            return OrderResult(
+                success=False,
+                error=self._last_error or "REST API request failed",
+                outcome_unknown=self._last_outcome_unknown,
+            )
         if data.get("success"):
             logger.info(
                 "%s: Order opened — ticket=%d price=%.2f vol=%.2f",
@@ -780,7 +821,11 @@ class RestApiConnector(MT5Connector):
             "tp": tp,
         })
         if data is None:
-            return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
+            return OrderResult(
+                success=False, ticket=ticket,
+                error=self._last_error or "REST API request failed",
+                outcome_unknown=self._last_outcome_unknown,
+            )
         if _bridge_success(data):
             return OrderResult(success=True, ticket=ticket)
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
@@ -791,7 +836,11 @@ class RestApiConnector(MT5Connector):
             body["volume"] = volume
         data = await self._request("DELETE", f"/api/v1/position/{ticket}", json=body if body else None)
         if data is None:
-            return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
+            return OrderResult(
+                success=False, ticket=ticket,
+                error=self._last_error or "REST API request failed",
+                outcome_unknown=self._last_outcome_unknown,
+            )
         if _bridge_success(data):
             return OrderResult(
                 success=True,
@@ -806,7 +855,11 @@ class RestApiConnector(MT5Connector):
     async def cancel_pending(self, ticket: int) -> OrderResult:
         data = await self._request("DELETE", f"/api/v1/pending-order/{ticket}")
         if data is None:
-            return OrderResult(success=False, ticket=ticket, error=self._last_error or "REST API request failed")
+            return OrderResult(
+                success=False, ticket=ticket,
+                error=self._last_error or "REST API request failed",
+                outcome_unknown=self._last_outcome_unknown,
+            )
         if _bridge_success(data):
             return OrderResult(success=True, ticket=ticket)
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
@@ -817,7 +870,10 @@ class RestApiConnector(MT5Connector):
             params["symbol"] = symbol
         data = await self._request("GET", "/api/v1/pending-orders", params=params)
         if data is None:
-            return []
+            raise ConnectorReadError(
+                f"{self.account_name}: pending-orders read failed: "
+                f"{self._last_error or 'REST API request failed'}"
+            )
         return data.get("orders", [])
 
     async def get_history_deals(
@@ -828,7 +884,12 @@ class RestApiConnector(MT5Connector):
             params["to_ts"] = until.timestamp()
         data = await self._request("GET", "/api/v1/history/deals", params=params)
         if data is None:
-            return []
+            # An empty list here would advance the history-sync watermark past
+            # deals we never saw (#13).
+            raise ConnectorReadError(
+                f"{self.account_name}: history read failed: "
+                f"{self._last_error or 'REST API request failed'}"
+            )
         return [
             Deal(
                 ticket=d["ticket"],

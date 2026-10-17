@@ -234,25 +234,35 @@ async def _insert_staged_row(
 
 
 async def _run_one_zone_watch_tick(executor_fixture) -> None:
-    """Run exactly one body iteration of _zone_watch_loop (skip the sleep)."""
+    """Run exactly one body iteration of the zone watch (skip the sleep).
+
+    Review 2026-10-16 #12 split the orphan-TP watchdog / SL-TP sweep /
+    stale-firing reconcile into _stage_maintenance_loop; one "tick" here runs
+    one iteration of both loops, as the production cadence does.
+    """
     import asyncio as _a
-    ticks = {"n": 0}
     real_sleep = _a.sleep
 
-    async def fake_sleep(delay):
-        ticks["n"] += 1
-        if ticks["n"] >= 2:
-            raise _a.CancelledError()
-        await real_sleep(0)
+    async def _one_iteration(loop_coro_factory):
+        ticks = {"n": 0}
 
-    _a.sleep = fake_sleep  # type: ignore[assignment]
-    try:
+        async def fake_sleep(delay):
+            ticks["n"] += 1
+            if ticks["n"] >= 2:
+                raise _a.CancelledError()
+            await real_sleep(0)
+
+        _a.sleep = fake_sleep  # type: ignore[assignment]
         try:
-            await executor_fixture._zone_watch_loop()
-        except _a.CancelledError:
-            pass
-    finally:
-        _a.sleep = real_sleep  # type: ignore[assignment]
+            try:
+                await loop_coro_factory()
+            except _a.CancelledError:
+                pass
+        finally:
+            _a.sleep = real_sleep  # type: ignore[assignment]
+
+    await _one_iteration(executor_fixture._stage_maintenance_loop)
+    await _one_iteration(executor_fixture._zone_watch_loop)
 
 
 async def test_zone_watch_fires_stage_when_price_enters_band(

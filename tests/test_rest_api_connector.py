@@ -253,13 +253,16 @@ class TestGetPositions:
 
         assert captured["params"]["symbol"] == "EURUSD"
 
-    async def test_returns_empty_list_on_error(self):
+    async def test_raises_read_error_on_failure(self):
+        """Review 2026-10-16 #13: a failed read must not look like "no positions"."""
+        from mt5_connector import ConnectorReadError
+
         def handler(request: httpx.Request) -> httpx.Response:
             return _error_response("INTERNAL", "boom", status=500)
 
         conn = _inject_transport(_make_connector(), handler)
-        positions = await conn.get_positions()
-        assert positions == []
+        with pytest.raises(ConnectorReadError):
+            await conn.get_positions()
 
 
 # ═══════════════════════════════════════════════════════════════════════

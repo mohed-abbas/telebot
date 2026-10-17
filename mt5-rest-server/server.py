@@ -125,6 +125,24 @@ async def _run(fn, *args, **kwargs):
     return result
 
 
+# Per-ticket serialisation for read-modify-write endpoints (review 2026-10-16
+# #9). modify_position reads the position's current SL/TP and sends both back in
+# one TRADE_ACTION_SLTP request; each MT5 call is its own executor job, so two
+# concurrent modifies on one ticket both read the OLD levels and the later
+# order_send restores a stale value (SL-to-breakeven undone by a TP edit). The
+# lock makes read + send one critical section per ticket. Locks are never
+# pruned: a dict entry per ticket ever touched is trivially small, and pruning
+# races a waiter that still holds the old Lock object.
+_ticket_locks: dict[int, asyncio.Lock] = {}
+
+
+def _ticket_lock(ticket: int) -> asyncio.Lock:
+    lock = _ticket_locks.get(ticket)
+    if lock is None:
+        lock = _ticket_locks[ticket] = asyncio.Lock()
+    return lock
+
+
 # ── Filling-mode negotiation ──────────────────────────────────────
 
 
@@ -420,6 +438,11 @@ async def create_order(req: OrderRequest):
 
 @app.put("/api/v1/position/{ticket}", dependencies=[Depends(verify_api_key)])
 async def modify_position(ticket: int, req: ModifyRequest):
+    async with _ticket_lock(ticket):
+        return await _modify_position_locked(ticket, req)
+
+
+async def _modify_position_locked(ticket: int, req: ModifyRequest):
     positions = await _run(mt5.positions_get, ticket=ticket)
     if not positions:
         _err("POSITION_NOT_FOUND", f"Position {ticket} not found", 404)
@@ -448,7 +471,11 @@ async def modify_position(ticket: int, req: ModifyRequest):
 async def close_position(ticket: int, req: CloseRequest = None):
     if req is None:
         req = CloseRequest()
+    async with _ticket_lock(ticket):
+        return await _close_position_locked(ticket, req)
 
+
+async def _close_position_locked(ticket: int, req: CloseRequest):
     positions = await _run(mt5.positions_get, ticket=ticket)
     if not positions:
         _err("POSITION_NOT_FOUND", f"Position {ticket} not found", 404)

@@ -25,7 +25,7 @@ from models import AccountSettings, Direction, GlobalConfig, SignalAction, Signa
 from notifier import Notifier
 from risk_calculator import GOLD_PIP_SIZE
 from trade_manager import (
-    KILL_SWITCH_REASON, Band, TradeManager, stage_is_in_zone_at_arrival,
+    KILL_SWITCH_REASON, READ_FAILED_REASON, Band, TradeManager, stage_is_in_zone_at_arrival,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,7 @@ class Executor:
         self._cleanup_task: asyncio.Task | None = None
         self._zone_watch_task: asyncio.Task | None = None  # Phase 6 D-11/D-14
         self._history_sync_task: asyncio.Task | None = None
+        self._stage_maintenance_task: asyncio.Task | None = None  # #12
         # Per-account high-water mark (UTC) of the last successful history-sync
         # poll. Initialised lazily to (now - lookback_hours) on first iteration.
         self._last_history_sync: dict[str, datetime] = {}
@@ -109,8 +110,10 @@ class Executor:
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         self._zone_watch_task = asyncio.create_task(self._zone_watch_loop())
         self._history_sync_task = asyncio.create_task(self._history_sync_loop())
+        self._stage_maintenance_task = asyncio.create_task(self._stage_maintenance_loop())
         logger.info(
-            "Executor started — cleanup + heartbeat + zone-watch + history-sync loops running",
+            "Executor started — cleanup + heartbeat + zone-watch + stage-maintenance "
+            "+ history-sync loops running",
         )
 
     async def stop(self) -> None:
@@ -125,7 +128,7 @@ class Executor:
         # Stop background tasks
         for task in (
             self._cleanup_task, self._heartbeat_task, self._zone_watch_task,
-            self._history_sync_task,
+            self._history_sync_task, self._stage_maintenance_task,
         ):
             if task:
                 task.cancel()
@@ -303,6 +306,11 @@ class Executor:
     # claim older than this with no position behind it is stranded (crash, lost
     # coroutine) and is finalized by _reconcile_stale_firing_stages.
     _FIRING_STALE_SECONDS = 300
+    # #12: hard bound on one broker read inside a maintenance / zone-watch pass.
+    _READ_TIMEOUT_SECONDS = 8.0
+    # #7: a trade left in 'closing' this long without a broker deal is finalized
+    # from the pre-close estimate.
+    _CLOSING_STALE_SECONDS = 600
 
     async def _sync_positions(
         self, acct_name: str, connector, *, startup: bool = False,
@@ -369,7 +377,7 @@ class Executor:
             target_comment = stage["mt5_comment"]
             match = by_comment.get(target_comment)
             if match is not None:
-                if await db.update_stage_status(stage["id"], "filled", mt5_ticket=match.ticket):
+                if await self._adopt_stage_position(acct_name, stage, match):
                     reconciled += 1
                     logger.info(
                         "%s: %s reconciled signal_id=%d stage=%d ticket=%d",
@@ -455,6 +463,56 @@ class Executor:
                 acct_name, mode, reconciled, abandoned, cancelled, failed,
             )
 
+    async def _adopt_stage_position(self, acct_name: str, stage: dict, pos) -> bool:
+        """A live position carries this stage's unique comment: mark the row
+        'filled' with its ticket and make sure a trades row exists for it.
+
+        Review 2026-10-16 #3: after a timed-out submit nothing else records the
+        trade, so the adopting path creates the 'opened' trades row from the
+        position itself (entry/SL/TP/volume as the broker reports them). Rows
+        that already have a trade (normal fills reconciled after a DB hiccup)
+        are left alone. Returns True when the stage row moved to 'filled'.
+        """
+        moved = await db.update_stage_status(stage["id"], "filled", mt5_ticket=pos.ticket)
+        try:
+            if not await db.trade_exists_for_ticket(pos.ticket, acct_name):
+                await db.log_trade(
+                    signal_id=stage["signal_id"],
+                    account_name=acct_name,
+                    symbol=stage.get("symbol") or getattr(pos, "symbol", ""),
+                    direction=getattr(pos, "direction", None) or stage.get("direction") or "",
+                    entry_price=float(getattr(pos, "open_price", 0.0) or 0.0),
+                    sl=float(getattr(pos, "sl", 0.0) or 0.0),
+                    tp=float(getattr(pos, "tp", 0.0) or 0.0),
+                    lot_size=float(getattr(pos, "volume", 0.0) or 0.0),
+                    ticket=pos.ticket,
+                    status="opened",
+                    raw_signal=(
+                        f"<adopted from stage {stage['stage_number']} "
+                        f"signal_id={stage['signal_id']}>"
+                    ),
+                )
+                logger.info(
+                    "%s: adopted position ticket=%d for signal_id=%d stage=%d "
+                    "(trade row created)",
+                    acct_name, pos.ticket, stage["signal_id"], stage["stage_number"],
+                )
+        except Exception as exc:
+            logger.error(
+                "%s: adopt trade row failed ticket=%d: %s", acct_name, pos.ticket, exc,
+            )
+        return moved
+
+    async def _read_bounded(self, awaitable):
+        """Await a broker read with a hard time bound (#12).
+
+        The REST connector's own budget is 3 x 15 s for a GET; a bridge that
+        accepts connections but never answers would hold a whole pass that long.
+        asyncio.TimeoutError propagates to the caller, which skips the account
+        for this tick.
+        """
+        return await asyncio.wait_for(awaitable, timeout=self._READ_TIMEOUT_SECONDS)
+
     async def _stage1_state(
         self, signal_id: int, acct_name: str, positions_by_comment: dict,
     ) -> bool | None:
@@ -503,7 +561,7 @@ class Executor:
             if connector is None or not getattr(connector, "connected", True):
                 continue
             try:
-                positions = await connector.get_positions()
+                positions = await self._read_bounded(connector.get_positions())
             except Exception as exc:
                 logger.warning(
                     "%s: stale-firing reconcile get_positions failed: %s", acct_name, exc,
@@ -514,28 +572,38 @@ class Executor:
                 for p in positions
                 if getattr(p, "comment", "")
             }
+            now = datetime.now(timezone.utc)
             for stage in stages:
                 match = by_comment.get(stage["mt5_comment"])
+                unknown = stage.get("cancelled_reason") == db.STAGE_OUTCOME_UNKNOWN
                 try:
                     if match is not None:
-                        if await db.update_stage_status(
-                            stage["id"], "filled", mt5_ticket=match.ticket,
-                        ):
+                        if await self._adopt_stage_position(acct_name, stage, match):
                             logger.info(
-                                "%s: stale 'firing' claim signal_id=%d stage=%d has a live "
+                                "%s: %s 'firing' claim signal_id=%d stage=%d has a live "
                                 "position ticket=%d -> filled",
-                                acct_name, stage["signal_id"], stage["stage_number"],
-                                match.ticket,
+                                acct_name, "timed-out" if unknown else "stale",
+                                stage["signal_id"], stage["stage_number"], match.ticket,
                             )
-                    elif await db.update_stage_status(
+                        continue
+                    claimed_at = _as_utc(stage.get("firing_at") or stage["created_at"])
+                    if (now - claimed_at).total_seconds() <= self._FIRING_STALE_SECONDS:
+                        # #3: an outcome_unknown row inside the grace period — the
+                        # bridge may still be working the order. Look again next tick.
+                        continue
+                    reason = (
+                        "firing_stale_no_position_after_unknown_outcome" if unknown
+                        else "firing_stale_no_position"
+                    )
+                    if await db.update_stage_status(
                         stage["id"], "failed",
-                        cancelled_reason="firing_stale_no_position",
+                        cancelled_reason=reason,
                         expected_status=("firing",),
                     ):
                         logger.warning(
                             "%s: stale 'firing' claim signal_id=%d stage=%d has no MT5 "
-                            "position -> failed",
-                            acct_name, stage["signal_id"], stage["stage_number"],
+                            "position -> failed (%s)",
+                            acct_name, stage["signal_id"], stage["stage_number"], reason,
                         )
                 except Exception as exc:
                     logger.error(
@@ -701,6 +769,14 @@ class Executor:
                 "%s: history-sync DB lookup failed: %s", acct_name, exc,
             )
             return
+        # #7: dashboard closes the broker never confirmed (no deal seen, or a
+        # backend without deal history) are finalized from the pre-close
+        # estimate after _CLOSING_STALE_SECONDS instead of staying 'closing'.
+        try:
+            await self._finalize_stale_closing_trades(acct_name)
+        except Exception as exc:
+            logger.warning("%s: stale-closing fallback failed: %s", acct_name, exc)
+
         if not open_tickets:
             # Nothing to reconcile; still advance the watermark so the next
             # iteration doesn't re-scan a growing window.
@@ -761,6 +837,30 @@ class Executor:
                 acct_name, reconciled,
             )
 
+    async def _finalize_stale_closing_trades(self, acct_name: str) -> int:
+        """Close out 'closing' trades older than _CLOSING_STALE_SECONDS (#7).
+
+        The close was accepted by the broker (mark_trade_closing only runs on a
+        successful close_position), so the position is gone; what is missing is
+        the authoritative deal. Use the floating profit recorded at submit time.
+        """
+        rows = await db.get_stale_closing_trades(acct_name, self._CLOSING_STALE_SECONDS)
+        finalized = 0
+        for row in rows:
+            pnl = float(row.get("pnl") or 0.0)
+            close_price = float(row.get("close_price") or 0.0)
+            await db.update_trade_close(
+                ticket=row["ticket"], account_name=acct_name,
+                pnl=pnl, close_price=close_price,
+            )
+            finalized += 1
+            logger.warning(
+                "%s: trade ticket=%d stuck in 'closing' > %ds with no broker deal — "
+                "finalized with the pre-close estimate pnl=%+.2f close=%.2f",
+                acct_name, row["ticket"], self._CLOSING_STALE_SECONDS, pnl, close_price,
+            )
+        return finalized
+
     # ── Phase 6 Zone Watch (D-11/D-14) ───────────────────────────────
 
     async def _zone_watch_loop(self) -> None:
@@ -778,277 +878,301 @@ class Executor:
                 await asyncio.sleep(10)  # D-14 cadence
                 if self._trading_paused:
                     continue
-
-                # EXEC2-05 (D2-09..D2-12) — orphan protective-TP watchdog.
-                # Runs FIRST and independently of awaiting_zone rows: an orphan
-                # stage-1 has no awaiting_zone siblings by definition, so it would
-                # never appear in get_active_stages() / by_pair below. At
-                # correlation-window expiry it gets an R=1:1 protective TP off its
-                # default-SL distance. Failure-isolated so it never aborts the loop.
-                try:
-                    await self._run_orphan_protective_tp_watchdog()
-                except Exception as exc:
-                    logger.warning("Zone watch: orphan-TP watchdog error: %s", exc)
-
-                # §1.3(b) — post-trade SL/TP verification sweep. Confirms every
-                # filled stage's live broker position actually carries the
-                # intended SL/TP; re-issues a bounded modify when it deviated
-                # (e.g. a stage-1 align that silently failed). Failure-isolated
-                # so it never aborts the loop.
-                try:
-                    await self._run_stage_sltp_verification_sweep()
-                except Exception as exc:
-                    logger.warning("Zone watch: SL/TP verification sweep error: %s", exc)
-
-                # Review 2026-10-16 #10 — rows stranded in 'firing' are finalized
-                # from the live positions (see _reconcile_stale_firing_stages).
-                try:
-                    await self._reconcile_stale_firing_stages()
-                except Exception as exc:
-                    logger.warning("Zone watch: stale-firing reconcile error: %s", exc)
-
-                try:
-                    rows = await db.get_active_stages()
-                except Exception as exc:
-                    logger.error("Zone watch: get_active_stages failed: %s", exc)
-                    continue
-                if not rows:
-                    continue
-
-                # Group by (account, symbol) so get_price / get_positions run once.
-                by_pair: dict[tuple[str, str], list[dict]] = {}
-                for r in rows:
-                    by_pair.setdefault((r["account_name"], r["symbol"]), []).append(r)
-
-                # D-16 per-tick memoization: (account, signal_id) -> stage-1-live-or-not-cascadable.
-                # True  = fire-ok (stage 1 live OR stage 1 not-yet-filled so no cascade)
-                # False = already cascaded this tick; subsequent stages for this signal_id skip
-                stage1_live_cache: dict[tuple[str, int], bool] = {}
-
-                for (acct_name, symbol), stages in by_pair.items():
-                    if acct_name in self._reconnecting:
-                        continue
-                    connector = self.tm.connectors.get(acct_name)
-                    if connector is None:
-                        continue
-
-                    try:
-                        price = await connector.get_price(symbol)
-                    except Exception as exc:
-                        logger.warning("%s: zone-watch get_price failed: %s", acct_name, exc)
-                        continue
-                    if price is None:
-                        continue
-                    bid, ask = price
-
-                    try:
-                        positions = await connector.get_positions()
-                    except Exception as exc:
-                        logger.warning(
-                            "%s: zone-watch get_positions failed: %s", acct_name, exc,
-                        )
-                        continue
-
-                    positions_by_comment = {
-                        getattr(p, "comment", ""): p
-                        for p in positions
-                        if getattr(p, "comment", "")
-                    }
-
-                    # Price-based cascade: if live price has reached the
-                    # signal's target_tp or sl, cancel ALL unfilled stages
-                    # for that signal_id and skip them in the band-fire loop.
-                    # Faster than D-16 (broker-independent) and complementary.
-                    cascaded_signal_ids: set[int] = set()
-                    seen_signal_ids: set[int] = set()
-                    for stage in stages:
-                        sid_iter = stage["signal_id"]
-                        if sid_iter in seen_signal_ids:
-                            continue
-                        seen_signal_ids.add(sid_iter)
-
-                        # EXEC2-01: prefer the PERSISTED per-stage SL/TP
-                        # (Plan 01/03/05). For a correlated sequence the
-                        # signals row is the orphan (sl=0/tp=0), so the old
-                        # get_signal_targets path was a silent no-op — deep
-                        # stages kept firing after price already hit the real
-                        # TP. The stage row carries the follow-up's real SL/TP.
-                        # get_signal_targets remains the NULL fallback for
-                        # pre-migration rows / direct-zone signals whose own
-                        # signals row already holds real sl/tp.
-                        stage_sl = stage.get("signal_sl")
-                        stage_tp = stage.get("signal_tp")
-                        stage_dir = (stage.get("direction") or "").lower()
-
-                        targets = None
-                        if stage_sl is None or stage_tp is None or not stage_dir:
-                            try:
-                                targets = await db.get_signal_targets(sid_iter)
-                            except Exception as exc:
-                                logger.warning(
-                                    "%s: target fetch failed signal_id=%d: %s",
-                                    acct_name, sid_iter, exc,
-                                )
-                                targets = None
-
-                        sig_dir = stage_dir or (
-                            (targets.get("direction") or "").lower()
-                            if targets else ""
-                        )
-                        sig_sl = (
-                            float(stage_sl) if stage_sl is not None
-                            else float((targets or {}).get("sl") or 0.0)
-                        )
-                        sig_tp = (
-                            float(stage_tp) if stage_tp is not None
-                            else float((targets or {}).get("tp") or 0.0)
-                        )
-                        if not sig_dir or (sig_sl <= 0 and sig_tp <= 0):
-                            # No usable protective levels from either source.
-                            continue
-                        hit_reason: str | None = None
-                        if sig_dir == "buy":
-                            if sig_tp > 0 and bid >= sig_tp:
-                                hit_reason = "tp_reached"
-                            elif sig_sl > 0 and bid <= sig_sl:
-                                hit_reason = "sl_reached"
-                        elif sig_dir == "sell":
-                            if sig_tp > 0 and ask <= sig_tp:
-                                hit_reason = "tp_reached"
-                            elif sig_sl > 0 and ask >= sig_sl:
-                                hit_reason = "sl_reached"
-                        if hit_reason is None:
-                            continue
-                        try:
-                            cancelled = await db.cancel_unfilled_stages_target_reached(
-                                sid_iter, reason=hit_reason, account_name=acct_name,
-                            )
-                        except Exception as exc:
-                            logger.error(
-                                "%s: target-cascade DB write failed signal_id=%d: %s",
-                                acct_name, sid_iter, exc,
-                            )
-                            continue
-                        cascaded_signal_ids.add(sid_iter)
-                        logger.info(
-                            "%s: target cascade — signal_id=%d %s "
-                            "(bid=%.2f ask=%.2f sl=%.2f tp=%.2f); "
-                            "cancelled %d unfilled stage(s)",
-                            acct_name, sid_iter, hit_reason,
-                            bid, ask, sig_sl, sig_tp, cancelled,
-                        )
-
-                    for stage in stages:
-                        if stage["signal_id"] in cascaded_signal_ids:
-                            continue
-                        # D-21 mid-tick re-check (before any work on this stage)
-                        if self._trading_paused:
-                            break
-
-                        signal_id = stage["signal_id"]
-                        band_low = stage["band_low"]
-                        band_high = stage["band_high"]
-                        band_width = max(band_high - band_low, 0.0)
-                        tolerance = 0.5 * band_width
-                        direction = stage["direction"]
-
-                        band = Band(
-                            stage_number=stage["stage_number"],
-                            low=band_low,
-                            high=band_high,
-                        )
-                        if not stage_is_in_zone_at_arrival(band, bid, ask, direction):
-                            continue
-
-                        # D-16 — stage-1-exit cascade. Verify stage 1 is still live on MT5.
-                        cache_key = (acct_name, signal_id)
-                        if cache_key not in stage1_live_cache:
-                            stage1_comment = f"telebot-{signal_id}-s1"
-                            if stage1_comment in positions_by_comment:
-                                # Stage 1 is live on MT5 — fire is OK.
-                                stage1_live_cache[cache_key] = True
-                            else:
-                                # Stage 1 not on MT5. Was it ever filled?
-                                try:
-                                    stage1_row = await db.get_stage_by_comment(stage1_comment)
-                                except Exception:
-                                    stage1_row = None
-                                if stage1_row and stage1_row.get("status") == "filled":
-                                    # Stage 1 filled-then-exited. Cascade.
-                                    try:
-                                        cancelled = await db.cancel_unfilled_stages_for_signal(
-                                            signal_id, reason="stage1_closed",
-                                            account_name=acct_name,
-                                        )
-                                    except Exception as exc:
-                                        logger.error(
-                                            "%s: D-16 cascade DB write failed: %s",
-                                            acct_name, exc,
-                                        )
-                                        cancelled = 0
-                                    logger.info(
-                                        "%s: D-16 cascade — stage 1 of signal_id=%d no longer "
-                                        "open on MT5; cancelled %d unfilled stage(s)",
-                                        acct_name, signal_id, cancelled,
-                                    )
-                                    stage1_live_cache[cache_key] = False
-                                    continue
-                                else:
-                                    # Stage 1 still awaiting (or no row) — do NOT cascade.
-                                    # Fire is OK as far as D-16 is concerned.
-                                    stage1_live_cache[cache_key] = True
-
-                        if not stage1_live_cache[cache_key]:
-                            continue  # already cascaded this tick
-
-                        # D-14 pre-flight re-check
-                        try:
-                            price2 = await connector.get_price(symbol)
-                        except Exception:
-                            continue
-                        if price2 is None:
-                            continue
-                        bid2, ask2 = price2
-                        price_center = (band_low + band_high) / 2.0
-                        mid_price = (bid2 + ask2) / 2.0
-                        if abs(mid_price - price_center) > band_width + tolerance:
-                            logger.info(
-                                "%s: zone-watch skip stage=%d signal_id=%d — price drifted "
-                                "outside band±tolerance",
-                                acct_name, stage["stage_number"], signal_id,
-                            )
-                            continue
-
-                        # D-21 re-check BEFORE submit
-                        if self._trading_paused:
-                            break
-
-                        # D-25 idempotency probe.
-                        target_comment = stage["mt5_comment"]
-                        match = positions_by_comment.get(target_comment)
-                        if match is not None:
-                            await db.update_stage_status(
-                                stage["id"], "filled", mt5_ticket=match.ticket,
-                            )
-                            logger.info(
-                                "%s: zone-watch idempotency match — stage=%d already on MT5 "
-                                "ticket=%d",
-                                acct_name, stage["stage_number"], match.ticket,
-                            )
-                            continue
-
-                        # Build synthetic signal + call stage-aware _execute_open_on_account.
-                        await self._fire_zone_stage(
-                            acct_name=acct_name, connector=connector,
-                            symbol=symbol, stage=stage,
-                            bid=bid2, ask=ask2,
-                            signal_id=signal_id,
-                        )
-
+                await self._zone_watch_tick()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error("Zone watch loop error: %s", exc)
+
+    async def _zone_watch_tick(self) -> None:
+        """One band-fire pass over every awaiting_zone stage.
+
+        Review 2026-10-16 #12: this used to run AFTER the orphan-TP watchdog,
+        the SL/TP sweep and the stale-firing reconcile inside the same tick, each
+        of which read positions from every account without a connected check or
+        a time bound — one dead bridge (3 x 15 s read timeouts) delayed every
+        account's fires by ~47 s per pass. The maintenance passes now run in
+        their own task (_stage_maintenance_loop) and every broker read here is
+        bounded by _read_bounded, so a hanging bridge costs its own account one
+        tick and nobody else anything.
+        """
+        try:
+            rows = await db.get_active_stages()
+        except Exception as exc:
+            logger.error("Zone watch: get_active_stages failed: %s", exc)
+            return
+        if not rows:
+            return
+
+        # Group by (account, symbol) so get_price / get_positions run once.
+        by_pair: dict[tuple[str, str], list[dict]] = {}
+        for r in rows:
+            by_pair.setdefault((r["account_name"], r["symbol"]), []).append(r)
+
+        # D-16 per-tick memoization: (account, signal_id) -> stage-1-live-or-not-cascadable.
+        # True  = fire-ok (stage 1 live OR stage 1 not-yet-filled so no cascade)
+        # False = already cascaded this tick; subsequent stages for this signal_id skip
+        stage1_live_cache: dict[tuple[str, int], bool] = {}
+
+        for (acct_name, symbol), stages in by_pair.items():
+            if acct_name in self._reconnecting:
+                continue
+            connector = self.tm.connectors.get(acct_name)
+            if connector is None or not getattr(connector, "connected", True):
+                continue  # #12: a disconnected bridge is the heartbeat's job
+
+            try:
+                price = await self._read_bounded(connector.get_price(symbol))
+            except Exception as exc:
+                logger.warning("%s: zone-watch get_price failed: %s", acct_name, exc)
+                continue
+            if price is None:
+                continue
+            bid, ask = price
+
+            try:
+                positions = await self._read_bounded(connector.get_positions())
+            except Exception as exc:
+                # #13: an unreadable broker is not an empty one — no D-16
+                # cascade and no fire for this account this tick.
+                logger.warning(
+                    "%s: zone-watch get_positions failed: %s", acct_name, exc,
+                )
+                continue
+
+            positions_by_comment = {
+                getattr(p, "comment", ""): p
+                for p in positions
+                if getattr(p, "comment", "")
+            }
+
+            # Price-based cascade: if live price has reached the
+            # signal's target_tp or sl, cancel ALL unfilled stages
+            # for that signal_id and skip them in the band-fire loop.
+            # Faster than D-16 (broker-independent) and complementary.
+            cascaded_signal_ids: set[int] = set()
+            seen_signal_ids: set[int] = set()
+            for stage in stages:
+                sid_iter = stage["signal_id"]
+                if sid_iter in seen_signal_ids:
+                    continue
+                seen_signal_ids.add(sid_iter)
+
+                # EXEC2-01: prefer the PERSISTED per-stage SL/TP
+                # (Plan 01/03/05). For a correlated sequence the
+                # signals row is the orphan (sl=0/tp=0), so the old
+                # get_signal_targets path was a silent no-op — deep
+                # stages kept firing after price already hit the real
+                # TP. The stage row carries the follow-up's real SL/TP.
+                # get_signal_targets remains the NULL fallback for
+                # pre-migration rows / direct-zone signals whose own
+                # signals row already holds real sl/tp.
+                stage_sl = stage.get("signal_sl")
+                stage_tp = stage.get("signal_tp")
+                stage_dir = (stage.get("direction") or "").lower()
+
+                targets = None
+                if stage_sl is None or stage_tp is None or not stage_dir:
+                    try:
+                        targets = await db.get_signal_targets(sid_iter)
+                    except Exception as exc:
+                        logger.warning(
+                            "%s: target fetch failed signal_id=%d: %s",
+                            acct_name, sid_iter, exc,
+                        )
+                        targets = None
+
+                sig_dir = stage_dir or (
+                    (targets.get("direction") or "").lower()
+                    if targets else ""
+                )
+                sig_sl = (
+                    float(stage_sl) if stage_sl is not None
+                    else float((targets or {}).get("sl") or 0.0)
+                )
+                sig_tp = (
+                    float(stage_tp) if stage_tp is not None
+                    else float((targets or {}).get("tp") or 0.0)
+                )
+                if not sig_dir or (sig_sl <= 0 and sig_tp <= 0):
+                    # No usable protective levels from either source.
+                    continue
+                hit_reason: str | None = None
+                if sig_dir == "buy":
+                    if sig_tp > 0 and bid >= sig_tp:
+                        hit_reason = "tp_reached"
+                    elif sig_sl > 0 and bid <= sig_sl:
+                        hit_reason = "sl_reached"
+                elif sig_dir == "sell":
+                    if sig_tp > 0 and ask <= sig_tp:
+                        hit_reason = "tp_reached"
+                    elif sig_sl > 0 and ask >= sig_sl:
+                        hit_reason = "sl_reached"
+                if hit_reason is None:
+                    continue
+                try:
+                    cancelled = await db.cancel_unfilled_stages_target_reached(
+                        sid_iter, reason=hit_reason, account_name=acct_name,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "%s: target-cascade DB write failed signal_id=%d: %s",
+                        acct_name, sid_iter, exc,
+                    )
+                    continue
+                cascaded_signal_ids.add(sid_iter)
+                logger.info(
+                    "%s: target cascade — signal_id=%d %s "
+                    "(bid=%.2f ask=%.2f sl=%.2f tp=%.2f); "
+                    "cancelled %d unfilled stage(s)",
+                    acct_name, sid_iter, hit_reason,
+                    bid, ask, sig_sl, sig_tp, cancelled,
+                )
+
+            for stage in stages:
+                if stage["signal_id"] in cascaded_signal_ids:
+                    continue
+                # D-21 mid-tick re-check (before any work on this stage)
+                if self._trading_paused:
+                    break
+
+                signal_id = stage["signal_id"]
+                band_low = stage["band_low"]
+                band_high = stage["band_high"]
+                band_width = max(band_high - band_low, 0.0)
+                tolerance = 0.5 * band_width
+                direction = stage["direction"]
+
+                band = Band(
+                    stage_number=stage["stage_number"],
+                    low=band_low,
+                    high=band_high,
+                )
+                if not stage_is_in_zone_at_arrival(band, bid, ask, direction):
+                    continue
+
+                # D-16 — stage-1-exit cascade. Verify stage 1 is still live on MT5.
+                cache_key = (acct_name, signal_id)
+                if cache_key not in stage1_live_cache:
+                    stage1_comment = f"telebot-{signal_id}-s1"
+                    if stage1_comment in positions_by_comment:
+                        # Stage 1 is live on MT5 — fire is OK.
+                        stage1_live_cache[cache_key] = True
+                    else:
+                        # Stage 1 not on MT5. Was it ever filled?
+                        try:
+                            stage1_row = await db.get_stage_by_comment(stage1_comment)
+                        except Exception:
+                            stage1_row = None
+                        if stage1_row and stage1_row.get("status") == "filled":
+                            # Stage 1 filled-then-exited. Cascade.
+                            try:
+                                cancelled = await db.cancel_unfilled_stages_for_signal(
+                                    signal_id, reason="stage1_closed",
+                                    account_name=acct_name,
+                                )
+                            except Exception as exc:
+                                logger.error(
+                                    "%s: D-16 cascade DB write failed: %s",
+                                    acct_name, exc,
+                                )
+                                cancelled = 0
+                            logger.info(
+                                "%s: D-16 cascade — stage 1 of signal_id=%d no longer "
+                                "open on MT5; cancelled %d unfilled stage(s)",
+                                acct_name, signal_id, cancelled,
+                            )
+                            stage1_live_cache[cache_key] = False
+                            continue
+                        else:
+                            # Stage 1 still awaiting (or no row) — do NOT cascade.
+                            # Fire is OK as far as D-16 is concerned.
+                            stage1_live_cache[cache_key] = True
+
+                if not stage1_live_cache[cache_key]:
+                    continue  # already cascaded this tick
+
+                # D-14 pre-flight re-check
+                try:
+                    price2 = await connector.get_price(symbol)
+                except Exception:
+                    continue
+                if price2 is None:
+                    continue
+                bid2, ask2 = price2
+                price_center = (band_low + band_high) / 2.0
+                mid_price = (bid2 + ask2) / 2.0
+                if abs(mid_price - price_center) > band_width + tolerance:
+                    logger.info(
+                        "%s: zone-watch skip stage=%d signal_id=%d — price drifted "
+                        "outside band±tolerance",
+                        acct_name, stage["stage_number"], signal_id,
+                    )
+                    continue
+
+                # D-21 re-check BEFORE submit
+                if self._trading_paused:
+                    break
+
+                # D-25 idempotency probe.
+                target_comment = stage["mt5_comment"]
+                match = positions_by_comment.get(target_comment)
+                if match is not None:
+                    await db.update_stage_status(
+                        stage["id"], "filled", mt5_ticket=match.ticket,
+                    )
+                    logger.info(
+                        "%s: zone-watch idempotency match — stage=%d already on MT5 "
+                        "ticket=%d",
+                        acct_name, stage["stage_number"], match.ticket,
+                    )
+                    continue
+
+                # Build synthetic signal + call stage-aware _execute_open_on_account.
+                await self._fire_zone_stage(
+                    acct_name=acct_name, connector=connector,
+                    symbol=symbol, stage=stage,
+                    bid=bid2, ask=ask2,
+                    signal_id=signal_id,
+                )
+
+    async def _stage_maintenance_loop(self) -> None:
+        """Orphan-TP watchdog + SL/TP verification sweep + stale-firing reconcile.
+
+        Same 10 s cadence as the zone watch but a separate task (#12), so a
+        slow or dead bridge inside one of these passes never delays a fire.
+        Each pass is failure-isolated.
+        """
+        while True:
+            try:
+                await asyncio.sleep(10)
+                if self._trading_paused:
+                    continue
+                # EXEC2-05 (D2-09..D2-12) — orphan protective-TP watchdog. An
+                # orphan stage-1 has no awaiting_zone siblings by definition, so
+                # it never appears in the band-fire pass; at correlation-window
+                # expiry it gets an R=1:1 protective TP off its default-SL distance.
+                try:
+                    await self._run_orphan_protective_tp_watchdog()
+                except Exception as exc:
+                    logger.warning("Stage maintenance: orphan-TP watchdog error: %s", exc)
+                # §1.3(b) — post-trade SL/TP verification sweep: every filled
+                # stage's live position carries the intended SL/TP; re-issues a
+                # bounded modify when it deviated.
+                try:
+                    await self._run_stage_sltp_verification_sweep()
+                except Exception as exc:
+                    logger.warning("Stage maintenance: SL/TP verification sweep error: %s", exc)
+                # #10/#3 — rows stranded in 'firing' are finalized from the live
+                # positions (see _reconcile_stale_firing_stages).
+                try:
+                    await self._reconcile_stale_firing_stages()
+                except Exception as exc:
+                    logger.warning("Stage maintenance: stale-firing reconcile error: %s", exc)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("Stage maintenance loop error: %s", exc)
 
     async def _run_orphan_protective_tp_watchdog(self) -> None:
         """EXEC2-05 (D2-09..D2-12) — protective-TP watchdog for orphan stage-1.
@@ -1102,11 +1226,11 @@ class Executor:
             if acct_name in self._reconnecting:
                 continue
             connector = self.tm.connectors.get(acct_name)
-            if connector is None:
-                continue
+            if connector is None or not getattr(connector, "connected", True):
+                continue  # #12: a disconnected bridge is the heartbeat's job
 
             try:
-                positions = await connector.get_positions()
+                positions = await self._read_bounded(connector.get_positions())
             except Exception as exc:
                 logger.warning(
                     "%s: orphan-TP get_positions failed: %s", acct_name, exc,
@@ -1261,11 +1385,11 @@ class Executor:
             if acct_name in self._reconnecting:
                 continue
             connector = self.tm.connectors.get(acct_name)
-            if connector is None:
-                continue
+            if connector is None or not getattr(connector, "connected", True):
+                continue  # #12: a disconnected bridge is the heartbeat's job
 
             try:
-                positions = await connector.get_positions()
+                positions = await self._read_bounded(connector.get_positions())
             except Exception as exc:
                 logger.warning(
                     "%s: SL/TP sweep get_positions failed: %s", acct_name, exc,
@@ -1579,6 +1703,10 @@ class Executor:
             # as it is — writing 'failed' over a live position's row dropped it
             # out of the SL/TP sweep and the D-16 cascade.
             if reason == "already_filled":
+                return
+            # #13: the positions read failed before the submit; the row was never
+            # claimed and stays armed for the next tick.
+            if reason == READ_FAILED_REASON:
                 return
             # Pre-claim failure only (a post-claim one was finalized by the
             # owner); never overwrite a row another path has claimed or filled.
