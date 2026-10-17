@@ -76,9 +76,15 @@ class AccountInfo:
     currency: str = "USD"
 
 
+# Deal.entry values that close (part of) a position: 1=out, 2=inout (reversal),
+# 3=out_by (close-by). Shared by the history sync and the expiry probe so a
+# close-by or reversal is reconciled like a plain close (batch 6).
+CLOSING_DEAL_ENTRIES = frozenset({1, 2, 3})
+
+
 @dataclass
 class Deal:
-    """A single MT5 history deal — closing leg of a position when entry==1."""
+    """A single MT5 history deal — closing leg of a position when entry in CLOSING_DEAL_ENTRIES."""
 
     ticket: int
     position_id: int

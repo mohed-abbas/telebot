@@ -362,14 +362,18 @@ async def log_trade(
 # ── Trade updates ────────────────────────────────────────────────────
 
 
-async def update_trade_close(ticket: int, account_name: str, pnl: float, close_price: float) -> None:
-    """Update a trade record when the position is closed."""
+async def update_trade_close(
+    ticket: int, account_name: str, pnl: float, close_price: float,
+    *, close_time: datetime | None = None,
+) -> None:
+    """Update a trade record when the position is closed. `close_time` is the
+    broker's deal time when known (batch 6); it defaults to now."""
     await _pool.execute(
         """UPDATE trades SET status='closed', pnl=$1, close_price=$2, close_time=$3
            WHERE ticket=$4 AND account_name=$5""",
         pnl,
         close_price,
-        datetime.now(timezone.utc),
+        close_time or datetime.now(timezone.utc),
         ticket,
         account_name,
     )
@@ -416,8 +420,9 @@ async def get_stale_closing_trades(
     account_name: str, older_than_seconds: int, *, read_until: datetime | None = None,
 ) -> list[dict]:
     """Review 2026-10-16 #7 — 'closing' rows whose close was submitted more than
-    the given age ago and that history-sync still has not finalized (the broker
-    never produced a matching deal, or the backend has no deal history).
+    the given age ago and that history-sync still has not finalized (the deal
+    window was read and the broker had no matching deal). A backend whose deal
+    history cannot be read keeps its rows 'closing'; the executor logs that.
 
     Batch 5: `read_until` is the history-sync watermark. Only rows whose close
     was submitted before the window the broker has actually been read for
@@ -544,12 +549,13 @@ async def log_pending_order(
     )
 
 
-async def get_active_pending_orders(account_name: str) -> list[dict]:
-    """Resting limit orders of one account (status='active'), oldest first.
+async def get_active_pending_orders(account_name: str | None = None) -> list[dict]:
+    """Resting limit orders (status='active'), oldest first — one account or all.
     Batch 5: the maintenance loop checks these against live positions so a fill
-    is recorded when it happens, not at expiry."""
+    is recorded when it happens, not at expiry (one query per tick, batch 6)."""
     rows = await _pool.fetch(
-        "SELECT * FROM pending_orders WHERE account_name=$1 AND status='active' ORDER BY id",
+        "SELECT * FROM pending_orders WHERE status='active' "
+        "AND ($1::text IS NULL OR account_name=$1) ORDER BY id",
         account_name,
     )
     return [dict(r) for r in rows]

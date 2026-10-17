@@ -474,7 +474,8 @@ async def test_maintenance_passes_run_outside_the_fire_tick(
         await executor._stage_maintenance_loop()
     except asyncio.CancelledError:
         pass
-    assert called == ["orphan", "sweep", "stale", "fills"]
+    # Batch 6: the irreversible stale-firing decision runs on the fresh snapshot.
+    assert called == ["stale", "fills", "orphan", "sweep"]
 
 
 async def test_start_runs_the_maintenance_loop_as_its_own_task(executor):

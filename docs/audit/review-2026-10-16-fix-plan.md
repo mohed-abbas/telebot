@@ -13,6 +13,7 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 | 3 — harder fixes | #3, #13, #12, #7, #9 | **Done** — full suite green (531 passed, 0 failed); 20 regression tests in `tests/test_review_batch3_bridge_reads_and_closes.py`. #9 needs a deploy of `mt5-rest-server/server.py` to the Windows bridge. |
 | 4 — minor items | ~10 small items | **Done** — full suite green (547 passed, 0 failed); 16 regression tests in `tests/test_review_batch4_minor_items.py`. Left out: shared bridge-payload test helpers (test-only refactor). |
 | 5 — review follow-up | 9 findings of the 2026-10-17 `/code-review high` of batches 1–4 | **Done** — full suite green (563 passed, 0 failed); 16 regression tests in `tests/test_review_batch5_review_findings.py` |
+| 6 — review follow-up | 9 findings of the 2026-10-17 `/code-review high` of batch 5 | **Done** — full suite green (573 passed, 0 failed); 10 regression tests in `tests/test_review_batch6_review_followup.py` |
 | Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
 
 ## Working rules for every batch
@@ -364,6 +365,43 @@ limit order life cycle (after batch 5)
 - A 'closing' row is finalized from its estimate only after the history sync has read past its close_time (plus the 600 s age). While the bridge cannot serve deal history, rows stay `closing` — that is the intended behaviour, not a stall.
 - Bands whose stage 1 ended `failed` / `capped` / `abandoned_reconnect` / `cancelled_*` are now cancelled with status `cancelled_stage1_closed` and reason `stage1_<status>` (zone watch) or `stage1_<status>_at_startup|reconnect` (reconcile). Previously such bands fired standalone later.
 - The pending-fill check uses the same 10 s cadence as the other maintenance passes; a fill that closes again within one tick is caught at expiry via the OUT-deal probe, which is one extra `GET /history/deals` per such order.
+
+---
+
+## Batch 6 — done (review follow-up on batch 5)
+
+The user-run `/code-review high` of batch 5 returned nine findings (three behavioural, six hygiene); all closed. Suite after the batch: `573 passed, 8 skipped, 1 xfailed, 0 failed` (was 563). One batch-3 test adjusted for the new maintenance pass order.
+
+```
+#  finding                                     fix
+─  ──────────────────────────────────────────  ────────────────────────────────────────────────
+1  reconcile judged bands before their stage 1 pending rows sorted by (stage_number, id) before the
+   (newest-first fetch + per-signal memo) →     pass → a 'firing' stage 1 failed by this pass is
+   bands of a dead sequence stayed armed        seen by its bands' D-16 check
+4  stage-1 lookup failure → 'none' → fire       new state 'unknown': zone watch skips the fire
+   allowed (fail-open)                          (bands kept), reconcile keeps the band
+3  sync accepted deal entry 1 only; probe 1+3   mt5_connector.CLOSING_DEAL_ENTRIES = {1, 2, 3}
+                                                shared by history sync and expiry probe
+2  dead history endpoint → fallback never runs, _warn_closing_rows_blocked: one logger.error per
+   silently                                     account per outage, only when 'closing' rows are
+                                                waiting; re-armed after a successful read.
+                                                Behaviour unchanged (rows stay 'closing').
+6  stale-firing 'failed' decided from a         pass order: stale-firing → pending-fill → orphan-TP
+   snapshot aged by two modify passes           → SL/TP sweep (irreversible write on the fresh read)
+5  filled_closed close_time = now               update_trade_close(close_time=) from the deal time
+                                                (history sync too)
+8  one history read per expired order           one read per account per cleanup cycle, seeded
+                                                from the oldest expired order; a read failure is
+                                                cached for the cycle
+9  one pending-orders query per account/tick    one cross-account query, grouped by account
+7  D-16 cascade block duplicated                Executor._cascade_dead_stage1(state, status, suffix)
+```
+
+### Judgment calls to confirm in the end-to-end test
+
+- Reversal (`entry=2`) and close-by (`entry=3`) deals now close the matching trades row with the deal's profit. MT5 reports the closing leg's profit on these deals as it does for a plain OUT; if the broker reports reversals differently, the P&L of a reversed position would be wrong where before it fell to the 600 s estimate.
+- `trades.close_time` is now the broker deal time for history-reconciled and expiry-probed closes; dashboard/estimate closes still use the submit time.
+- A dead `/history/deals` endpoint produces one ERROR log line per account per outage listing the stuck tickets. No Discord alert (the heartbeat already alerts on a dead bridge).
 
 ---
 
