@@ -119,6 +119,17 @@ class MT5Connector:
     # history sync that will never come (review 2026-10-16 #7).
     supports_history_sync: bool = True
 
+    def has_credentials(self) -> bool:
+        """True when a password is available (inline or via password_env).
+
+        One definition for the three former copies in bot.main,
+        Executor._heartbeat_tick and Executor._reconnect_account (review
+        2026-10-16, batch 4).
+        """
+        if self.password:
+            return True
+        return bool(self.password_env and os.environ.get(self.password_env))
+
     def _clear_password(self) -> None:
         """Clear password from memory after successful connection."""
         self.password = ""
@@ -625,21 +636,43 @@ class RestApiConnector(MT5Connector):
         return self._http
 
     async def _request(self, method: str, path: str, **kwargs) -> dict | None:
-        """Make an HTTP request with retry logic. Returns parsed data or None on error."""
+        """Make an HTTP request with retry logic. Returns parsed data or None on error.
+
+        Thin wrapper over _request_ex that keeps the legacy (data | None) shape
+        for callers that only need the payload (ping, connect, price, account).
+        """
+        data, _error, _unknown = await self._request_ex(method, path, **kwargs)
+        return data
+
+    async def _request_ex(
+        self, method: str, path: str, **kwargs,
+    ) -> tuple[dict | None, str, bool]:
+        """Make an HTTP request with retry logic.
+
+        Returns (data, error, outcome_unknown). `error` is the structured broker
+        reason (or the timeout description) for THIS call — handed back to the
+        caller instead of parked on the instance, because one connector serves
+        concurrent coroutines (zone watch, sweep, signal handlers) and a shared
+        _last_error let one call report another call's failure (review
+        2026-10-16, batch 4). _last_error / _last_outcome_unknown are still
+        mirrored for logging and tests.
+        """
         client = self._ensure_client()
         self._last_error = ""
         self._last_outcome_unknown = False
+        error = ""
+        outcome_unknown = False
         last_exc = None
         for attempt in range(3):  # up to 3 attempts
             try:
                 resp = await client.request(method, path, **kwargs)
                 if resp.status_code == 401:
                     logger.error("%s: REST API auth failed (401)", self.account_name)
-                    return None
+                    return None, "REST API auth failed (401)", False
                 if resp.status_code == 503:
                     self._connected = False
                     logger.warning("%s: REST API reports not connected (503)", self.account_name)
-                    return None
+                    return None, "REST API reports not connected (503)", False
                 body = resp.json()
                 # FastAPI wraps HTTPException payloads as {"detail": {...}}.
                 # Unwrap so structured error.code / error.message surface in logs
@@ -654,10 +687,11 @@ class RestApiConnector(MT5Connector):
                     # Capture the structured broker error so callers can surface
                     # the real reason (code + message) in OrderResult.error rather
                     # than a generic string.
-                    self._last_error = f"broker error {code}: {message}"
+                    error = f"broker error {code}: {message}"
+                    self._last_error = error
                     logger.warning("%s: REST API error: %s — %s", self.account_name, code, message)
-                    return None
-                return body.get("data")
+                    return None, error, False
+                return body.get("data"), "", False
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 # The request provably never left the client, so no side effect
                 # could have occurred on the broker. Safe to retry any method.
@@ -680,23 +714,25 @@ class RestApiConnector(MT5Connector):
                         self.account_name, method.upper(), path,
                     )
                     # #3: the request was sent; the broker may have acted on it.
-                    self._last_outcome_unknown = True
-                    self._last_error = (
+                    outcome_unknown = True
+                    error = (
                         f"{method.upper()} {path} timed out awaiting response "
                         "(outcome unknown)"
                     )
+                    self._last_outcome_unknown = True
+                    self._last_error = error
                     self._connected = False
-                    return None
+                    return None, error, outcome_unknown
                 if attempt < 2:
                     logger.warning("%s: REST request failed (attempt %d): %s", self.account_name, attempt + 1, exc)
                     await asyncio.sleep(1)
                 continue
             except Exception as exc:
                 logger.error("%s: Unexpected REST error: %s", self.account_name, exc)
-                return None
+                return None, f"unexpected REST error: {exc}", False
         logger.error("%s: REST request failed after 3 attempts: %s", self.account_name, last_exc)
         self._connected = False
-        return None
+        return None, f"REST request failed after 3 attempts: {last_exc}", False
 
     async def ping(self) -> bool:
         data = await self._request("GET", "/api/v1/ping")
@@ -753,11 +789,11 @@ class RestApiConnector(MT5Connector):
         params = {}
         if symbol:
             params["symbol"] = symbol
-        data = await self._request("GET", "/api/v1/positions", params=params)
+        data, error, _ = await self._request_ex("GET", "/api/v1/positions", params=params)
         if data is None:
             raise ConnectorReadError(
                 f"{self.account_name}: positions read failed: "
-                f"{self._last_error or 'REST API request failed'}"
+                f"{error or 'REST API request failed'}"
             )
         return [
             Position(
@@ -784,7 +820,7 @@ class RestApiConnector(MT5Connector):
         tp: float = 0.0,
         comment: str = "",
     ) -> OrderResult:
-        data = await self._request("POST", "/api/v1/order", json={
+        data, error, outcome_unknown = await self._request_ex("POST", "/api/v1/order", json={
             "symbol": symbol,
             "order_type": order_type.value,
             "volume": volume,
@@ -797,8 +833,8 @@ class RestApiConnector(MT5Connector):
         if data is None:
             return OrderResult(
                 success=False,
-                error=self._last_error or "REST API request failed",
-                outcome_unknown=self._last_outcome_unknown,
+                error=error or "REST API request failed",
+                outcome_unknown=outcome_unknown,
             )
         if data.get("success"):
             logger.info(
@@ -816,15 +852,15 @@ class RestApiConnector(MT5Connector):
     async def modify_position(
         self, ticket: int, sl: float | None = None, tp: float | None = None
     ) -> OrderResult:
-        data = await self._request("PUT", f"/api/v1/position/{ticket}", json={
+        data, error, outcome_unknown = await self._request_ex("PUT", f"/api/v1/position/{ticket}", json={
             "sl": sl,
             "tp": tp,
         })
         if data is None:
             return OrderResult(
                 success=False, ticket=ticket,
-                error=self._last_error or "REST API request failed",
-                outcome_unknown=self._last_outcome_unknown,
+                error=error or "REST API request failed",
+                outcome_unknown=outcome_unknown,
             )
         if _bridge_success(data):
             return OrderResult(success=True, ticket=ticket)
@@ -834,12 +870,14 @@ class RestApiConnector(MT5Connector):
         body = {}
         if volume is not None:
             body["volume"] = volume
-        data = await self._request("DELETE", f"/api/v1/position/{ticket}", json=body if body else None)
+        data, error, outcome_unknown = await self._request_ex(
+            "DELETE", f"/api/v1/position/{ticket}", json=body if body else None,
+        )
         if data is None:
             return OrderResult(
                 success=False, ticket=ticket,
-                error=self._last_error or "REST API request failed",
-                outcome_unknown=self._last_outcome_unknown,
+                error=error or "REST API request failed",
+                outcome_unknown=outcome_unknown,
             )
         if _bridge_success(data):
             return OrderResult(
@@ -853,12 +891,12 @@ class RestApiConnector(MT5Connector):
         return OrderResult(success=False, ticket=ticket, error=data.get("error", "Unknown error"))
 
     async def cancel_pending(self, ticket: int) -> OrderResult:
-        data = await self._request("DELETE", f"/api/v1/pending-order/{ticket}")
+        data, error, outcome_unknown = await self._request_ex("DELETE", f"/api/v1/pending-order/{ticket}")
         if data is None:
             return OrderResult(
                 success=False, ticket=ticket,
-                error=self._last_error or "REST API request failed",
-                outcome_unknown=self._last_outcome_unknown,
+                error=error or "REST API request failed",
+                outcome_unknown=outcome_unknown,
             )
         if _bridge_success(data):
             return OrderResult(success=True, ticket=ticket)
@@ -868,11 +906,11 @@ class RestApiConnector(MT5Connector):
         params = {}
         if symbol:
             params["symbol"] = symbol
-        data = await self._request("GET", "/api/v1/pending-orders", params=params)
+        data, error, _ = await self._request_ex("GET", "/api/v1/pending-orders", params=params)
         if data is None:
             raise ConnectorReadError(
                 f"{self.account_name}: pending-orders read failed: "
-                f"{self._last_error or 'REST API request failed'}"
+                f"{error or 'REST API request failed'}"
             )
         return data.get("orders", [])
 
@@ -882,13 +920,13 @@ class RestApiConnector(MT5Connector):
         params = {"from_ts": since.timestamp()}
         if until is not None:
             params["to_ts"] = until.timestamp()
-        data = await self._request("GET", "/api/v1/history/deals", params=params)
+        data, error, _ = await self._request_ex("GET", "/api/v1/history/deals", params=params)
         if data is None:
             # An empty list here would advance the history-sync watermark past
             # deals we never saw (#13).
             raise ConnectorReadError(
                 f"{self.account_name}: history read failed: "
-                f"{self._last_error or 'REST API request failed'}"
+                f"{error or 'REST API request failed'}"
             )
         return [
             Deal(

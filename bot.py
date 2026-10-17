@@ -2,7 +2,6 @@ import asyncio
 import functools
 import io
 import logging
-import os
 import signal
 from datetime import datetime
 
@@ -281,13 +280,27 @@ async def main() -> None:
     # ── Initialize trading pipeline ─────────────────────────────────
     executor, notifier = await _setup_trading(http)
 
+    # Review 2026-10-16 batch 4: the Telegram handler is registered BEFORE the
+    # MT5 connect + startup reconcile below, so a signal posted during those
+    # seconds is captured instead of lost. Trade execution waits on this event;
+    # the Discord relay does not.
+    pipeline_ready = asyncio.Event()
+    if not executor:
+        pipeline_ready.set()
+
+    group_names = await resolve_group_names(client)
+    for chat_id, name in group_names.items():
+        logger.info("Watching: %s (%d)", name, chat_id)
+
+    _register_message_handler(
+        client, http, executor, notifier, group_names, pipeline_ready,
+    )
+
     if executor:
         # Connect all MT5 accounts
         for acct_name, connector in executor.tm.connectors.items():
             # Skip accounts without a password configured
-            if not connector.password and not (
-                connector.password_env and os.environ.get(connector.password_env)
-            ):
+            if not connector.has_credentials():
                 msg = f"{acct_name}: No password configured (env var: {connector.password_env}) — skipping"
                 logger.warning(msg)
                 if notifier:
@@ -310,10 +323,35 @@ async def main() -> None:
 
         # Start background tasks (pending order cleanup, heartbeat, zone watch)
         await executor.start()
+        pipeline_ready.set()
 
-    group_names = await resolve_group_names(client)
-    for chat_id, name in group_names.items():
-        logger.info("Watching: %s (%d)", name, chat_id)
+    logger.info("Bot started. Listening to %d chat(s)", len(settings.tg_chat_ids))
+
+    # ── Launch dashboard ────────────────────────────────────────────
+    server = None
+    if settings.dashboard_enabled:
+        import uvicorn
+        from dashboard import app as dashboard_app, init_dashboard
+
+        init_dashboard(executor, notifier, settings)
+
+        config = uvicorn.Config(
+            dashboard_app,
+            host="0.0.0.0",
+            port=settings.dashboard_port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(config)
+        asyncio.create_task(server.serve())
+        logger.info("Dashboard running on http://0.0.0.0:%d", settings.dashboard_port)
+
+    await _run_until_shutdown(client, server, executor, http)
+
+
+def _register_message_handler(
+    client, http, executor, notifier, group_names, pipeline_ready: asyncio.Event,
+) -> None:
+    """Attach the NewMessage handler (relay + signal execution) to `client`."""
 
     @client.on(events.NewMessage(chats=settings.tg_chat_ids))
     async def handler(event):
@@ -398,6 +436,12 @@ async def main() -> None:
                 logger.info("Signal detected: %s", parsed_log.replace("\n", " | "))
 
                 if executor and settings.trading_enabled:
+                    if not pipeline_ready.is_set():
+                        logger.info(
+                            "Signal received during startup — waiting for the MT5 "
+                            "connect + reconcile to finish",
+                        )
+                        await pipeline_ready.wait()
                     if not executor.is_accepting_signals():
                         # Trading paused or all accounts reconnecting
                         if executor._trading_paused:
@@ -427,26 +471,10 @@ async def main() -> None:
                         f"PARSE FAILED: Signal-like text not recognized:\n{text[:200]}"
                     )
 
-    logger.info("Bot started. Listening to %d chat(s)", len(settings.tg_chat_ids))
 
-    # ── Launch dashboard ────────────────────────────────────────────
-    server = None
-    if settings.dashboard_enabled:
-        import uvicorn
-        from dashboard import app as dashboard_app, init_dashboard
 
-        init_dashboard(executor, notifier, settings)
-
-        config = uvicorn.Config(
-            dashboard_app,
-            host="0.0.0.0",
-            port=settings.dashboard_port,
-            log_level="warning",
-        )
-        server = uvicorn.Server(config)
-        asyncio.create_task(server.serve())
-        logger.info("Dashboard running on http://0.0.0.0:%d", settings.dashboard_port)
-
+async def _run_until_shutdown(client, server, executor, http) -> None:
+    """Block until Telethon disconnects or SIGTERM/SIGINT, then tear down."""
     # ── Graceful shutdown handler ──────────────────────────────────
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()

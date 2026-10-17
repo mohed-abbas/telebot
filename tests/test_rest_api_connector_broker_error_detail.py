@@ -97,7 +97,9 @@ class TestBrokerErrorDetailSurfaced:
         assert "Invalid request" in result.error
 
     async def test_generic_fallback_when_no_structured_body(self):
-        """A transport-level failure (no REST error body) keeps the generic string."""
+        """A transport-level failure (no REST error body) reports the transport
+        failure itself — never a broker code it did not receive. (Batch 4 made the
+        error per call; it now names the exception instead of a fixed string.)"""
 
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("Connection refused")
@@ -106,4 +108,5 @@ class TestBrokerErrorDetailSurfaced:
         result = await conn.modify_position(123, sl=1.0)
 
         assert result.success is False
-        assert result.error == "REST API request failed"
+        assert "Connection refused" in result.error
+        assert "broker error" not in result.error

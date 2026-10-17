@@ -23,6 +23,17 @@ GOLD_PIP_VALUE_PER_LOT = 10.0  # $10 per pip per standard lot (100 oz × $0.10)
 GOLD_PIP_SIZE = 0.10  # 1 pip = $0.10 price movement (= 10 points)
 
 
+def pip_size_for_symbol(symbol: str) -> float:
+    """Pip size by symbol — v1.1 only supports XAUUSD (1 pip = $0.10).
+
+    The single definition; trade_manager and executor used to carry their
+    own copies (review 2026-10-16, batch 4).
+    """
+    if (symbol or "").upper() == "XAUUSD":
+        return GOLD_PIP_SIZE
+    return 0.0001
+
+
 def calculate_lot_size(
     account_balance: float,
     risk_percent: float,

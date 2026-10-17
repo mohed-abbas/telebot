@@ -545,17 +545,34 @@ async def get_expired_pending_orders() -> list[dict]:
 
 
 async def mark_pending_cancelled(order_id: int) -> None:
-    """Mark a pending order as cancelled."""
+    """Mark a pending order as cancelled, and its 'pending' trades row too.
+
+    The trades row for a limit order used to stay 'pending' forever
+    (remediation backlog: limit-order status transition never completes).
+    """
     await _pool.execute(
         "UPDATE pending_orders SET status='cancelled' WHERE id=$1",
+        order_id,
+    )
+    await _pool.execute(
+        """UPDATE trades t SET status='cancelled'
+           FROM pending_orders po
+           WHERE po.id=$1 AND t.ticket=po.ticket AND t.account_name=po.account_name
+             AND t.status='pending'""",
         order_id,
     )
 
 
 async def mark_pending_filled(ticket: int, account_name: str) -> None:
-    """Mark a pending order as filled."""
+    """Mark a pending order as filled; the trades row becomes 'opened' so the
+    history sync reconciles its eventual close like any market fill."""
     await _pool.execute(
         "UPDATE pending_orders SET status='filled' WHERE ticket=$1 AND account_name=$2",
+        ticket,
+        account_name,
+    )
+    await _pool.execute(
+        "UPDATE trades SET status='opened' WHERE ticket=$1 AND account_name=$2 AND status='pending'",
         ticket,
         account_name,
     )
@@ -1348,6 +1365,9 @@ async def get_stale_firing_stages(older_than_seconds: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+SLTP_SWEEP_MAX_ROWS = 500
+
+
 async def get_filled_stages_for_sltp_verification() -> list[dict]:
     """§1.3(b) — filled stages that carry authoritative protective levels.
 
@@ -1357,12 +1377,24 @@ async def get_filled_stages_for_sltp_verification() -> list[dict]:
     and re-issues a modify when they deviate, so a failed/skipped stage-1 align
     can never leave a position unprotected.
     """
+    # Bounded (review 2026-10-16, batch 4): a stage whose trade is already
+    # closed/cancelled has no live position to verify, so it is excluded here
+    # instead of being re-read and re-matched against positions every tick for
+    # the lifetime of the table. Newest first, hard cap as a safety net.
     rows = await _pool.fetch(
-        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
-        "mt5_comment, mt5_ticket, signal_sl, signal_tp "
-        "FROM staged_entries "
-        "WHERE status='filled' AND mt5_ticket IS NOT NULL "
-        "AND (signal_sl IS NOT NULL OR signal_tp IS NOT NULL)"
+        "SELECT se.id, se.signal_id, se.stage_number, se.account_name, se.symbol, "
+        "se.direction, se.mt5_comment, se.mt5_ticket, se.signal_sl, se.signal_tp "
+        "FROM staged_entries se "
+        "WHERE se.status='filled' AND se.mt5_ticket IS NOT NULL "
+        "AND (se.signal_sl IS NOT NULL OR se.signal_tp IS NOT NULL) "
+        "AND NOT EXISTS ("
+        "    SELECT 1 FROM trades t "
+        "    WHERE t.ticket = se.mt5_ticket AND t.account_name = se.account_name "
+        "      AND t.status IN ('closed', 'cancelled')"
+        ") "
+        "ORDER BY se.filled_at DESC NULLS LAST, se.id DESC "
+        "LIMIT $1",
+        SLTP_SWEEP_MAX_ROWS,
     )
     return [dict(r) for r in rows]
 
@@ -1448,22 +1480,9 @@ async def cancel_unfilled_stages_for_signal(
     in-depth; production signal_ids are per-account). None keeps the original
     signal-wide behavior.
     """
-    if account_name is None:
-        result = await _pool.execute(
-            "UPDATE staged_entries "
-            "SET status='cancelled_stage1_closed', cancelled_reason=$1 "
-            "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
-            reason, signal_id,
-        )
-    else:
-        result = await _pool.execute(
-            "UPDATE staged_entries "
-            "SET status='cancelled_stage1_closed', cancelled_reason=$1 "
-            "WHERE signal_id=$2 AND account_name=$3 "
-            "AND status IN ('awaiting_followup','awaiting_zone')",
-            reason, signal_id, account_name,
-        )
-    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+    return await _cancel_unfilled_stages(
+        "cancelled_stage1_closed", signal_id, reason, account_name,
+    )
 
 
 async def cancel_unfilled_stages_target_reached(
@@ -1479,22 +1498,27 @@ async def cancel_unfilled_stages_target_reached(
     in-depth; production signal_ids are per-account). None keeps the original
     signal-wide behavior.
     """
-    if account_name is None:
-        result = await _pool.execute(
-            "UPDATE staged_entries "
-            "SET status='cancelled_target_reached', cancelled_reason=$1 "
-            "WHERE signal_id=$2 AND status IN ('awaiting_followup','awaiting_zone')",
-            reason, signal_id,
-        )
-    else:
-        result = await _pool.execute(
-            "UPDATE staged_entries "
-            "SET status='cancelled_target_reached', cancelled_reason=$1 "
-            "WHERE signal_id=$2 AND account_name=$3 "
-            "AND status IN ('awaiting_followup','awaiting_zone')",
-            reason, signal_id, account_name,
-        )
-    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+    return await _cancel_unfilled_stages(
+        "cancelled_target_reached", signal_id, reason, account_name,
+    )
+
+
+async def _cancel_unfilled_stages(
+    new_status: str, signal_id: int, reason: str, account_name: str | None,
+) -> int:
+    """Shared body of the two cascade cancels (one SQL instead of four copies).
+    A NULL account_name keeps the signal-wide behaviour."""
+    if new_status not in ("cancelled_stage1_closed", "cancelled_target_reached"):
+        raise ValueError(f"not a cascade status: {new_status}")
+    result = await _pool.execute(
+        "UPDATE staged_entries "
+        f"SET status='{new_status}', cancelled_reason=$1 "
+        "WHERE signal_id=$2 "
+        "AND ($3::text IS NULL OR account_name=$3) "
+        "AND status IN ('awaiting_followup','awaiting_zone')",
+        reason, signal_id, account_name,
+    )
+    return _rows_affected(result)
 
 
 async def get_signal_targets(signal_id: int) -> dict | None:
@@ -1596,12 +1620,19 @@ async def get_position_drilldown(ticket: int, account_name: str) -> dict | None:
     )
 
     for stage in stages:
+        # Batch 4: `target_lot` is the per-stage slice of risk_value, which in
+        # percent mode is a PERCENT, not lots. The trades row for this ticket
+        # carries the lots actually sent to the broker. A text-only stage 1 has
+        # no band (0/0) — report None so the SPA shows "Market", not 0.00–0.00.
+        band_low, band_high = stage["band_low"], stage["band_high"]
+        if not band_low and not band_high:
+            band_low = band_high = None
         result["fill_history"].append({
             "stage_number": stage["stage_number"],
             "filled_at": stage["filled_at"],
-            "lot_size": stage["target_lot"],
-            "band_low": stage["band_low"],
-            "band_high": stage["band_high"],
+            "lot_size": trade["lot_size"] if trade["lot_size"] else stage["target_lot"],
+            "band_low": band_low,
+            "band_high": band_high,
             # sl_at_fill is normalized to an ABSOLUTE PRICE (the position's SL) in
             # BOTH branches — the single-stage branch below also uses trade["sl"].
             # Previously this branch emitted default_sl_pips (a PIPS value), mixing

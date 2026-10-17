@@ -185,8 +185,14 @@ async def login(request: Request, body: LoginIn) -> JSONResponse:
 async def logout(request: Request) -> JSONResponse:
     """Clear the session. Guarded by verify_csrf_token so it doubles as the
     representative /api/v2 mutation in the D-16 CSRF regression gate."""
+    from dashboard import _expire_auth_cookies  # lazy (see module note)
+
     request.session.clear()
-    return JSONResponse({"ok": True})
+    resp = JSONResponse({"ok": True})
+    # Batch 4: expire the session + CSRF cookies server-side here too; only the
+    # legacy form /logout did, so an SPA sign-out left the CSRF cookies behind.
+    _expire_auth_cookies(resp)
+    return resp
 
 
 @router.get("/auth/me")

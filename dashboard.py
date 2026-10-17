@@ -88,9 +88,26 @@ def get_settings_store():
 # issued-at (`iat`) into the session and every auth check rejects a session once
 # `iat` is older than this cap — even while the rolling window is still fresh.
 # Configurable (seconds); default 7 days. Read at import (config-safe, no TLS req).
-SESSION_ABSOLUTE_MAX_AGE = int(
-    os.environ.get("SESSION_ABSOLUTE_MAX_AGE", str(7 * 24 * 60 * 60))
-)
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    """Read an integer env var; fall back to `default` (with a warning) on
+    garbage or an out-of-range value instead of crashing at import."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        logger.warning("%s=%r is not an integer — using %d", name, raw, default)
+        return default
+    if value < minimum:
+        logger.warning("%s=%d is below %d — using %d", name, value, minimum, default)
+        return default
+    return value
+
+
+SESSION_ABSOLUTE_MAX_AGE = _env_int("SESSION_ABSOLUTE_MAX_AGE", 7 * 24 * 60 * 60)
 
 
 def _session_within_absolute_lifetime(session) -> bool:

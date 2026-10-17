@@ -8,6 +8,7 @@ the ping but whose session is disconnected (timed-out request, failed login).
 """
 
 import asyncio
+import os
 import types
 
 import httpx
@@ -46,6 +47,9 @@ class _FakeConn:
 
     async def ping(self):
         return self._alive
+
+    def has_credentials(self) -> bool:  # mirrors MT5Connector.has_credentials
+        return bool(self.password or (self.password_env and os.environ.get(self.password_env)))
 
 
 def _executor(conn):

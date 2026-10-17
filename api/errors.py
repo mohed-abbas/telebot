@@ -91,7 +91,13 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
     (FastAPI dispatches by the most specific registered type), so this only fires
     for genuinely unhandled exceptions. Never leaks the traceback/detail (V13).
     """
-    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    # One line, no traceback: Starlette's ServerErrorMiddleware re-raises after
+    # this handler and the ASGI server logs the full traceback itself, so a
+    # logger.exception here printed every 500 twice (review 2026-10-16, batch 4).
+    logger.error(
+        "Unhandled exception on %s %s: %s: %s",
+        request.method, request.url.path, type(exc).__name__, exc,
+    )
     if not _is_api_v2(request):
         # Preserve default behaviour for legacy HTML / HTMX routes.
         return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})

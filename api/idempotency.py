@@ -95,7 +95,9 @@ async def check(
             return "conflict", None
 
         cached = row["result"]
-        if isinstance(cached, str):  # asyncpg may hand back JSONB as text
+        if isinstance(cached, str):
+            # Rows written before batch 4 were double-encoded (a JSON string
+            # holding JSON); decode them once more so replays still work.
             cached = json.loads(cached) if cached else {}
         return "replay", (cached or {})
 
@@ -109,7 +111,11 @@ async def store(
     the caller stores without a prior check. ON CONFLICT updates the cached
     result + params for the existing key.
     """
-    payload = json.dumps(result)
+    # The pool's jsonb codec (db._init_connection) already serialises Python
+    # objects; a pre-encoded string here was stored as a JSON *string* holding
+    # JSON, which `check` then had to json.loads a second time (review
+    # 2026-10-16, batch 4). Hand it the dict.
+    payload = result
     async with db._pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO idempotency_keys

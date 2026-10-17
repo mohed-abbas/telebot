@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import random
 import time
 from dataclasses import fields as _dc_fields
@@ -23,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 import db
 from models import AccountSettings, Direction, GlobalConfig, SignalAction, SignalType
 from notifier import Notifier
-from risk_calculator import GOLD_PIP_SIZE
+from risk_calculator import pip_size_for_symbol
 from trade_manager import (
     KILL_SWITCH_REASON, READ_FAILED_REASON, Band, TradeManager, stage_is_in_zone_at_arrival,
 )
@@ -233,9 +232,7 @@ class Executor:
             if self._trading_paused:
                 continue  # Kill switch active, don't bother checking
             # Skip accounts that were never connected (e.g. no password configured)
-            if not connector.password and not (
-                connector.password_env and os.environ.get(connector.password_env)
-            ):
+            if not connector.has_credentials():
                 continue
             alive = await connector.ping()
             if not alive:
@@ -264,9 +261,7 @@ class Executor:
     ) -> None:
         """Reconnect a single account with exponential backoff (1s -> 60s max)."""
         # Skip accounts without a password (no point reconnecting)
-        if not connector.password and not (
-            connector.password_env and os.environ.get(connector.password_env)
-        ):
+        if not connector.has_credentials():
             logger.debug("%s: Skipping reconnect — no password configured", acct_name)
             self._reconnecting.discard(acct_name)
             return
@@ -502,6 +497,17 @@ class Executor:
                 "%s: adopt trade row failed ticket=%d: %s", acct_name, pos.ticket, exc,
             )
         return moved
+
+    async def _count_server_message(self, acct_name: str) -> None:
+        """Count one broker request against the daily server-message budget.
+
+        The sweep and the orphan watchdog send modifies the budget never saw
+        (review 2026-10-16, batch 4). Never raises.
+        """
+        try:
+            await db.increment_daily_stat(acct_name, "server_messages")
+        except Exception as exc:
+            logger.warning("%s: server_messages increment failed: %s", acct_name, exc)
 
     async def _read_bounded(self, awaitable):
         """Await a broker read with a hard time bound (#12).
@@ -1264,7 +1270,7 @@ class Executor:
         Idempotent (skips an already-set TP) and failure-isolated. See
         ``_run_orphan_protective_tp_watchdog`` for the locked constraints.
         """
-        pip_size = GOLD_PIP_SIZE if symbol.upper() == "XAUUSD" else 0.0001
+        pip_size = pip_size_for_symbol(symbol)
 
         comment = row.get("mt5_comment") or f"telebot-{row['signal_id']}-s1"
         position = positions_by_comment.get(comment)
@@ -1313,6 +1319,7 @@ class Executor:
                 acct_name, ticket, exc,
             )
             return
+        await self._count_server_message(acct_name)
 
         if getattr(modify_result, "success", False):
             logger.info(
@@ -1452,7 +1459,7 @@ class Executor:
         # jittered at open; the persisted targets are the raw plan) so we only
         # act on GROSS deviation — chiefly an unset level (0.0) that should be
         # protected. Respect the symbol's pip size for the cushion.
-        pip_size = GOLD_PIP_SIZE if symbol.upper() == "XAUUSD" else 0.0001
+        pip_size = pip_size_for_symbol(symbol)
         jitter = float(getattr(self.cfg, "sl_tp_jitter_points", 0.0) or 0.0)
         tol = jitter + 2 * pip_size
 
@@ -1530,6 +1537,7 @@ class Executor:
                 acct_name, ticket, exc,
             )
             return
+        await self._count_server_message(acct_name)
 
         if getattr(result, "success", False):
             was_escalated = stage_id in self._sltp_verify_notified
@@ -1605,7 +1613,7 @@ class Executor:
         # XAUUSD is the only v1.1-supported symbol.
         # Source of truth: risk_calculator.GOLD_PIP_SIZE (parity with
         # trade_manager._pip_size_for_symbol; gold pip = $0.10 = 10 points).
-        pip_size = GOLD_PIP_SIZE if symbol.upper() == "XAUUSD" else 0.0001
+        pip_size = pip_size_for_symbol(symbol)
         default_sl_pips = getattr(snapshot, "default_sl_pips", 100) if snapshot else 100
         if direction_str == "buy":
             entry_price = band_high

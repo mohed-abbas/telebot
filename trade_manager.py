@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
@@ -38,6 +39,7 @@ from risk_calculator import (
     calculate_sl_distance,
     calculate_sl_with_jitter,
     calculate_tp_with_jitter,
+    pip_size_for_symbol,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,11 +148,10 @@ def stage_lot_size(snapshot: AccountSettings) -> float:
 
 
 def _pip_size_for_symbol(symbol: str) -> float:
-    """Pip size by symbol — v1.1 only supports XAUUSD (1 pip = $0.10)."""
-    if symbol.upper() == "XAUUSD":
-        return 0.10
-    logger.warning("Non-XAUUSD symbol %s — defaulting pip size to 0.0001", symbol)
-    return 0.0001
+    """Pip size by symbol (delegates to risk_calculator.pip_size_for_symbol)."""
+    if symbol.upper() != "XAUUSD":
+        logger.warning("Non-XAUUSD symbol %s — defaulting pip size to 0.0001", symbol)
+    return pip_size_for_symbol(symbol)
 
 
 # ── Effective-settings lookup (Phase 5, D-27) ───────────────────────
@@ -252,6 +253,9 @@ def is_bot_position(pos) -> bool:
     return getattr(pos, "comment", "").startswith("telebot")
 
 
+_RETCODE_NO_CHANGES_RE = re.compile(r"(?<!\d)10025(?!\d)")
+
+
 def is_no_change_result(result: OrderResult) -> bool:
     """True if a modify was a no-op, not a failure.
 
@@ -260,7 +264,9 @@ def is_no_change_result(result: OrderResult) -> bool:
     text in OrderResult.error, so match on the numeric code / message.
     """
     err = (result.error or "").lower()
-    return "10025" in err or "no change" in err
+    # Whole-number match only: a bare substring test also matched ticket
+    # numbers such as 41002537 (review 2026-10-16, batch 4).
+    return bool(_RETCODE_NO_CHANGES_RE.search(err)) or "no change" in err
 
 
 class TradeManager:
@@ -1533,7 +1539,16 @@ class TradeManager:
                 result = await connector.close_position(pos.ticket)
                 await db.increment_daily_stat(acct_name, "server_messages")
                 if result.success:
-                    await db.update_trade_close(pos.ticket, acct_name, pos.profit, result.price)
+                    # pos.profit is the FLOATING profit at close time, not the
+                    # deal's. Backends with deal history park the trade in
+                    # 'closing' (history sync writes the real P&L, the 600 s
+                    # fallback uses this estimate); dry-run finalizes at once.
+                    if getattr(connector, "supports_history_sync", True):
+                        await db.mark_trade_closing(
+                            pos.ticket, acct_name, result.price, pnl_estimate=pos.profit,
+                        )
+                    else:
+                        await db.update_trade_close(pos.ticket, acct_name, pos.profit, result.price)
                     results.append({
                         "account": acct_name, "status": "closed",
                         "ticket": pos.ticket, "pnl": pos.profit,

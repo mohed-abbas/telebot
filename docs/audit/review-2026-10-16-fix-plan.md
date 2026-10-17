@@ -11,7 +11,7 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 | 1 — quick wins | #4, #2, #8, #14, #15 | **Done** — `7de138f` (+ follow-up commit for test cleanup and constants) |
 | 2 — stage tracking | #1, #5, #10, #6, #11 + kill-switch epoch | **Done** — full suite green (511 passed, 0 failed); 22 regression tests in `tests/test_review_batch2_stage_tracking.py` |
 | 3 — harder fixes | #3, #13, #12, #7, #9 | **Done** — full suite green (531 passed, 0 failed); 20 regression tests in `tests/test_review_batch3_bridge_reads_and_closes.py`. #9 needs a deploy of `mt5-rest-server/server.py` to the Windows bridge. |
-| 4 — minor items | ~10 small items | To do |
+| 4 — minor items | ~10 small items | **Done** — full suite green (547 passed, 0 failed); 16 regression tests in `tests/test_review_batch4_minor_items.py`. Left out: shared bridge-payload test helpers (test-only refactor). |
 | Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
 
 ## Working rules for every batch
@@ -258,7 +258,54 @@ POST /positions/{acct}/{ticket}/close
 
 ---
 
-## Batch 4 — minor items
+## Batch 4 — done
+
+Suite after the batch: `547 passed, 8 skipped, 1 xfailed, 0 failed` (was 531). Two existing tests updated: the heartbeat fake connector gained `has_credentials()`, and the connector error-detail test now expects the transport failure text instead of the fixed "REST API request failed".
+
+```
+item                                   fix
+─────────────────────────────────────  ──────────────────────────────────────────────────
+_last_error shared per connector       _request_ex() returns (data, error, outcome_unknown)
+                                       per call; OrderResult.error comes from its own call
+"10025" matches ticket digits          whole-number regex (?<!\d)10025(?!\d)
+sweep re-reads all filled history      NOT EXISTS closed/cancelled trade, newest first,
+                                       LIMIT db.SLTP_SWEEP_MAX_ROWS (500)
+signals lost during startup reconcile  Telegram handler registered BEFORE connect +
+                                       reconcile; trade execution awaits pipeline_ready,
+                                       the Discord relay does not wait
+idempotency JSON-encoded twice         dict handed to the jsonb codec; legacy string rows
+                                       still decoded on replay
+SPA logout leaves CSRF cookies         /api/v2/auth/logout expires session + CSRF cookies
+                                       (same helper as the legacy form /logout)
+drilldown Lots / "0.00 – 0.00"         lots = trades.lot_size (not the risk slice);
+                                       a 0/0 band is reported as None → SPA shows "Market"
+duplicated cascade SQL                 one _cancel_unfilled_stages(status, …) body
+third pip-size helper                  risk_calculator.pip_size_for_symbol(); executor and
+                                       trade_manager delegate
+500 logged twice                       one-line error (the ASGI server logs the traceback)
+CSRF retry resends stale body token    http.ts swaps csrf_token in a JSON body before the
+                                       single retry (frontend build needed on deploy)
+int() on SESSION_ABSOLUTE_MAX_AGE      dashboard._env_int(): garbage/zero → default + warning
+sweep modifies not in server_messages  Executor._count_server_message after sweep /
+                                       orphan-TP modifies
+three has_credentials copies           MT5Connector.has_credentials()
+backlog: pending limit trades          mark_pending_filled → trades 'opened';
+                                       mark_pending_cancelled → trades 'cancelled'
+backlog: CLOSE records floating P&L    _handle_close → mark_trade_closing(estimate) on a
+                                       bridge with deal history; dry-run finalizes at once
+```
+
+`db.cancel_stage_for_kill_switch()` landed in batch 2 as `cancel_stages_for_kill_switch`. The `unknown` trade status from batch 3 needs no filter change: the history API passes `status` through and the SPA has no status enum.
+
+### Judgment calls to confirm in the end-to-end test
+
+- The startup gate holds trade execution (not the Discord relay) until MT5 connect + reconcile finish. A signal that arrives in that window executes a few seconds late instead of being dropped; the stale-signal check still applies when it runs.
+- Bot-side CLOSE now shows `closing` for up to 600 s on a real bridge (same path as the dashboard close). Dry-run is unchanged.
+- `mark_pending_cancelled` writes trades `status='cancelled'` — a new value for the trades table, excluded from analytics like `pending` was.
+
+---
+
+## Batch 4 — minor items (original plan)
 
 - `RestApiConnector._last_error` is shared per connector — a concurrent call can pick up another call's error (`mt5_connector.py` ~591).
 - The `"10025"` substring check also matches ticket numbers such as 41002537 (`trade_manager.py` ~235).

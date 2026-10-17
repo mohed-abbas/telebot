@@ -53,6 +53,23 @@ function isCsrfError(status: number, body: unknown): boolean {
 }
 
 /**
+ * If `init.body` is a JSON object with a `csrf_token` field, return a copy of `init`
+ * whose body carries `token` instead. Any other body is returned untouched.
+ */
+export function withFreshCsrfBody(init: RequestInit, token: string): RequestInit {
+  if (typeof init.body !== "string") return init;
+  try {
+    const parsed = JSON.parse(init.body) as unknown;
+    if (parsed && typeof parsed === "object" && "csrf_token" in (parsed as object)) {
+      return { ...init, body: JSON.stringify({ ...(parsed as object), csrf_token: token }) };
+    }
+  } catch {
+    /* not JSON — leave the body alone */
+  }
+  return init;
+}
+
+/**
  * The one fetch path for the whole SPA. Echoes CSRF on mutations, sends the
  * same-origin session cookie, and throws HttpError on non-2xx.
  *
@@ -89,8 +106,11 @@ export async function api(
     // cookie once (GET /auth/csrf is not a mutation, so it cannot itself CSRF-403) and retry the
     // original request exactly once; if it still fails, propagate.
     if (!_retried && isCsrfError(res.status, body)) {
-      await seedCsrf();
-      return api(path, init, true);
+      const token = await seedCsrf();
+      // The login body carries its own csrf_token copy (double submit). Re-sending the
+      // original body would pair the OLD body token with the NEW cookie and fail again,
+      // so swap it before the one retry (review 2026-10-16, batch 4).
+      return api(path, withFreshCsrfBody(init, token), true);
     }
     throw new HttpError(res.status, body);
   }
