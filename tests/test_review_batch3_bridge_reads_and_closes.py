@@ -439,23 +439,28 @@ async def test_maintenance_passes_run_outside_the_fire_tick(
 ):
     called: list[str] = []
 
-    async def record_sweep():
+    # Batch 5: the passes take the shared per-tick positions cache (#6).
+    async def record_sweep(positions_cache=None):
         called.append("sweep")
 
-    async def record_orphan():
+    async def record_orphan(positions_cache=None):
         called.append("orphan")
 
-    async def record_stale():
+    async def record_stale(positions_cache=None):
         called.append("stale")
+
+    async def record_fills(positions_cache=None):
+        called.append("fills")
     monkeypatch.setattr(executor, "_run_stage_sltp_verification_sweep", record_sweep)
     monkeypatch.setattr(executor, "_run_orphan_protective_tp_watchdog", record_orphan)
     monkeypatch.setattr(executor, "_reconcile_stale_firing_stages", record_stale)
+    monkeypatch.setattr(executor, "_detect_pending_order_fills", record_fills)
 
     await _insert_stage(signal_id=seeded_signal, stage_number=2)
     await executor._zone_watch_tick()
     assert called == [], "the fire tick no longer waits on the maintenance passes"
 
-    # One iteration of the maintenance loop runs all three.
+    # One iteration of the maintenance loop runs all four.
     real_sleep = asyncio.sleep
     ticks = {"n": 0}
 
@@ -469,7 +474,7 @@ async def test_maintenance_passes_run_outside_the_fire_tick(
         await executor._stage_maintenance_loop()
     except asyncio.CancelledError:
         pass
-    assert called == ["orphan", "sweep", "stale"]
+    assert called == ["orphan", "sweep", "stale", "fills"]
 
 
 async def test_start_runs_the_maintenance_loop_as_its_own_task(executor):
@@ -547,6 +552,9 @@ async def test_stale_closing_trade_is_finalized_from_the_estimate(
             stale,
         )
 
+    # Batch 5: the fallback only acts once the history window up to the
+    # watermark has been read; stand in for one completed sync.
+    executor._last_history_sync[ACCT] = datetime.now(timezone.utc)
     finalized = await executor._finalize_stale_closing_trades(ACCT)
     assert finalized == 1
 

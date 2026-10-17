@@ -412,18 +412,28 @@ async def mark_trade_closing(
     return _rows_affected(tag) == 1
 
 
-async def get_stale_closing_trades(account_name: str, older_than_seconds: int) -> list[dict]:
+async def get_stale_closing_trades(
+    account_name: str, older_than_seconds: int, *, read_until: datetime | None = None,
+) -> list[dict]:
     """Review 2026-10-16 #7 — 'closing' rows whose close was submitted more than
     the given age ago and that history-sync still has not finalized (the broker
-    never produced a matching deal, or the backend has no deal history)."""
+    never produced a matching deal, or the backend has no deal history).
+
+    Batch 5: `read_until` is the history-sync watermark. Only rows whose close
+    was submitted before the window the broker has actually been read for
+    qualify, so a history outage can never finalize the estimate ahead of the
+    real deal. A row parked in 'closing' before close_time was recorded ages
+    from its open timestamp instead.
+    """
     rows = await _pool.fetch(
         """SELECT id, ticket, account_name, symbol, pnl, close_price, close_time
            FROM trades
            WHERE account_name=$1 AND status='closing'
-             AND close_time IS NOT NULL
-             AND close_time < NOW() - make_interval(secs => $2)""",
+             AND COALESCE(close_time, timestamp) < NOW() - make_interval(secs => $2)
+             AND ($3::timestamptz IS NULL OR COALESCE(close_time, timestamp) < $3)""",
         account_name,
         float(older_than_seconds),
+        read_until,
     )
     return [dict(r) for r in rows]
 
@@ -534,6 +544,17 @@ async def log_pending_order(
     )
 
 
+async def get_active_pending_orders(account_name: str) -> list[dict]:
+    """Resting limit orders of one account (status='active'), oldest first.
+    Batch 5: the maintenance loop checks these against live positions so a fill
+    is recorded when it happens, not at expiry."""
+    rows = await _pool.fetch(
+        "SELECT * FROM pending_orders WHERE account_name=$1 AND status='active' ORDER BY id",
+        account_name,
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_expired_pending_orders() -> list[dict]:
     """Get pending orders that have passed their expiry time."""
     now = datetime.now(timezone.utc)
@@ -563,11 +584,13 @@ async def mark_pending_cancelled(order_id: int) -> None:
     )
 
 
-async def mark_pending_filled(ticket: int, account_name: str) -> None:
+async def mark_pending_filled(ticket: int, account_name: str) -> bool:
     """Mark a pending order as filled; the trades row becomes 'opened' so the
-    history sync reconciles its eventual close like any market fill."""
-    await _pool.execute(
-        "UPDATE pending_orders SET status='filled' WHERE ticket=$1 AND account_name=$2",
+    history sync reconciles its eventual close like any market fill.
+    Returns True when a pending_orders row moved (idempotent otherwise)."""
+    tag = await _pool.execute(
+        "UPDATE pending_orders SET status='filled' "
+        "WHERE ticket=$1 AND account_name=$2 AND status='active'",
         ticket,
         account_name,
     )
@@ -576,6 +599,7 @@ async def mark_pending_filled(ticket: int, account_name: str) -> None:
         ticket,
         account_name,
     )
+    return _rows_affected(tag) >= 1
 
 
 # ── Query helpers (dashboard) ────────────────────────────────────────
@@ -1194,7 +1218,7 @@ async def update_stage_status(
     if status == "filled":
         tag = await _pool.execute(
             """UPDATE staged_entries
-               SET status=$1, mt5_ticket=$2, filled_at=NOW()
+               SET status=$1, mt5_ticket=$2, filled_at=NOW(), cancelled_reason=NULL
                WHERE id=$3 AND status = ANY($4::text[])""",
             status, mt5_ticket, stage_id, list(allowed),
         )
@@ -1446,8 +1470,7 @@ async def drain_staged_entries_for_kill_switch() -> int:
         "SET status='cancelled_by_kill_switch', cancelled_reason='kill_switch' "
         "WHERE status IN ('awaiting_followup','awaiting_zone')"
     )
-    # asyncpg returns command tag like 'UPDATE 7'
-    return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+    return _rows_affected(result)
 
 
 async def cancel_stages_for_kill_switch(stage_ids: list[int]) -> int:

@@ -1717,6 +1717,30 @@ class TradeManager:
 
     # ── PENDING ORDER CLEANUP ───────────────────────────────────────────
 
+    async def _closed_deal_for_pending_order(
+        self, connector, order: dict,
+    ) -> tuple[float, float] | None:
+        """(pnl, close_price) of the position this pending order opened, from the
+        broker's OUT deals since the order was placed; None when there is no
+        such deal or the backend has no deal history. ConnectorReadError
+        propagates (the caller retries next cycle)."""
+        if not getattr(connector, "supports_history_sync", True):
+            return None
+        since = order.get("created_at")
+        if not isinstance(since, datetime):
+            lookback = int(getattr(self.cfg, "history_sync_lookback_hours", 24) or 24)
+            since = datetime.now(timezone.utc) - timedelta(hours=lookback)
+        elif since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        deals = await connector.get_history_deals(since)
+        outs = sorted(
+            (d for d in deals if d.position_id == order["ticket"] and d.entry in (1, 3)),
+            key=lambda d: d.time,
+        )
+        if not outs:
+            return None
+        return sum(d.profit for d in outs), outs[-1].price
+
     async def cleanup_expired_orders(self) -> list[dict]:
         """Cancel expired pending orders. Checks MT5 state first (REL-04)."""
         expired = await db.get_expired_pending_orders()
@@ -1775,6 +1799,36 @@ class TradeManager:
                         "ticket": order["ticket"], "symbol": order["symbol"],
                     })
                 else:
+                    # Batch 5 (review #2): "no order and no position" also
+                    # describes a limit that filled AND closed before expiry.
+                    # On a bridge with deal history, look for the OUT deal
+                    # before calling it cancelled.
+                    try:
+                        closed = await self._closed_deal_for_pending_order(connector, order)
+                    except ConnectorReadError as exc:
+                        logger.warning(
+                            "%s: history read failed; expired order #%d retried next cycle: %s",
+                            acct_name, order["ticket"], exc,
+                        )
+                        results.append({
+                            "account": acct_name, "status": "read_failed",
+                            "ticket": order["ticket"], "symbol": order["symbol"],
+                        })
+                        continue
+                    if closed is not None:
+                        pnl, close_price = closed
+                        await db.mark_pending_filled(order["ticket"], acct_name)
+                        await db.update_trade_close(order["ticket"], acct_name, pnl, close_price)
+                        logger.info(
+                            "%s: Expired order #%d filled and closed on MT5 before expiry "
+                            "— pnl=%+.2f close=%.2f",
+                            acct_name, order["ticket"], pnl, close_price,
+                        )
+                        results.append({
+                            "account": acct_name, "status": "filled_closed",
+                            "ticket": order["ticket"], "symbol": order["symbol"],
+                        })
+                        continue
                     await db.mark_pending_cancelled(order["id"])
                     logger.info(
                         "%s: Expired order #%d already removed from MT5",

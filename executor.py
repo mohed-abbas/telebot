@@ -30,6 +30,21 @@ from trade_manager import (
 logger = logging.getLogger(__name__)
 
 
+# Stage-1 statuses that still may lead to a fill. Anything else that is not
+# 'filled' is terminal-unfilled ('failed', 'capped', 'abandoned_reconnect',
+# 'cancelled_*'): its bands have no anchor and are cancelled (D-16, batch 5).
+_STAGE1_PENDING_STATUSES = ("awaiting_followup", "awaiting_zone", "firing")
+
+
+def _index_by_comment(positions) -> dict:
+    """{mt5_comment: Position} for the positions that carry a comment."""
+    return {
+        getattr(p, "comment", ""): p
+        for p in positions
+        if getattr(p, "comment", "")
+    }
+
+
 def _as_utc(dt: datetime) -> datetime:
     """asyncpg returns tz-aware TIMESTAMPTZ; tolerate naive values from fakes."""
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
@@ -363,9 +378,8 @@ class Executor:
         max_age_minutes = getattr(self.cfg, "signal_max_age_minutes", 30)
         now = datetime.now(timezone.utc)
         mode = "startup" if startup else "reconnect"
-        # signal_id -> True (stage 1 filled & live) / False (filled & gone) /
-        # None (stage 1 not filled, or no stage-1 row). Memoized per sync.
-        stage1_state: dict[int, bool | None] = {}
+        # signal_id -> (_stage1_state(), stage-1 status). Memoized per sync.
+        stage1_state: dict[int, tuple[str, str | None]] = {}
 
         reconciled = abandoned = cancelled = failed = 0
         for stage in pending:
@@ -410,14 +424,22 @@ class Executor:
                 # D-16: a band lives exactly as long as its stage 1 does.
                 if sid not in stage1_state:
                     stage1_state[sid] = await self._stage1_state(sid, acct_name, by_comment)
-                s1 = stage1_state[sid]
-                if s1 is True:
+                state, s1_status = stage1_state[sid]
+                if state == "live":
                     continue  # sequence alive — keep the band armed
-                if s1 is False:
+                if state in ("gone", "terminal"):
+                    # Batch 5: a stage 1 that ended without filling ('failed',
+                    # 'capped', ...) anchors nothing either — its bands used to
+                    # stay armed across a restart and fire standalone later.
+                    if state == "gone":
+                        reason = f"stage1_closed_at_{mode}"
+                        why = "filled but no longer on MT5"
+                    else:
+                        reason = f"stage1_{s1_status}_at_{mode}"
+                        why = f"ended '{s1_status}' without filling"
                     try:
                         n = await db.cancel_unfilled_stages_for_signal(
-                            sid, reason=f"stage1_closed_at_{mode}",
-                            account_name=acct_name,
+                            sid, reason=reason, account_name=acct_name,
                         )
                     except Exception as exc:
                         logger.error(
@@ -428,8 +450,8 @@ class Executor:
                     if n:
                         cancelled += n
                         logger.info(
-                            "%s: %s — stage 1 of signal_id=%d filled but no longer on "
-                            "MT5; cancelled %d armed band(s)", acct_name, mode, sid, n,
+                            "%s: %s — stage 1 of signal_id=%d %s; cancelled %d armed band(s)",
+                            acct_name, mode, sid, why, n,
                         )
                     continue
 
@@ -521,23 +543,55 @@ class Executor:
 
     async def _stage1_state(
         self, signal_id: int, acct_name: str, positions_by_comment: dict,
-    ) -> bool | None:
-        """True = stage 1 filled and live on MT5; False = filled but gone;
-        None = not filled (awaiting/firing/terminal) or no stage-1 row."""
+    ) -> tuple[str, str | None]:
+        """(state, stage-1 status) for the D-16 cascade decisions.
+
+          live      stage 1 is on MT5                      -> keep the bands
+          gone      stage 1 filled, no longer on MT5       -> cascade
+          terminal  stage 1 ended without filling          -> cascade (batch 5)
+          pending   stage 1 may still fill                 -> keep
+          none      no stage-1 row / lookup failed         -> keep
+        """
         if f"telebot-{signal_id}-s1" in positions_by_comment:
-            return True
+            return "live", "filled"
         try:
             row = await db.get_stage_by_signal_account(signal_id, acct_name, 1)
         except Exception as exc:
             logger.warning(
                 "%s: stage-1 lookup failed signal_id=%d: %s", acct_name, signal_id, exc,
             )
-            return None
-        if row and row.get("status") == "filled":
-            return False
-        return None
+            return "none", None
+        if not row:
+            return "none", None
+        status = row.get("status")
+        if status == "filled":
+            return "gone", status
+        if status in _STAGE1_PENDING_STATUSES:
+            return "pending", status
+        return "terminal", status
 
-    async def _reconcile_stale_firing_stages(self) -> None:
+    async def _positions_snapshot(
+        self, acct_name: str, connector, cache: dict | None, *, what: str,
+    ):
+        """One bounded get_positions per account per maintenance tick (#6).
+
+        The sub-passes share `cache` ({account: positions | None}); None records
+        a failed read so the other passes skip the account this tick instead of
+        paying the read timeout again. Without a cache (direct calls) it is a
+        plain bounded read.
+        """
+        if cache is not None and acct_name in cache:
+            return cache[acct_name]
+        try:
+            positions = await self._read_bounded(connector.get_positions())
+        except Exception as exc:
+            logger.warning("%s: %s get_positions failed: %s", acct_name, what, exc)
+            positions = None
+        if cache is not None:
+            cache[acct_name] = positions
+        return positions
+
+    async def _reconcile_stale_firing_stages(self, positions_cache: dict | None = None) -> None:
         """Review 2026-10-16 #10 — finalize 'firing' rows whose claim went stale.
 
         The claim owner normally writes 'filled'/'failed' within seconds. If it
@@ -566,18 +620,12 @@ class Executor:
             connector = self.tm.connectors.get(acct_name)
             if connector is None or not getattr(connector, "connected", True):
                 continue
-            try:
-                positions = await self._read_bounded(connector.get_positions())
-            except Exception as exc:
-                logger.warning(
-                    "%s: stale-firing reconcile get_positions failed: %s", acct_name, exc,
-                )
+            positions = await self._positions_snapshot(
+                acct_name, connector, positions_cache, what="stale-firing reconcile",
+            )
+            if positions is None:
                 continue
-            by_comment = {
-                getattr(p, "comment", ""): p
-                for p in positions
-                if getattr(p, "comment", "")
-            }
+            by_comment = _index_by_comment(positions)
             now = datetime.now(timezone.utc)
             for stage in stages:
                 match = by_comment.get(stage["mt5_comment"])
@@ -775,14 +823,6 @@ class Executor:
                 "%s: history-sync DB lookup failed: %s", acct_name, exc,
             )
             return
-        # #7: dashboard closes the broker never confirmed (no deal seen, or a
-        # backend without deal history) are finalized from the pre-close
-        # estimate after _CLOSING_STALE_SECONDS instead of staying 'closing'.
-        try:
-            await self._finalize_stale_closing_trades(acct_name)
-        except Exception as exc:
-            logger.warning("%s: stale-closing fallback failed: %s", acct_name, exc)
-
         if not open_tickets:
             # Nothing to reconcile; still advance the watermark so the next
             # iteration doesn't re-scan a growing window.
@@ -797,13 +837,9 @@ class Executor:
             )
             return
 
-        if not deals:
-            self._last_history_sync[acct_name] = now
-            return
-
         max_deal_time = 0.0
         reconciled = 0
-        for deal in deals:
+        for deal in deals or ():
             if deal.time > max_deal_time:
                 max_deal_time = deal.time
             if deal.entry != self._DEAL_ENTRY_OUT:
@@ -837,6 +873,17 @@ class Executor:
         else:
             self._last_history_sync[acct_name] = now
 
+        # #7: dashboard closes the broker never confirmed (no deal seen, or a
+        # backend without deal history) are finalized from the pre-close
+        # estimate after _CLOSING_STALE_SECONDS instead of staying 'closing'.
+        # Batch 5: only now — the deal window up to the new watermark has been
+        # read, so a history outage can no longer finalize the estimate ahead
+        # of the real deal (a failed fetch returned above without reaching this).
+        try:
+            await self._finalize_stale_closing_trades(acct_name)
+        except Exception as exc:
+            logger.warning("%s: stale-closing fallback failed: %s", acct_name, exc)
+
         if reconciled:
             logger.info(
                 "%s: history-sync — %d trade(s) reconciled this tick",
@@ -849,8 +896,17 @@ class Executor:
         The close was accepted by the broker (mark_trade_closing only runs on a
         successful close_position), so the position is gone; what is missing is
         the authoritative deal. Use the floating profit recorded at submit time.
+
+        Batch 5: a row qualifies only once the history watermark has moved past
+        its close_time — the broker was asked for that window and had no deal.
+        Before the first successful history read nothing is finalized.
         """
-        rows = await db.get_stale_closing_trades(acct_name, self._CLOSING_STALE_SECONDS)
+        read_until = self._last_history_sync.get(acct_name)
+        if read_until is None:
+            return 0
+        rows = await db.get_stale_closing_trades(
+            acct_name, self._CLOSING_STALE_SECONDS, read_until=read_until,
+        )
         finalized = 0
         for row in rows:
             pnl = float(row.get("pnl") or 0.0)
@@ -1057,51 +1113,51 @@ class Executor:
                 if not stage_is_in_zone_at_arrival(band, bid, ask, direction):
                     continue
 
-                # D-16 — stage-1-exit cascade. Verify stage 1 is still live on MT5.
+                # D-16 — stage-1-exit cascade. Verify stage 1 is still live on MT5
+                # (batch 5: or still able to fill; a stage 1 that ended
+                # 'failed'/'capped'/... anchors nothing and its bands go too).
                 cache_key = (acct_name, signal_id)
                 if cache_key not in stage1_live_cache:
-                    stage1_comment = f"telebot-{signal_id}-s1"
-                    if stage1_comment in positions_by_comment:
-                        # Stage 1 is live on MT5 — fire is OK.
-                        stage1_live_cache[cache_key] = True
-                    else:
-                        # Stage 1 not on MT5. Was it ever filled?
+                    state, s1_status = await self._stage1_state(
+                        signal_id, acct_name, positions_by_comment,
+                    )
+                    if state in ("gone", "terminal"):
+                        reason = "stage1_closed" if state == "gone" else f"stage1_{s1_status}"
                         try:
-                            stage1_row = await db.get_stage_by_comment(stage1_comment)
-                        except Exception:
-                            stage1_row = None
-                        if stage1_row and stage1_row.get("status") == "filled":
-                            # Stage 1 filled-then-exited. Cascade.
-                            try:
-                                cancelled = await db.cancel_unfilled_stages_for_signal(
-                                    signal_id, reason="stage1_closed",
-                                    account_name=acct_name,
-                                )
-                            except Exception as exc:
-                                logger.error(
-                                    "%s: D-16 cascade DB write failed: %s",
-                                    acct_name, exc,
-                                )
-                                cancelled = 0
-                            logger.info(
-                                "%s: D-16 cascade — stage 1 of signal_id=%d no longer "
-                                "open on MT5; cancelled %d unfilled stage(s)",
-                                acct_name, signal_id, cancelled,
+                            cancelled = await db.cancel_unfilled_stages_for_signal(
+                                signal_id, reason=reason, account_name=acct_name,
                             )
-                            stage1_live_cache[cache_key] = False
-                            continue
-                        else:
-                            # Stage 1 still awaiting (or no row) — do NOT cascade.
-                            # Fire is OK as far as D-16 is concerned.
-                            stage1_live_cache[cache_key] = True
+                        except Exception as exc:
+                            logger.error(
+                                "%s: D-16 cascade DB write failed: %s",
+                                acct_name, exc,
+                            )
+                            cancelled = 0
+                        logger.info(
+                            "%s: D-16 cascade — stage 1 of signal_id=%d %s; "
+                            "cancelled %d unfilled stage(s)",
+                            acct_name, signal_id,
+                            "no longer open on MT5" if state == "gone"
+                            else f"ended '{s1_status}' without filling",
+                            cancelled,
+                        )
+                        stage1_live_cache[cache_key] = False
+                        continue
+                    # Live, or still awaiting (or no row) — fire is OK as far as
+                    # D-16 is concerned.
+                    stage1_live_cache[cache_key] = True
 
                 if not stage1_live_cache[cache_key]:
                     continue  # already cascaded this tick
 
-                # D-14 pre-flight re-check
+                # D-14 pre-flight re-check (#12: bounded like every other read
+                # in this tick — one hanging bridge must not stall other fires)
                 try:
-                    price2 = await connector.get_price(symbol)
-                except Exception:
+                    price2 = await self._read_bounded(connector.get_price(symbol))
+                except Exception as exc:
+                    logger.warning(
+                        "%s: zone-watch pre-flight get_price failed: %s", acct_name, exc,
+                    )
                     continue
                 if price2 is None:
                     continue
@@ -1154,33 +1210,92 @@ class Executor:
                 await asyncio.sleep(10)
                 if self._trading_paused:
                     continue
-                # EXEC2-05 (D2-09..D2-12) — orphan protective-TP watchdog. An
-                # orphan stage-1 has no awaiting_zone siblings by definition, so
-                # it never appears in the band-fire pass; at correlation-window
-                # expiry it gets an R=1:1 protective TP off its default-SL distance.
-                try:
-                    await self._run_orphan_protective_tp_watchdog()
-                except Exception as exc:
-                    logger.warning("Stage maintenance: orphan-TP watchdog error: %s", exc)
-                # §1.3(b) — post-trade SL/TP verification sweep: every filled
-                # stage's live position carries the intended SL/TP; re-issues a
-                # bounded modify when it deviated.
-                try:
-                    await self._run_stage_sltp_verification_sweep()
-                except Exception as exc:
-                    logger.warning("Stage maintenance: SL/TP verification sweep error: %s", exc)
-                # #10/#3 — rows stranded in 'firing' are finalized from the live
-                # positions (see _reconcile_stale_firing_stages).
-                try:
-                    await self._reconcile_stale_firing_stages()
-                except Exception as exc:
-                    logger.warning("Stage maintenance: stale-firing reconcile error: %s", exc)
+                await self._stage_maintenance_tick()
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error("Stage maintenance loop error: %s", exc)
 
-    async def _run_orphan_protective_tp_watchdog(self) -> None:
+    async def _stage_maintenance_tick(self) -> None:
+        """One maintenance pass; the sub-passes share one positions read per
+        account (#6 — this used to be three or four reads per account per tick).
+
+          orphan-TP watchdog     EXEC2-05 (D2-09..D2-12): an orphan stage-1 has
+                                 no awaiting_zone siblings, so it never appears
+                                 in the band-fire pass; at correlation-window
+                                 expiry it gets an R=1:1 protective TP.
+          SL/TP sweep            §1.3(b): every filled stage's live position
+                                 carries the intended SL/TP; bounded re-modify.
+          stale-firing reconcile #10/#3: rows stranded in 'firing' are finalized
+                                 from the live positions.
+          pending-fill check     batch 5: a limit order whose position appeared
+                                 becomes an 'opened' trade now, not at expiry.
+        """
+        positions_cache: dict[str, list | None] = {}
+        passes = (
+            ("orphan-TP watchdog", self._run_orphan_protective_tp_watchdog),
+            ("SL/TP verification sweep", self._run_stage_sltp_verification_sweep),
+            ("stale-firing reconcile", self._reconcile_stale_firing_stages),
+            ("pending-fill check", self._detect_pending_order_fills),
+        )
+        for label, run_pass in passes:
+            try:
+                await run_pass(positions_cache=positions_cache)
+            except Exception as exc:
+                logger.warning("Stage maintenance: %s error: %s", label, exc)
+
+    async def _detect_pending_order_fills(self, positions_cache: dict | None = None) -> int:
+        """Batch 5 (review #1/#2) — record limit-order fills when they happen.
+
+        MT5 gives the position the ticket of the order that opened it. The trades
+        row of a limit order used to stay 'pending' until cleanup_expired_orders
+        ran at expiry (or the bot restarted); in between, a dashboard close or a
+        broker-side close of that position was never recorded, because
+        mark_trade_closing and the history sync only consider 'opened'/'closing'
+        rows. Every maintenance tick now matches each account's active
+        pending_orders against the positions snapshot. Returns the fill count.
+        """
+        filled = 0
+        for acct_name, connector in list(self.tm.connectors.items()):
+            if acct_name in self._reconnecting:
+                continue
+            if connector is None or not getattr(connector, "connected", True):
+                continue
+            try:
+                orders = await db.get_active_pending_orders(acct_name)
+            except Exception as exc:
+                logger.warning("%s: pending-fill check DB lookup failed: %s", acct_name, exc)
+                continue
+            if not orders:
+                continue
+            positions = await self._positions_snapshot(
+                acct_name, connector, positions_cache, what="pending-fill check",
+            )
+            if positions is None:
+                continue
+            by_ticket = {getattr(p, "ticket", None): p for p in positions}
+            for order in orders:
+                pos = by_ticket.get(order["ticket"])
+                if pos is None:
+                    continue
+                try:
+                    moved = await db.mark_pending_filled(order["ticket"], acct_name)
+                except Exception as exc:
+                    logger.error(
+                        "%s: mark_pending_filled #%d failed: %s", acct_name, order["ticket"], exc,
+                    )
+                    continue
+                if moved:
+                    filled += 1
+                    logger.info(
+                        "%s: limit order #%d filled on MT5 (%s %s %.2f @ %.2f) -> trade opened",
+                        acct_name, order["ticket"], order.get("symbol", ""),
+                        getattr(pos, "direction", ""), float(getattr(pos, "volume", 0.0) or 0.0),
+                        float(getattr(pos, "open_price", 0.0) or 0.0),
+                    )
+        return filled
+
+    async def _run_orphan_protective_tp_watchdog(self, positions_cache: dict | None = None) -> None:
         """EXEC2-05 (D2-09..D2-12) — protective-TP watchdog for orphan stage-1.
 
         An orphan text-only position (stage 1 filled at market with a default
@@ -1235,19 +1350,12 @@ class Executor:
             if connector is None or not getattr(connector, "connected", True):
                 continue  # #12: a disconnected bridge is the heartbeat's job
 
-            try:
-                positions = await self._read_bounded(connector.get_positions())
-            except Exception as exc:
-                logger.warning(
-                    "%s: orphan-TP get_positions failed: %s", acct_name, exc,
-                )
+            positions = await self._positions_snapshot(
+                acct_name, connector, positions_cache, what="orphan-TP",
+            )
+            if positions is None:
                 continue
-
-            positions_by_comment = {
-                getattr(p, "comment", ""): p
-                for p in positions
-                if getattr(p, "comment", "")
-            }
+            positions_by_comment = _index_by_comment(positions)
 
             for row in rows:
                 await self._attach_one_orphan_protective_tp(
@@ -1352,7 +1460,7 @@ class Executor:
                 acct_name, ticket, getattr(modify_result, "error", "unknown"),
             )
 
-    async def _run_stage_sltp_verification_sweep(self) -> None:
+    async def _run_stage_sltp_verification_sweep(self, positions_cache: dict | None = None) -> None:
         """§1.3(b) — confirm filled positions actually carry their SL/TP.
 
         For every FILLED stage that persisted an authoritative SL/TP
@@ -1395,19 +1503,12 @@ class Executor:
             if connector is None or not getattr(connector, "connected", True):
                 continue  # #12: a disconnected bridge is the heartbeat's job
 
-            try:
-                positions = await self._read_bounded(connector.get_positions())
-            except Exception as exc:
-                logger.warning(
-                    "%s: SL/TP sweep get_positions failed: %s", acct_name, exc,
-                )
+            positions = await self._positions_snapshot(
+                acct_name, connector, positions_cache, what="SL/TP sweep",
+            )
+            if positions is None:
                 continue
-
-            positions_by_comment = {
-                getattr(p, "comment", ""): p
-                for p in positions
-                if getattr(p, "comment", "")
-            }
+            positions_by_comment = _index_by_comment(positions)
 
             for stage in stages:
                 await self._verify_one_stage_sltp(

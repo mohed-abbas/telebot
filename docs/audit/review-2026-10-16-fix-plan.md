@@ -12,6 +12,7 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 | 2 — stage tracking | #1, #5, #10, #6, #11 + kill-switch epoch | **Done** — full suite green (511 passed, 0 failed); 22 regression tests in `tests/test_review_batch2_stage_tracking.py` |
 | 3 — harder fixes | #3, #13, #12, #7, #9 | **Done** — full suite green (531 passed, 0 failed); 20 regression tests in `tests/test_review_batch3_bridge_reads_and_closes.py`. #9 needs a deploy of `mt5-rest-server/server.py` to the Windows bridge. |
 | 4 — minor items | ~10 small items | **Done** — full suite green (547 passed, 0 failed); 16 regression tests in `tests/test_review_batch4_minor_items.py`. Left out: shared bridge-payload test helpers (test-only refactor). |
+| 5 — review follow-up | 9 findings of the 2026-10-17 `/code-review high` of batches 1–4 | **Done** — full suite green (563 passed, 0 failed); 16 regression tests in `tests/test_review_batch5_review_findings.py` |
 | Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
 
 ## Working rules for every batch
@@ -302,6 +303,67 @@ backlog: CLOSE records floating P&L    _handle_close → mark_trade_closing(esti
 - The startup gate holds trade execution (not the Discord relay) until MT5 connect + reconcile finish. A signal that arrives in that window executes a few seconds late instead of being dropped; the stale-signal check still applies when it runs.
 - Bot-side CLOSE now shows `closing` for up to 600 s on a real bridge (same path as the dashboard close). Dry-run is unchanged.
 - `mark_pending_cancelled` writes trades `status='cancelled'` — a new value for the trades table, excluded from analytics like `pending` was.
+
+---
+
+## Batch 5 — done (review follow-up)
+
+The user-run `/code-review high` of batches 1–4 (2026-10-17) returned nine findings; this batch closes all of them. Suite after the batch: `563 passed, 8 skipped, 1 xfailed, 0 failed` (was 547). Two batch-3 tests adjusted: the stale-closing fallback test now sets a history watermark first, and the maintenance-loop test's pass stubs accept the shared positions cache and expect the fourth pass.
+
+```
+#  finding                                   fix
+─  ────────────────────────────────────────  ─────────────────────────────────────────────────
+1  mark_trade_closing skips 'pending' rows →  limit fills are detected every maintenance tick
+   dashboard close of a filled limit is lost  (_detect_pending_order_fills: active pending_orders
+                                              vs. positions by ticket → mark_pending_filled);
+                                              the row is 'opened' long before any close
+2  pending→cancelled also hits "filled and    cleanup_expired_orders: no order + no position on a
+   closed before expiry"                      bridge with deal history → look for the OUT deal
+                                              (_closed_deal_for_pending_order) → trade 'closed'
+                                              with broker P&L (result status filled_closed);
+                                              read failure → retried next cycle; no deal → cancelled
+3  stale-closing fallback ran before the      fallback runs AFTER the deals fetch and only for rows
+   deals fetch, on wall clock                 whose close_time < history watermark
+                                              (get_stale_closing_trades(read_until=…)); a failed
+                                              fetch never reaches it; no watermark → nothing final
+8  pre-batch 'closing' rows (close_time NULL) COALESCE(close_time, timestamp) in the age predicate
+   never picked up
+4  D-14 pre-flight get_price unbounded        _read_bounded like every other read in the tick
+5  bands kept armed when stage 1 ended        _stage1_state → (live|gone|terminal|pending|none,
+   failed/capped/abandoned                    status); startup/reconnect reconcile AND the zone-
+                                              watch D-16 check cascade on 'terminal' with reason
+                                              stage1_<status>[_at_<mode>] (status stays
+                                              cancelled_stage1_closed — no new SPA status)
+6  3 get_positions per account per tick       _stage_maintenance_tick(): one bounded read per
+                                              account shared by the four passes via positions_cache
+                                              (a failed read is cached as None → skipped once)
+7  'filled' kept cancelled_reason=            update_stage_status filled branch sets
+   outcome_unknown                            cancelled_reason=NULL
+9  drain hand-parsed the command tag          _rows_affected(result)
+```
+
+```
+limit order life cycle (after batch 5)
+
+ place ──► trades 'pending' + pending_orders 'active'
+             │
+             ├─ position with the order's ticket appears ──► maintenance tick (≤10 s)
+             │                                                mark_pending_filled → trades 'opened'
+             │                                                  └─ close (dashboard / bot / broker)
+             │                                                     → 'closing' → history sync → 'closed'
+             ├─ expiry, order still resting ──► cancel_pending → trades 'cancelled'
+             ├─ expiry, no order, position ──► mark_pending_filled (unchanged)
+             └─ expiry, no order, no position
+                     ├─ OUT deal found  ──► 'closed' with broker P&L   (new)
+                     ├─ history unreadable ──► retry next cycle         (new)
+                     └─ no deal / dry-run ──► trades 'cancelled'
+```
+
+### Judgment calls to confirm in the end-to-end test
+
+- A 'closing' row is finalized from its estimate only after the history sync has read past its close_time (plus the 600 s age). While the bridge cannot serve deal history, rows stay `closing` — that is the intended behaviour, not a stall.
+- Bands whose stage 1 ended `failed` / `capped` / `abandoned_reconnect` / `cancelled_*` are now cancelled with status `cancelled_stage1_closed` and reason `stage1_<status>` (zone watch) or `stage1_<status>_at_startup|reconnect` (reconcile). Previously such bands fired standalone later.
+- The pending-fill check uses the same 10 s cadence as the other maintenance passes; a fill that closes again within one tick is caught at expiry via the OUT-deal probe, which is one extra `GET /history/deals` per such order.
 
 ---
 
