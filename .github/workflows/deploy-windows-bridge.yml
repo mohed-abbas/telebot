@@ -1,0 +1,68 @@
+name: Deploy — Windows (MT5 bridge)
+
+# MANUAL ONLY, and only needed when mt5-rest-server/** actually changed (rare).
+# Runs on a self-hosted GitHub runner INSTALLED ON THE WINDOWS VPS (label
+# "mt5-bridge"), so it needs no inbound SSH/WinRM. It pulls into the existing
+# clone, reinstalls the bridge venv deps, and restarts the NSSM services.
+#
+# WARNING: restarting the bridge briefly drops the MT5 connection. Only run this
+# with the book in a safe state. The bot side re-syncs on the next reconcile.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm the book is in a safe state'
+        required: true
+        default: ''
+
+jobs:
+  deploy:
+    name: Deploy MT5 bridge
+    if: ${{ github.event.inputs.confirm == 'deploy' }}
+    runs-on: [self-hosted, windows, mt5-bridge]
+    environment: production
+
+    steps:
+      - name: Pull, install, restart services
+        shell: pwsh
+        env:
+          # Path to the git clone on the Windows VPS (repo Variable MT5_REPO_DIR).
+          REPO_DIR: ${{ vars.MT5_REPO_DIR }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = if ($env:REPO_DIR) { $env:REPO_DIR } else { 'C:\Apps\telebot' }
+          $bridge = Join-Path $repo 'mt5-rest-server'
+          $python = Join-Path $bridge 'venv\Scripts\python.exe'
+
+          if (-not (Test-Path $repo))   { throw "Repo dir not found: $repo (set the MT5_REPO_DIR variable)" }
+          if (-not (Test-Path $python)) { throw "Bridge venv python not found: $python" }
+
+          # git is not always on PATH on the Windows VPS (see docs/windows-vps-setup.md).
+          $git = 'git'
+          if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+            $git = 'C:\Program Files\Git\bin\git.exe'
+            if (-not (Test-Path $git)) { throw "git not found on PATH or at $git" }
+          }
+
+          Write-Host "==> Pulling latest main in $repo"
+          Set-Location $repo
+          & $git fetch --prune origin
+          & $git checkout main
+          & $git pull --ff-only origin main
+
+          Write-Host "==> Reinstalling bridge dependencies"
+          & $python -m pip install -r (Join-Path $bridge 'requirements.txt')
+
+          Write-Host "==> Restarting mt5-rest-* services"
+          $services = Get-Service -Name 'mt5-rest-*' -ErrorAction Stop
+          if (-not $services) { throw "No mt5-rest-* services found — is the bridge installed via install-service.ps1?" }
+          $services | Restart-Service -Force
+          Start-Sleep -Seconds 6
+
+          Write-Host "==> Verifying services are Running"
+          foreach ($s in (Get-Service -Name 'mt5-rest-*')) {
+            if ($s.Status -ne 'Running') { throw "Service $($s.Name) is $($s.Status)" }
+            Write-Host "   $($s.Name): $($s.Status)"
+          }
+          Write-Host "==> Deploy complete"

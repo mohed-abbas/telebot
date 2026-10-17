@@ -1,0 +1,54 @@
+name: CI
+
+# Runs the full test suite on every push and PR to main so you always know
+# whether main is green BEFORE you manually trigger a deploy. Does not deploy.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Python 3.12)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: telebot
+          POSTGRES_PASSWORD: telebot_dev
+          POSTGRES_DB: telebot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U telebot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        env:
+          # conftest reads TEST_DATABASE_URL; point it at the postgres service.
+          TEST_DATABASE_URL: postgresql://telebot:telebot_dev@localhost:5432/telebot
+        run: pytest -q

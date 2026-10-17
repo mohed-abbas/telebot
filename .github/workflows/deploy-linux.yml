@@ -1,0 +1,66 @@
+name: Deploy — Linux (bot + dashboard)
+
+# MANUAL ONLY. Trigger this from the Actions tab (or `gh workflow run`) when you
+# know no trade is in a sensitive state. SSHes into the VPS, pulls, rebuilds the
+# telebot container, and health-checks /health. Shared postgres/nginx are never
+# touched. Deploying the bot restarts the Telegram listener for a few seconds;
+# the bot reconnects and reconciles broker state on startup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm the book is in a safe state'
+        required: true
+        default: ''
+
+jobs:
+  deploy:
+    name: Deploy to Linux VPS
+    if: ${{ github.event.inputs.confirm == 'deploy' }}
+    runs-on: ubuntu-latest
+    # Optional extra gate: configure a "production" Environment with required
+    # reviewers in repo Settings to require an approval click before this runs.
+    environment: production
+
+    steps:
+      - name: Deploy over SSH
+        env:
+          SSH_KEY: ${{ secrets.LINUX_SSH_KEY }}
+          SSH_HOST: ${{ secrets.LINUX_SSH_HOST }}
+          SSH_USER: ${{ secrets.LINUX_SSH_USER }}
+          APP_DIR: ${{ vars.LINUX_APP_DIR }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_deploy \
+            "$SSH_USER@$SSH_HOST" \
+            "APP_DIR='${APP_DIR:-/home/murx/apps/telebot}' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$APP_DIR"
+          echo "==> Pulling latest main"
+          git fetch --prune origin
+          git checkout main
+          git pull --ff-only origin main
+
+          echo "==> Rebuilding + restarting telebot"
+          docker compose up -d --build telebot
+
+          echo "==> Health check (/health, in-container — no host port is published)"
+          ok=0
+          for i in $(seq 1 20); do
+            if docker compose exec -T telebot python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status==200 else 1)" 2>/dev/null; then
+              echo "health OK (attempt $i)"; ok=1; break
+            fi
+            sleep 3
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "!! health check FAILED — recent logs:"
+            docker compose logs --tail=80 telebot
+            exit 1
+          fi
+          echo "==> Deploy complete"
+          REMOTE
