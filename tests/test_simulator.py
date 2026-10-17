@@ -71,7 +71,10 @@ async def test_connect_succeeds(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["data"]["connected"] is True
+    # Same reply shape as mt5-rest-server: the connector checks for "login".
+    assert body["data"]["login"] == 12345678
+    assert body["data"]["server"] == "BrokerServer"
+    assert body["data"]["balance"] == 10000.0
 
 
 # ------------------------------------------------------------------

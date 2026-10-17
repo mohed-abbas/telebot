@@ -1,7 +1,8 @@
 """Unit tests for RestApiConnector — mock HTTP responses via httpx.MockTransport.
 
 Covers:
-- connect() sends correct JSON and sets connected on success
+- connect() sends correct JSON and sets connected on success (bridge-shaped reply)
+- connect() keeps the password so the heartbeat can re-login
 - connect() returns False on server error
 - ping() returns True when alive
 - get_price() returns bid/ask tuple
@@ -57,6 +58,13 @@ def _ok_response(data: dict, status: int = 200) -> httpx.Response:
     )
 
 
+def _connect_ok_response(login: int = 12345, server: str = "TestServer") -> httpx.Response:
+    """What mt5-rest-server's /api/v1/connect returns on success."""
+    return _ok_response({
+        "login": login, "server": server, "balance": 10000.0, "equity": 10000.0,
+    })
+
+
 def _error_response(code: str, message: str, status: int = 400) -> httpx.Response:
     return httpx.Response(
         status,
@@ -88,7 +96,7 @@ class TestConnect:
         def handler(request: httpx.Request) -> httpx.Response:
             captured["body"] = json.loads(request.content)
             captured["path"] = request.url.path
-            return _ok_response({"connected": True})
+            return _connect_ok_response()
 
         conn = _inject_transport(_make_connector(), handler)
         result = await conn.connect()
@@ -100,14 +108,17 @@ class TestConnect:
         assert captured["body"]["password"] == "secret"
         assert captured["body"]["server"] == "TestServer"
 
-    async def test_connect_clears_password_on_success(self):
+    async def test_connect_keeps_password_for_reconnect(self):
+        """The heartbeat re-logins through connect() with the stored password, so
+        it must survive a successful connect (clearing it caused the permanent
+        offline state fixed in d14c16d)."""
         def handler(request: httpx.Request) -> httpx.Response:
-            return _ok_response({"connected": True})
+            return _connect_ok_response()
 
         conn = _inject_transport(_make_connector(), handler)
-        assert conn.password == "secret"
         await conn.connect()
-        assert conn.password == ""
+        assert conn.password == "secret"
+        assert await conn.connect() is True
 
     # ───────────────────────────────────────────────────────────────
     # 2. CONNECT — server error

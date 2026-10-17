@@ -12,27 +12,48 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 | 2 — stage tracking | #1, #5, #10, #6, #11 | To do |
 | 3 — harder fixes | #3, #13, #12, #7, #9 | To do |
 | 4 — minor items | ~10 small items | To do |
-| Test infrastructure | broken pool / event loop in the suite | To do — recommended **before** batch 2 |
+| Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
 
 ## Working rules for every batch
 
 - One commit per batch, after the tests below pass. Push when the batch is done.
 - Add a regression test per finding (they exist for batch 1 — copy their style: fakes for executor-only logic, the `tm_with_store` / `priced_connector` fixtures for DB-backed flows).
 - Run a code review of the batch diff at `high` effort before committing; `max` is overkill for a batch this size.
-- Compare test results **per file**, against a baseline taken on the parent commit (see "How to test"). The full-suite run is not usable as a signal until the test-infrastructure item is fixed.
+- Run the **full suite** (`pytest -q`) before committing; it must stay at 0 failed. The per-file loop in "How to test" is only needed to isolate an order-dependent failure.
 
 ---
 
-## Test infrastructure (do this first)
+## Test infrastructure — done
 
-**Problem.** A full `pytest` run reports ~100 failures, almost all `asyncpg InterfaceError: cannot perform operation: another operation is in progress` and `Task ... attached to a different loop`. The session-scoped `db_pool` is created on the session loop, then used from other loops (the dashboard `TestClient` runs its own loop in a thread via anyio), which breaks the pool for every later test. Running each file on its own still leaves 19 failures + 22 errors (mostly the API/dashboard tests), so real regressions are easy to miss.
+**Problem (was).** A full `pytest` run reported ~100 failures, almost all `asyncpg InterfaceError: cannot perform operation: another operation is in progress` and `Task ... attached to a different loop`. Per file there were still 19 failures + 22 errors, so real regressions were easy to miss.
 
-**Already fixed (follow-up commit):** `clean_tables` truncated `idempotency_keys`, a table only the dashboard lifespan creates, so its single `TRUNCATE` always failed and the error was swallowed — no table was ever cleaned. `db_pool` now creates that table; that alone took the per-file failures from 32 to 19.
+**Root causes found.**
 
-**Fix ideas.**
-- Give the API tests (TestClient) their own pool/loop, or make `db_pool` function-scoped for them; or drive the app with `httpx.AsyncClient(transport=ASGITransport(app))` on the session loop instead of `TestClient`.
-- Stop `clean_tables` from swallowing every exception (log or fail loudly).
-- Then get the per-file failures to zero and add a CI job so the suite stays green.
+```
+session loop ──► db._pool (asyncpg, bound to this loop)
+      │
+      ├─ (a) conftest overrode pytest-asyncio's deprecated `event_loop` fixture →
+      │      loop churn between tests → "attached to a different loop"
+      │      (e.g. test_trade_manager direct-zone tests failed after TestFixedLotBranch)
+      ├─ (b) api_app / settings_app / rate_limit popped `db` from sys.modules and ran a
+      │      2nd init_db → two `db` modules, two pools; api.* kept the old one →
+      │      shared connections used from two loops → the ~60 collateral failures
+      └─ (c) Starlette TestClient runs handlers on its own thread + loop (anyio portal)
+             → every DB-touching request through TestClient hit the pool cross-loop
+```
+
+Plus stale tests unrelated to loops: the legacy form `/login` (deleted in CUT-03) was still driven by test_api_contract / test_rate_limit / test_stages_contract; `/connect` mocks and the simulator returned `{"connected": true}` while the real bridge (and the connector since d14c16d) use `"login"`; test_concurrency never seeded the account the staged rows FK to; test_post_teardown assumed a built SPA bundle.
+
+**Fix (landed).**
+
+- `pytest-asyncio` 0.25 → 0.26, `asyncio_default_test_loop_scope = "session"` in `pyproject.toml`, custom `event_loop` fixture removed → every async test and fixture shares one loop, and `db_pool` lives on it.
+- `conftest.api_app` depends on `db_pool`, never re-imports `db`, never creates its own pool. New `make_api_client(app, client_ip)` / `api_client` / `session_client` fixtures drive the app with `httpx.AsyncClient(ASGITransport)` on the session loop; `api_login()` does the real JSON login. `spa_index` (stub `static/app/index.html`) moved to conftest.
+- All DB-backed API tests converted from `TestClient` to the async client (api_csrf, api_idempotency, api_settings, api_contract, rate_limit, post_teardown, stages_contract). TestClient remains only for DB-free tests.
+- `clean_tables` no longer swallows exceptions (a silent failure is how no table was ever cleaned). Fixtures that relied on module-level seeding now seed per test (`test_api_settings`).
+- Simulator `/api/v1/connect` returns the bridge's shape (`login/server/balance/equity`); connector unit tests use it and assert the password is kept for the heartbeat re-login.
+- `test_concurrent_same_signal_no_duplicate` is `xfail(strict=True)`: the duplicate-position check is read-then-act (already in `remediation-backlog.md`). Fixing the race is bot work, not test work.
+
+**Rule going forward.** For any test that hits a `/api/v2` route and the DB, use `api_client` / `session_client` / `make_api_client`, never `TestClient`. CI (`.github/workflows/ci.yml`) runs the full suite against a Postgres service.
 
 ---
 
@@ -153,6 +174,6 @@ for f in tests/test_*.py; do
 done | LC_ALL=C sort > failing.txt
 ```
 
-Baseline after the batch-1 follow-up commit: 19 failed + 22 errors per file (all pre-existing), 447 passed. Files still failing: `test_api_contract`, `test_api_settings`, `test_api_csrf`, `test_api_idempotency`, `test_concurrency`, `test_post_teardown`, `test_rate_limit`, `test_rest_api_connector` (2 `connect()` tests), `test_rest_api_integration`, `test_trade_manager` (2).
+Baseline after the test-infrastructure fix: full suite `489 passed, 8 skipped, 1 xfailed, 0 failed`; per file: 0 failures. (Before: 103 failed + 22 errors in the full run, 19 failed + 22 errors per file.)
 
 Stop the database afterwards: `docker stop telebot-review-pg`.

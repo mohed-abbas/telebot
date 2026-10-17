@@ -101,7 +101,7 @@ class TestStageLotSize:
 # them for the D2-14 stale tests).
 
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+# Async tests run on the session loop by default (pyproject asyncio_default_test_loop_scope).
 
 
 # ── STAGE-02: text-only opens stage 1 with default SL ────────────────

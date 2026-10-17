@@ -19,47 +19,8 @@ bespoke app construction. Does NOT touch bot core / api/ modules.
 """
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
-
-# Minimal SPA shell — the `id="root"` div is the React mount point asserted on.
-_STUB_INDEX_HTML = (
-    "<!doctype html><html><head><title>spa</title></head>"
-    '<body><div id="root"></div></body></html>'
-)
-
-
-@pytest.fixture(scope="module")
-def spa_index(api_app):  # noqa: ARG001 — depends on api_app so app import order matches
-    """Ensure static/app/index.html exists so the /app mount has a shell to serve.
-
-    Writes a stub index.html into the repo's static/app/ directory if absent (the
-    real one is produced by `cd frontend && npm run build` in CI/Docker). Leaves a
-    pre-existing real bundle untouched and only removes a stub it created itself.
-    """
-    base_dir = Path(__file__).resolve().parent.parent
-    app_dir = base_dir / "static" / "app"
-    index = app_dir / "index.html"
-
-    created_dir = not app_dir.exists()
-    created_file = not index.exists()
-    if created_file:
-        app_dir.mkdir(parents=True, exist_ok=True)
-        index.write_text(_STUB_INDEX_HTML, encoding="utf-8")
-
-    yield index
-
-    # Clean up only artifacts this fixture created (never a real build output).
-    if created_file and index.exists():
-        index.unlink()
-    if created_dir and app_dir.exists():
-        try:
-            app_dir.rmdir()
-        except OSError:
-            pass  # non-empty (a real build landed) — leave it alone
-
 
 @pytest.fixture
 def client(api_app, spa_index):  # noqa: ARG001 — spa_index ensures the shell exists

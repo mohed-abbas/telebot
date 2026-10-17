@@ -15,8 +15,8 @@ Two layers:
   1. A pure-unit test on `_enrich_active(enriched, raw)` — no DB; proves the raw
      `created_at` is plumbed through to `started_at`/`started_at_display` and the
      existing band/price `_display` twins survive. This is the RED→GREEN driver.
-  2. A live HTTP contract test reusing the `api_app`/`session_client`/`_login`
-     fixture pattern — skips cleanly when dev Postgres is absent (conftest skips).
+  2. A live HTTP contract test on the conftest `session_client` (httpx on the
+     session loop, real JSON login) — skips cleanly when Postgres is absent.
 """
 
 from __future__ import annotations
@@ -25,15 +25,11 @@ import re
 from datetime import datetime, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 
 import api.stages as stages
 
 # ISO-8601 with an explicit UTC offset (matches api/formatting.py ts_machine).
 _ISO_OFFSET = re.compile(r"T.*([+-]\d{2}:\d{2}|Z)$")
-
-KNOWN_PASSWORD = "correct-horse-battery-staple"
-
 
 # ---------------------------------------------------------------------------
 # Layer 1 — pure unit test on _enrich_active (no DB). The RED→GREEN driver.
@@ -93,52 +89,10 @@ def test_enrich_active_no_created_at_emits_null_started_at():
 # Layer 2 — live HTTP contract (skips when dev Postgres is absent).
 # ---------------------------------------------------------------------------
 
-def _login(client: TestClient) -> None:
-    """Drive the form-login route to seed a real session cookie on `client`."""
-    r = client.get("/login")
-    assert r.status_code == 200, r.status_code
-    m = re.search(r'name="csrf_token"\s+value="([^"]+)"', r.text)
-    assert m, "csrf_token missing from /login form"
-    r = client.post(
-        "/login",
-        data={"password": KNOWN_PASSWORD, "csrf_token": m.group(1), "next_path": "/overview"},
-        follow_redirects=False,
-    )
-    assert r.status_code == 303, r.status_code
-    assert "telebot_session" in client.cookies
-
-
-@pytest.fixture
-def session_client(api_app):
-    """A TestClient carrying a real logged-in session (form-login round-trip).
-
-    The module-scoped api_app fixture drives db.init_db through
-    asyncio.get_event_loop().run_until_complete; on a host where the dev event
-    loop is already bound, asyncpg raises InterfaceError ("another operation is
-    in progress") during the first DB-touching request. That is an environment
-    limitation (the suite is designed to run under the project's Python 3.12
-    test container), not a contract failure — skip cleanly so `-x` stays green.
-    """
-    client = TestClient(api_app)
-    try:
-        _login(client)
-    except Exception as exc:  # pragma: no cover - env-dependent
-        pytest.skip(f"api_app DB fixture unavailable in this env: {exc!r}")
-    return client
-
-
-def test_stages_payload_shape_and_started_at(session_client):
+async def test_stages_payload_shape_and_started_at(session_client):
     """GET /api/v2/stages → 200 with active+resolved; active rows carry started_at."""
-    try:
-        r = session_client.get("/api/v2/stages")
-    except Exception as exc:  # pragma: no cover - env-dependent
-        # The module-scoped api_app fixture drives db.init_db via
-        # asyncio.get_event_loop().run_until_complete; on a host where the dev
-        # event loop is already bound (asyncpg "another operation is in
-        # progress" / InterfaceError) this is an environment limitation, not a
-        # contract failure. The deterministic _enrich_active unit tests above
-        # cover the started_at plumbing; skip the live layer here.
-        pytest.skip(f"api_app DB fixture unavailable in this env: {exc!r}")
+    c, _ = session_client
+    r = await c.get("/api/v2/stages")
     assert r.status_code == 200, f"{r.status_code}: {r.text[:200]}"
     body = r.json()
     assert isinstance(body, dict)

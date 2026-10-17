@@ -19,19 +19,6 @@ TEST_DATABASE_URL = os.environ.get(
 
 
 @pytest.fixture(scope="session")
-def event_loop():
-    """Session-scoped event loop so all async fixtures and tests share one loop.
-
-    Required because the db_pool fixture is session-scoped: the asyncpg pool
-    is bound to the loop where it was created, so every test that touches the
-    DB (directly or via handle_signal) must run on that same loop.
-    """
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture(scope="session")
 async def db_pool():
     """Session-scoped asyncpg pool -- created once, shared across all tests."""
     try:
@@ -53,21 +40,20 @@ async def db_pool():
 @pytest.fixture(autouse=True)
 async def clean_tables():
     """Truncate all tables between tests for isolation.
-    Skips silently when no DB pool is available (non-DB tests).
+
+    No-op when no pool exists (DB-free tests). Any other failure is raised:
+    a silent TRUNCATE failure once hid the fact that no table was ever cleaned.
     """
     if db._pool is None:
         yield
         return
-    try:
-        async with db._pool.acquire() as conn:
-            await conn.execute(
-                "TRUNCATE signals, trades, daily_stats, pending_orders, "
-                "settings_audit, account_settings, accounts, failed_login_attempts, "
-                "staged_entries, signal_daily_counted, idempotency_keys "
-                "RESTART IDENTITY CASCADE"
-            )
-    except Exception:
-        pass  # DB not available, skip cleanup
+    async with db._pool.acquire() as conn:
+        await conn.execute(
+            "TRUNCATE signals, trades, daily_stats, pending_orders, "
+            "settings_audit, account_settings, accounts, failed_login_attempts, "
+            "staged_entries, signal_daily_counted, idempotency_keys "
+            "RESTART IDENTITY CASCADE"
+        )
     yield
 
 
@@ -114,70 +100,125 @@ def _make_dryrun_executor():
     return types.SimpleNamespace(tm=tm, cfg=cfg)
 
 
-@pytest.fixture(scope="module")
-def api_app():
-    """Module-scoped FastAPI app for /api/v2 tests (Phase 08).
+API_PASSWORD = "correct-horse-battery-staple"
+"""Dashboard password the `api_app` fixture is configured with."""
 
-    Mirrors tests/test_login_flow.py:21-47 — env-inject, sys.modules.pop +
-    importlib re-import so the app binds the test config, init_db with skip on
-    absence, then wire a DryRunConnector-backed executor stub via init_dashboard()
-    so _get_all_positions() returns a deterministic XAUUSD row. Yields dashboard.app.
+
+@pytest.fixture(scope="module")
+def api_app(db_pool):
+    """Module-scoped FastAPI app for /api/v2 tests.
+
+    Env-inject then re-import `config` + `dashboard` so the app binds the test
+    config, and wire a DryRunConnector-backed executor stub via init_dashboard()
+    so _get_all_positions() returns a deterministic XAUUSD row.
+
+    The app uses the SESSION-scoped `db_pool` (one asyncpg pool on the session
+    loop). `db` is deliberately NOT re-imported: a second `db` module with its
+    own pool is what used to split the pool across event loops. Drive the app
+    with the `api_client` fixture (httpx on the session loop), not TestClient —
+    TestClient runs handlers on a separate thread/loop, which asyncpg rejects.
     """
-    import asyncio
     import importlib
 
     from argon2 import PasswordHasher
 
-    known_hash = PasswordHasher().hash("correct-horse-battery-staple")
     env = {
         "TG_API_ID": "1", "TG_API_HASH": "x", "TG_SESSION": "x", "TG_CHAT_IDS": "-1",
         "DISCORD_WEBHOOK_URL": "https://example", "TIMEZONE": "UTC",
         "DATABASE_URL": TEST_DATABASE_URL,
-        "DASHBOARD_PASS_HASH": known_hash,
+        "DASHBOARD_PASS_HASH": PasswordHasher().hash(API_PASSWORD),
         "SESSION_SECRET": "A" * 48,
         "SESSION_COOKIE_SECURE": "false",
     }
     for key in ("DASHBOARD_USER", "DASHBOARD_PASS"):
         os.environ.pop(key, None)
     os.environ.update(env)
-    for mod in ("config", "dashboard", "db"):
+    for mod in ("config", "dashboard"):
         sys.modules.pop(mod, None)
     dashboard = importlib.import_module("dashboard")
-    import db as _db
-    try:
-        asyncio.get_event_loop().run_until_complete(_db.init_db(env["DATABASE_URL"]))
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL not available for api tests: {exc}")
-    # Wire the DryRun-backed executor stub through the real accessor path.
     dashboard.init_dashboard(_make_dryrun_executor(), notifier=None, settings=None)
-    yield dashboard.app
-    try:
-        asyncio.get_event_loop().run_until_complete(_db.close_db())
-    except Exception:
-        pass
+    return dashboard.app
 
 
-@pytest.fixture
-def authed_client(api_app):
-    """A TestClient carrying a logged-in session + telebot_csrf cookie.
+def make_api_client(app, client_ip: str = "127.0.0.1"):
+    """An httpx AsyncClient driving `app` in-process on the CURRENT event loop.
 
-    Plan 02 finalises the JSON auth route; until then the helper seeds the session
-    directly (sets request.session["user"]) and issues a telebot_csrf cookie so
-    Plans 03-05 mutation tests can round-trip the double-submit header. Returns
-    (client, csrf_token).
+    `client_ip` is what `request.client.host` (and so `_client_ip` without
+    TRUST_PROXY) sees — use distinct values to exercise per-IP logic.
     """
-    import secrets as _secrets
+    from httpx import ASGITransport, AsyncClient
 
-    from fastapi.testclient import TestClient
+    transport = ASGITransport(app=app, client=(client_ip, 12345))
+    return AsyncClient(
+        transport=transport, base_url="http://testserver", follow_redirects=False,
+    )
 
-    client = TestClient(api_app)
-    # Seed the session cookie via the SessionMiddleware by exercising a tiny
-    # login shim is not yet available at Wave 0; instead set the session through
-    # a transient route is unnecessary — Plan 02 wires /api/v2/auth/login. For now
-    # expose the csrf cookie so downstream CSRF round-trip tests have a token.
-    csrf = _secrets.token_urlsafe(32)
-    client.cookies.set("telebot_csrf", csrf)
-    return client, csrf
+
+@pytest_asyncio.fixture
+async def api_client(api_app):
+    """Unauthenticated httpx client over `api_app`, sharing the session loop."""
+    async with make_api_client(api_app) as c:
+        yield c
+
+
+async def api_login(client, password: str = API_PASSWORD) -> str:
+    """Drive the real JSON login (GET /auth/csrf, POST /auth/login) on `client`.
+
+    Returns the post-login telebot_csrf token to echo as X-CSRF-Token.
+    """
+    r = await client.get("/api/v2/auth/csrf")
+    assert r.status_code == 200, r.text
+    token = r.json()["csrf_token"]
+    r = await client.post(
+        "/api/v2/auth/login", json={"password": password, "csrf_token": token},
+    )
+    assert r.status_code == 200, r.text
+    assert "telebot_session" in client.cookies
+    return client.cookies.get("telebot_csrf")
+
+
+@pytest_asyncio.fixture
+async def session_client(api_app):
+    """httpx client carrying a real logged-in session; yields (client, csrf)."""
+    async with make_api_client(api_app) as c:
+        token = await api_login(c)
+        yield c, token
+
+
+# Minimal SPA shell — the `id="root"` div is the React mount point asserted on.
+_STUB_INDEX_HTML = (
+    "<!doctype html><html><head><title>spa</title></head>"
+    '<body><div id="root"></div></body></html>'
+)
+
+
+@pytest.fixture(scope="module")
+def spa_index():
+    """Ensure static/app/index.html exists so the /app mount has a shell to serve.
+
+    Writes a stub into the repo's static/app/ if absent (the real one comes from
+    `cd frontend && npm run build`). Leaves a pre-existing real bundle untouched
+    and only removes a stub it created itself.
+    """
+    from pathlib import Path
+
+    app_dir = Path(__file__).resolve().parent.parent / "static" / "app"
+    index = app_dir / "index.html"
+    created_dir = not app_dir.exists()
+    created_file = not index.exists()
+    if created_file:
+        app_dir.mkdir(parents=True, exist_ok=True)
+        index.write_text(_STUB_INDEX_HTML, encoding="utf-8")
+
+    yield index
+
+    if created_file and index.exists():
+        index.unlink()
+    if created_dir and app_dir.exists():
+        try:
+            app_dir.rmdir()
+        except OSError:
+            pass  # non-empty (a real build landed) — leave it alone
 
 
 @pytest_asyncio.fixture

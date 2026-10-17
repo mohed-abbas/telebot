@@ -165,7 +165,13 @@ async def connect(body: ConnectRequest):
     state.connected = True
     state.login = body.login
     state.server = body.server
-    return _ok({"connected": True})
+    # Same shape as mt5-rest-server (the connector checks for "login").
+    return _ok({
+        "login": body.login,
+        "server": body.server,
+        "balance": round(state.balance, 2),
+        "equity": round(state.calculate_equity(_get_price_for_state), 2),
+    })
 
 
 @app.post(f"{PREFIX}/disconnect")
