@@ -9,7 +9,7 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 | Batch | Findings | State |
 |---|---|---|
 | 1 — quick wins | #4, #2, #8, #14, #15 | **Done** — `7de138f` (+ follow-up commit for test cleanup and constants) |
-| 2 — stage tracking | #1, #5, #10, #6, #11 | To do |
+| 2 — stage tracking | #1, #5, #10, #6, #11 + kill-switch epoch | **Done** — full suite green (511 passed, 0 failed); 22 regression tests in `tests/test_review_batch2_stage_tracking.py` |
 | 3 — harder fixes | #3, #13, #12, #7, #9 | To do |
 | 4 — minor items | ~10 small items | To do |
 | Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
@@ -57,7 +57,54 @@ Plus stale tests unrelated to loops: the legacy form `/login` (deleted in CUT-03
 
 ---
 
-## Batch 2 — stage tracking
+## Batch 2 — done
+
+**Model that landed.** A stage row has exactly one writer at a time, and every status write is a compare-and-set.
+
+```
+                 claim_stage_for_firing (CAS, sets firing_at)
+ awaiting_zone ──────────────────────────────────────────► firing  (owned by the claiming coroutine)
+      │                                                      │
+      │ failed / capped / cancelled_* / abandoned_reconnect   │ owner finalizes, always:
+      │ (only from awaiting_*; never over firing/filled)      │   open_order ok   → filled (+ticket)  BEFORE any bookkeeping
+      ▼                                                      │   reject/raise    → failed   (expected_status=('firing',))
+   terminal                                                  │   kill switch     → cancelled_by_kill_switch
+                                                             ▼
+                                                           filled ── never overwritten by a late writer
+
+ stranded 'firing' (owner died / DB write lost)  ──► executor._reconcile_stale_firing_stages (each zone tick, >300 s)
+                                                     position with the comment → filled ; none → failed (never re-armed)
+```
+
+`db.update_stage_status` now takes `expected_status` and returns `True/False`; the default rule per target status is `db._STAGE_TRANSITIONS`. Callers that lose a race leave the row alone (`already_filled` and `claim_lost` results are "no write").
+
+**Reconcile rule** (`executor._sync_positions`, same code for startup and reconnect):
+
+```
+ pending row                               startup                 reconnect
+ ─────────────────────────────────────────  ──────────────────────  ─────────────────────────────
+ MT5 position carries its comment          filled (+ticket)        filled (+ticket)
+ 'firing', no position                     failed (interrupted)    failed once claim > 300 s old
+ band, stage 1 filled & live on MT5        keep armed              keep armed            ◄ was: abandoned after 30 min (#6)
+ band, stage 1 filled & gone               cancelled_stage1_closed cancelled_stage1_closed
+ nothing filled yet ('awaiting_*')         keep armed              abandoned_reconnect after 30 min (D-24, unchanged)
+```
+
+The plan said "keep the age rule for reconnects"; it is kept only for sequences with nothing filled. A live sequence (stage 1 open) had the same bug on a connection drop as on a restart, so the D-16 rule applies to both paths. `bot.py` now runs the startup reconcile *before* `executor.start()`.
+
+**Other pieces.**
+- #1 — `db.update_stage_targets_for_position(account, comment, sl=, tp=)` (COALESCE, filled rows only, stage comments only). Called after a successful MODIFY_SL / MODIFY_TP (`trade_manager._record_stage_level_change`) and after the dashboard levels edit (`api/actions.levels`). The sweep then keeps the new level.
+- #11 — `_handle_correlated_followup` persists the follow-up's SL/TP onto the stage-1 row whenever it is live (`awaiting_zone`/`firing`/`filled`); the broker modify is sent only when a ticket exists, otherwise the sweep aligns the position on its first tick after the fill.
+- Kill-switch epoch — `Executor._kill_switch_epoch` (+1 per `emergency_close`); `TradeManager.handle_signal` records it in a `ContextVar`; `_kill_switch_gate(stage_ids=...)` refuses when the epoch changed even if the operator already resumed, and cancels only the rows the handler owns (no global drain after a resume).
+- Schema: `staged_entries.firing_at TIMESTAMPTZ` (ALTER ... IF NOT EXISTS; nullable, old rows fall back to `created_at`).
+
+**Judgment calls to confirm during the end-to-end test.**
+- A stale `firing` row with no position becomes `failed`, not `awaiting_zone`: the order may have filled and already closed, and re-arming would double the entry. The operator re-sends if it was a missed entry.
+- Post-fill bookkeeping failures (`log_trade`, daily stats) are logged, not raised: the position is open and the stage row already says `filled`.
+
+---
+
+## Batch 2 — stage tracking (original plan)
 
 These all touch how a stage row's `status` / targets stay in step with the broker. They share code (`db.update_stage_status`, `executor._fire_zone_stage`, `trade_manager._execute_open_on_account`), so do them together.
 

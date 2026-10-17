@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Union
@@ -261,6 +262,12 @@ async def _create_tables() -> None:
         """)
         await conn.execute("""
             ALTER TABLE staged_entries ADD COLUMN IF NOT EXISTS signal_tp DOUBLE PRECISION
+        """)
+        # Review 2026-10-16 #10: when the firing claim was taken. A row that is
+        # still 'firing' long after this is a stranded claim (crash / lost
+        # coroutine) and is reconciled by executor._reconcile_stale_firing_stages.
+        await conn.execute("""
+            ALTER TABLE staged_entries ADD COLUMN IF NOT EXISTS firing_at TIMESTAMPTZ
         """)
         await conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_staged_entries_active
@@ -1089,32 +1096,67 @@ async def create_staged_entries(rows: list[dict]) -> list[int]:
     return ids
 
 
+# Review 2026-10-16 #5 — allowed PREVIOUS states per target status. Every status
+# write is a compare-and-set: a row only moves when it is still in one of these.
+# 'firing' is owned by the coroutine that won claim_stage_for_firing; only that
+# owner may move a 'firing' row to 'failed' (it passes expected_status=('firing',)).
+# A terminal row ('filled', any 'cancelled_*', 'failed', 'capped',
+# 'abandoned_reconnect') is never overwritten by a late writer.
+_STAGE_TRANSITIONS: dict[str, tuple[str, ...]] = {
+    "filled": ("awaiting_zone", "firing"),
+    "failed": ("awaiting_zone",),
+    "capped": ("awaiting_zone",),
+    "cancelled_by_kill_switch": ("awaiting_followup", "awaiting_zone", "firing"),
+    "cancelled_stage1_closed": ("awaiting_followup", "awaiting_zone"),
+    "cancelled_target_reached": ("awaiting_followup", "awaiting_zone"),
+    "abandoned_reconnect": ("awaiting_followup", "awaiting_zone", "firing"),
+}
+
+
 async def update_stage_status(
     stage_id: int,
     status: str,
     mt5_ticket: int | None = None,
     cancelled_reason: str | None = None,
-) -> None:
-    """Status mutation; sets filled_at=NOW() when status='filled'."""
+    *,
+    expected_status: tuple[str, ...] | list[str] | None = None,
+) -> bool:
+    """Guarded status mutation; sets filled_at=NOW() when status='filled'.
+
+    The row moves only if its current status is in `expected_status` (default:
+    the _STAGE_TRANSITIONS rule for `status`). Returns True when a row was
+    updated, False when the guard rejected the write (the row already moved on —
+    typically another fire path filled or cancelled it first). Callers that lose
+    the race must leave the row alone; the owner of the newer state finalizes it.
+
+    §4.2 kept: a late/duplicate fill can never resurrect a terminal row.
+    """
+    allowed = tuple(expected_status) if expected_status else _STAGE_TRANSITIONS.get(status)
+    if not allowed:
+        raise ValueError(f"no transition rule for stage status {status!r}")
     if status == "filled":
-        # §4.2: the 'filled' transition is guarded by a status precondition so a
-        # late/duplicate fill can NEVER resurrect a terminal (cancelled/failed/
-        # abandoned) row. Only a row still in the firing lifecycle
-        # ('awaiting_zone' or the transient claim state 'firing') may flip to
-        # 'filled'; otherwise this is a silent no-op (last-writer-wins removed).
-        await _pool.execute(
+        tag = await _pool.execute(
             """UPDATE staged_entries
                SET status=$1, mt5_ticket=$2, filled_at=NOW()
-               WHERE id=$3 AND status IN ('awaiting_zone','firing')""",
-            status, mt5_ticket, stage_id,
+               WHERE id=$3 AND status = ANY($4::text[])""",
+            status, mt5_ticket, stage_id, list(allowed),
         )
     else:
-        await _pool.execute(
+        tag = await _pool.execute(
             """UPDATE staged_entries
                SET status=$1, cancelled_reason=$2
-               WHERE id=$3""",
-            status, cancelled_reason, stage_id,
+               WHERE id=$3 AND status = ANY($4::text[])""",
+            status, cancelled_reason, stage_id, list(allowed),
         )
+    return _rows_affected(tag) == 1
+
+
+def _rows_affected(command_tag) -> int:
+    """asyncpg returns a command tag like 'UPDATE 7'; fakes may return None."""
+    if not isinstance(command_tag, str):
+        return 0
+    parts = command_tag.split()
+    return int(parts[-1]) if parts and parts[-1].isdigit() else 0
 
 
 async def claim_stage_for_firing(stage_id: int) -> int | None:
@@ -1128,7 +1170,7 @@ async def claim_stage_for_firing(stage_id: int) -> int | None:
     order: the duplicate-fire race (2x lot exposure) is closed here, at the DB.
     """
     return await _pool.fetchval(
-        "UPDATE staged_entries SET status='firing' "
+        "UPDATE staged_entries SET status='firing', firing_at=NOW() "
         "WHERE id=$1 AND status='awaiting_zone' RETURNING id",
         stage_id,
     )
@@ -1150,6 +1192,41 @@ async def update_stage_targets(
     )
 
 
+_STAGE_COMMENT_RE = re.compile(r"^telebot-(\d+)-s(\d+)$")
+
+
+def is_stage_comment(comment: str | None) -> bool:
+    """True for the canonical staged-position comment `telebot-<signal_id>-s<n>`."""
+    return bool(comment) and _STAGE_COMMENT_RE.match(comment) is not None
+
+
+async def update_stage_targets_for_position(
+    account_name: str,
+    mt5_comment: str | None,
+    *,
+    sl: float | None = None,
+    tp: float | None = None,
+) -> bool:
+    """Review 2026-10-16 #1 — record an operator/provider SL or TP change on the
+    filled stage row behind a live position, so the post-trade SL/TP sweep
+    treats the NEW level as the target instead of reverting it.
+
+    Only the level(s) passed are overwritten (COALESCE); None keeps the stored
+    target. No-op (False) for non-stage comments (plain 'telebot', manual
+    positions) or when neither level is given.
+    """
+    if not is_stage_comment(mt5_comment) or (sl is None and tp is None):
+        return False
+    tag = await _pool.execute(
+        """UPDATE staged_entries
+           SET signal_sl = COALESCE($1::double precision, signal_sl),
+               signal_tp = COALESCE($2::double precision, signal_tp)
+           WHERE mt5_comment=$3 AND account_name=$4 AND status='filled'""",
+        sl, tp, mt5_comment, account_name,
+    )
+    return _rows_affected(tag) == 1
+
+
 async def get_pending_stages(
     account_name: str | None = None,
     limit: int | None = None,
@@ -1164,7 +1241,7 @@ async def get_pending_stages(
     base_sql = (
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
-        "mt5_comment, mt5_ticket, status, created_at "
+        "mt5_comment, mt5_ticket, status, created_at, firing_at "
         "FROM staged_entries "
         "WHERE status IN ('awaiting_followup','awaiting_zone','firing') "
     )
@@ -1188,6 +1265,23 @@ async def get_active_stages() -> list[dict]:
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
         "mt5_comment, signal_sl, signal_tp "
         "FROM staged_entries WHERE status='awaiting_zone'"
+    )
+    return [dict(r) for r in rows]
+
+
+async def get_stale_firing_stages(older_than_seconds: int) -> list[dict]:
+    """Review 2026-10-16 #10 — 'firing' rows whose claim is older than the given
+    age. A healthy fire leaves 'firing' within seconds (the claim owner writes
+    'filled' or 'failed'); anything older is a stranded claim to reconcile.
+    Pre-migration rows without firing_at fall back to created_at.
+    """
+    rows = await _pool.fetch(
+        "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
+        "mt5_comment, mt5_ticket, status, created_at, firing_at "
+        "FROM staged_entries "
+        "WHERE status='firing' "
+        "AND COALESCE(firing_at, created_at) < NOW() - make_interval(secs => $1)",
+        float(older_than_seconds),
     )
     return [dict(r) for r in rows]
 
@@ -1260,6 +1354,25 @@ async def drain_staged_entries_for_kill_switch() -> int:
     )
     # asyncpg returns command tag like 'UPDATE 7'
     return int(result.split()[-1]) if result.startswith("UPDATE") else 0
+
+
+async def cancel_stages_for_kill_switch(stage_ids: list[int]) -> int:
+    """Terminal-cancel the given rows (D-22) if they are still non-terminal.
+
+    Used by the handler-side kill-switch gate for rows the handler itself
+    inserted or claimed: the global drain in emergency_close cannot see rows
+    inserted after it ran, and must not be re-run once the operator resumed.
+    """
+    if not stage_ids:
+        return 0
+    result = await _pool.execute(
+        "UPDATE staged_entries "
+        "SET status='cancelled_by_kill_switch', cancelled_reason='kill_switch' "
+        "WHERE id = ANY($1::int[]) "
+        "AND status IN ('awaiting_followup','awaiting_zone','firing')",
+        [int(i) for i in stage_ids],
+    )
+    return _rows_affected(result)
 
 
 async def cancel_unfilled_stages_for_signal(

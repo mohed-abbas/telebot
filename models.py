@@ -115,9 +115,10 @@ class StagedEntryRecord:
     snapshot_settings: dict  # JSONB — risk_mode/value/max_stages/default_sl_pips/max_daily_trades
     mt5_comment: str
     mt5_ticket: int | None
-    # 'awaiting_followup' | 'awaiting_zone' | 'filled'
-    # | 'cancelled_by_kill_switch' | 'cancelled_stage1_closed'
+    # 'awaiting_followup' | 'awaiting_zone' | 'firing' (transient claim) | 'filled'
+    # | 'cancelled_by_kill_switch' | 'cancelled_stage1_closed' | 'cancelled_target_reached'
     # | 'failed' | 'capped' | 'abandoned_reconnect'
+    # Transitions are guarded in db.update_stage_status (_STAGE_TRANSITIONS).
     status: str
     created_at: datetime
     filled_at: datetime | None

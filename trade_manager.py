@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextvars import ContextVar
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
-from typing import Callable, NamedTuple
+from typing import Callable, NamedTuple, Sequence
 
 import db
 from models import (
@@ -36,6 +37,17 @@ from risk_calculator import (
 logger = logging.getLogger(__name__)
 
 KILL_SWITCH_REASON = "Trading paused (kill switch)"
+
+# Review 2026-10-16 (batch-1 leftover): the kill-switch epoch a signal handler
+# observed when it started. Set by handle_signal for the duration of the
+# handler; _kill_switch_gate compares it against the executor's current epoch so
+# a handler that was in flight across an emergency_close + quick resume still
+# refuses to submit. Context-local, so concurrent handlers never see each other's
+# value. None outside a handler (zone-watch fires rely on the drain + claim).
+_HANDLER_EPOCH: ContextVar[int | None] = ContextVar("telebot_handler_epoch", default=None)
+
+# Stage statuses that still describe a live sequence member (not terminal).
+_LIVE_STAGE_STATUSES = ("awaiting_followup", "awaiting_zone", "firing", "filled")
 
 
 # ── Phase 6 staged-entry pure helpers (D-11..D-15) ───────────────────
@@ -253,28 +265,68 @@ class TradeManager:
         # Kill-switch probe; the Executor replaces this with a view of its
         # _trading_paused flag. Defaults to "never paused" for standalone use.
         self.is_trading_paused: Callable[[], bool] = lambda: False
+        # Kill-switch epoch probe; the Executor replaces this with a view of the
+        # counter it bumps on every emergency_close. Constant for standalone use.
+        self.kill_switch_epoch: Callable[[], int] = lambda: 0
 
-    async def _kill_switch_gate(self) -> bool:
-        """Return True (and drain armed stages) if the kill switch is active.
+    async def _kill_switch_gate(self, *, stage_ids: Sequence[int] = ()) -> bool:
+        """Return True if the kill switch is active, or fired since this handler began.
 
         A handler can already be past the executor's pause check when the kill
         switch fires, and then insert stage rows after the D-21 drain ran. Call
-        this after inserting stages and right before submitting an order: it
-        re-drains so those rows end 'cancelled_by_kill_switch' (terminal, D-22)
-        instead of firing after resume.
+        this after inserting stages and right before submitting an order:
+
+          * paused              -> re-drain so late rows end 'cancelled_by_kill_switch'
+                                   (terminal, D-22) instead of firing after resume.
+          * fired, then resumed -> the epoch recorded at handler start no longer
+            while in flight        matches: refuse as well. The operator flattened
+                                   the book under this signal; it must not go on as
+                                   if nothing happened. No global drain here (fresh
+                                   signals after the resume are legitimate) — only
+                                   `stage_ids`, the rows this handler owns, are
+                                   cancelled.
         """
-        if not self.is_trading_paused():
+        paused = self.is_trading_paused()
+        started_epoch = _HANDLER_EPOCH.get()
+        fired_since_start = (
+            started_epoch is not None and self.kill_switch_epoch() != started_epoch
+        )
+        if not paused and not fired_since_start:
             return False
-        try:
-            drained = await db.drain_staged_entries_for_kill_switch()
-            if drained:
-                logger.warning("Kill switch active: drained %d late stage(s)", drained)
-        except Exception as exc:
-            logger.error("Kill switch late drain failed: %s", exc)
+        if paused:
+            try:
+                drained = await db.drain_staged_entries_for_kill_switch()
+                if drained:
+                    logger.warning("Kill switch active: drained %d late stage(s)", drained)
+            except Exception as exc:
+                logger.error("Kill switch late drain failed: %s", exc)
+        else:
+            logger.warning(
+                "Kill switch fired while a signal handler was in flight — "
+                "refusing its late submit"
+            )
+        if stage_ids:
+            try:
+                cancelled = await db.cancel_stages_for_kill_switch(list(stage_ids))
+                if cancelled:
+                    logger.warning(
+                        "Kill switch: cancelled %d stage(s) owned by the in-flight handler",
+                        cancelled,
+                    )
+            except Exception as exc:
+                logger.error("Kill switch: cancelling handler-owned stages failed: %s", exc)
         return True
 
     async def handle_signal(self, signal: SignalAction, source_name: str = "") -> list[dict]:
         """Process a parsed signal. Returns list of execution results for notification."""
+        # Record the kill-switch epoch this handler starts under (see _HANDLER_EPOCH).
+        token = _HANDLER_EPOCH.set(self.kill_switch_epoch())
+        try:
+            return await self._dispatch_signal(signal, source_name)
+        finally:
+            _HANDLER_EPOCH.reset(token)
+
+    async def _dispatch_signal(self, signal: SignalAction, source_name: str) -> list[dict]:
         if signal.type == SignalType.OPEN_TEXT_ONLY:
             return await self._handle_text_only_open(signal, source_name=source_name)
         if signal.type == SignalType.OPEN:
@@ -399,7 +451,7 @@ class TradeManager:
                 logger.warning("%s: stage 1 insert failed (idempotency?): %s", acct_name, exc)
                 results.append({"account": acct_name, "status": "skipped", "reason": "duplicate"})
                 continue
-            if await self._kill_switch_gate():
+            if await self._kill_switch_gate(stage_ids=[stage_id]):
                 results.append({"account": acct_name, "status": "skipped", "reason": KILL_SWITCH_REASON})
                 continue
 
@@ -418,9 +470,13 @@ class TradeManager:
                 staged=True, stage_number=1, stage_row_id=stage_id, snapshot=snapshot,
             )
             if result.get("status") == "failed":
+                # Pre-claim failure (no price, D-08 ...): the row is still
+                # 'awaiting_zone'. A post-claim failure was already finalized by
+                # _execute_open_on_account (#5/#10) and this write then no-ops.
                 await db.update_stage_status(
                     stage_id, "failed",
                     cancelled_reason=result.get("reason", "unknown"),
+                    expected_status=("awaiting_zone",),
                 )
             results.append(result)
 
@@ -507,11 +563,18 @@ class TradeManager:
                     "reason": "Stage 1 cancelled by kill switch",
                 })
                 continue
-            if (
-                stage1
-                and stage1.get("status") == "filled"
-                and stage1.get("mt5_ticket")
-            ):
+            # Review 2026-10-16 #11: persist the follow-up's targets onto the
+            # stage-1 row whenever that row is still live (awaiting_zone /
+            # firing / filled) — not only once it is filled. A follow-up that
+            # landed while stage 1 was mid-fire used to skip both steps, so
+            # stage 1 filled with the default SL and TP=0 and nothing ever
+            # aligned it (the sweep saw its row as in sync; the orphan-TP
+            # watchdog skipped it because siblings existed). Now the targets
+            # are written first; the broker modify is sent only when a ticket
+            # exists, otherwise the post-trade SL/TP sweep aligns the position
+            # on its first tick after the fill.
+            stage1_status = stage1.get("status") if stage1 else None
+            if stage1_status in _LIVE_STAGE_STATUSES:
                 new_sl = calculate_sl_with_jitter(
                     signal.sl, self.cfg.sl_tp_jitter_points, signal.direction,
                 )
@@ -541,19 +604,29 @@ class TradeManager:
                         "%s: stage-1 target persist failed — sweep may lack "
                         "targets: %s", acct_name, exc,
                     )
-                try:
-                    modify_result = await connector.modify_position(
-                        stage1["mt5_ticket"], sl=new_sl, tp=new_tp,
+                modify_result: OrderResult | None = None
+                if stage1_status != "filled" or not stage1.get("mt5_ticket"):
+                    logger.info(
+                        "%s: stage 1 of signal %d not filled yet (status=%s) — "
+                        "targets persisted; the SL/TP sweep aligns it after the fill",
+                        acct_name, paired_signal_id, stage1_status,
                     )
-                except Exception as exc:  # never let a connector error abort bands
-                    logger.warning(
-                        "%s: stage-1 align raised — continuing with bands: %s",
-                        acct_name, exc,
-                    )
-                    modify_result = OrderResult(
-                        success=False, ticket=stage1["mt5_ticket"], error=str(exc),
-                    )
-                if modify_result.success:
+                else:
+                    try:
+                        modify_result = await connector.modify_position(
+                            stage1["mt5_ticket"], sl=new_sl, tp=new_tp,
+                        )
+                    except Exception as exc:  # never let a connector error abort bands
+                        logger.warning(
+                            "%s: stage-1 align raised — continuing with bands: %s",
+                            acct_name, exc,
+                        )
+                        modify_result = OrderResult(
+                            success=False, ticket=stage1["mt5_ticket"], error=str(exc),
+                        )
+                if modify_result is None:
+                    pass  # stage 1 not filled yet — targets persisted above
+                elif modify_result.success:
                     logger.info(
                         "%s: stage-1 aligned ticket=%d sl=%.5f tp=%s",
                         acct_name, stage1["mt5_ticket"], new_sl,
@@ -632,7 +705,7 @@ class TradeManager:
                 for b in bands
             ]
             stage_ids = await db.create_staged_entries(rows)
-            if await self._kill_switch_gate():
+            if await self._kill_switch_gate(stage_ids=stage_ids):
                 results.append({"account": acct_name, "status": "skipped", "reason": KILL_SWITCH_REASON})
                 continue
 
@@ -662,9 +735,12 @@ class TradeManager:
                     stage_row_id=stage_id, snapshot=snapshot,
                 )
                 if result.get("status") == "failed":
+                    # Pre-claim failure only; a post-claim failure was already
+                    # finalized by _execute_open_on_account (#5/#10) — no-op then.
                     await db.update_stage_status(
                         stage_id, "failed",
                         cancelled_reason=result.get("reason", "broker_reject"),
+                        expected_status=("awaiting_zone",),
                     )
                 if result.get("status") in ("executed", "filled"):
                     fired_count += 1
@@ -844,7 +920,7 @@ class TradeManager:
                 for b in bands
             ]
             stage_ids = await db.create_staged_entries(rows)
-            if await self._kill_switch_gate():
+            if await self._kill_switch_gate(stage_ids=stage_ids):
                 results.append({"account": acct_name, "status": "skipped", "reason": KILL_SWITCH_REASON})
                 continue
 
@@ -874,9 +950,12 @@ class TradeManager:
                     stage_row_id=stage_id, snapshot=snapshot,
                 )
                 if result.get("status") == "failed":
+                    # Pre-claim failure only; a post-claim failure was already
+                    # finalized by _execute_open_on_account (#5/#10) — no-op then.
                     await db.update_stage_status(
                         stage_id, "failed",
                         cancelled_reason=result.get("reason", "broker_reject"),
+                        expected_status=("awaiting_zone",),
                     )
                 if result.get("status") in ("executed", "filled"):
                     fired_count += 1
@@ -1109,16 +1188,19 @@ class TradeManager:
                 )
                 return {"account": name, "status": "skipped", "reason": "claim_lost"}
 
+        # From here on this coroutine OWNS the row's 'firing' claim (review
+        # 2026-10-16 #5/#10): it is the only writer allowed to move the row out
+        # of 'firing', and it always does — 'cancelled_by_kill_switch' at the
+        # gate, 'filled' the moment open_order succeeds (before any other
+        # bookkeeping), 'failed' on a reject or an exception. Nothing after the
+        # fill may strand the row in 'firing'.
+        owns_row = staged and stage_row_id is not None
+
         # Last kill-switch check before anything is sent to the broker. It sits
         # after the claim so there is no await between it and open_order. The
-        # drain doesn't touch the 'firing' row this path just claimed, so
-        # cancel that one explicitly.
-        if await self._kill_switch_gate():
-            if staged and stage_row_id is not None:
-                await db.update_stage_status(
-                    stage_row_id, "cancelled_by_kill_switch",
-                    cancelled_reason="kill_switch",
-                )
+        # drain doesn't touch the 'firing' row this path just claimed, so the
+        # gate cancels that one explicitly.
+        if await self._kill_switch_gate(stage_ids=[stage_row_id] if owns_row else ()):
             return {"account": name, "status": "skipped", "reason": KILL_SWITCH_REASON}
 
         # ── Execute ─────────────────────────────────────────────────────
@@ -1127,72 +1209,94 @@ class TradeManager:
                 OrderType.MARKET_BUY if signal.direction == Direction.BUY
                 else OrderType.MARKET_SELL
             )
-            result = await connector.open_order(
-                symbol=signal.symbol,
-                order_type=order_type,
-                volume=lot_size,
-                sl=jittered_sl,
-                tp=jittered_tp or 0.0,
-                comment=target_comment,
-            )
         else:
             order_type = (
                 OrderType.BUY_LIMIT if signal.direction == Direction.BUY
                 else OrderType.SELL_LIMIT
             )
-            result = await connector.open_order(
-                symbol=signal.symbol,
-                order_type=order_type,
-                volume=lot_size,
-                price=limit_price,
-                sl=jittered_sl,
-                tp=jittered_tp or 0.0,
-                comment=target_comment,
-            )
-
-        await db.increment_daily_stat(name, "server_messages")
-
-        if result.success:
-            # D-18 — 1 signal = 1 daily slot. For staged path, only increment
-            # trades_count on the first successful fill of this signal_id on this
-            # account (today). Unstaged v1.0 path keeps unconditional increment.
-            if staged:
-                first_fill = await db.mark_signal_counted_today(signal_id, name)
-                if first_fill:
-                    await db.increment_daily_stat(name, "trades_count")
-            else:
-                await db.increment_daily_stat(name, "trades_count")
-            # Populate the staged_entries row with the fill ticket (D-38).
-            if stage_row_id is not None:
-                await db.update_stage_status(stage_row_id, "filled", mt5_ticket=result.ticket)
-            await db.log_trade(
-                signal_id=signal_id,
-                account_name=name,
-                symbol=signal.symbol,
-                direction=signal.direction.value,
-                entry_price=result.price,
-                sl=jittered_sl,
-                tp=jittered_tp or 0.0,
-                lot_size=lot_size,
-                ticket=result.ticket,
-                status="opened" if use_market else "pending",
-                raw_signal=signal.raw_text,
-            )
-
-            # Track limit order expiry
-            if not use_market:
-                expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.cfg.limit_order_expiry_minutes)
-                await db.log_pending_order(
-                    signal_id=signal_id,
-                    account_name=name,
-                    ticket=result.ticket,
+        try:
+            if use_market:
+                result = await connector.open_order(
                     symbol=signal.symbol,
-                    order_type=order_type.value,
+                    order_type=order_type,
+                    volume=lot_size,
+                    sl=jittered_sl,
+                    tp=jittered_tp or 0.0,
+                    comment=target_comment,
+                )
+            else:
+                result = await connector.open_order(
+                    symbol=signal.symbol,
+                    order_type=order_type,
                     volume=lot_size,
                     price=limit_price,
                     sl=jittered_sl,
                     tp=jittered_tp or 0.0,
-                    expires_at=expires_at,
+                    comment=target_comment,
+                )
+        except Exception as exc:
+            if owns_row:
+                await self._finalize_claimed_stage(
+                    stage_row_id, "failed", reason=f"open_order raised: {exc}",
+                )
+            raise
+
+        if result.success:
+            # The position exists on the broker NOW. Record the fill before any
+            # other bookkeeping so a later DB hiccup can never leave a live
+            # position behind a row that still says 'firing' (D-38 + #10).
+            if owns_row:
+                await self._finalize_claimed_stage(
+                    stage_row_id, "filled", ticket=result.ticket,
+                )
+            try:
+                await db.increment_daily_stat(name, "server_messages")
+                # D-18 — 1 signal = 1 daily slot. For staged path, only increment
+                # trades_count on the first successful fill of this signal_id on
+                # this account (today). Unstaged v1.0 path keeps unconditional
+                # increment.
+                if staged:
+                    first_fill = await db.mark_signal_counted_today(signal_id, name)
+                    if first_fill:
+                        await db.increment_daily_stat(name, "trades_count")
+                else:
+                    await db.increment_daily_stat(name, "trades_count")
+                await db.log_trade(
+                    signal_id=signal_id,
+                    account_name=name,
+                    symbol=signal.symbol,
+                    direction=signal.direction.value,
+                    entry_price=result.price,
+                    sl=jittered_sl,
+                    tp=jittered_tp or 0.0,
+                    lot_size=lot_size,
+                    ticket=result.ticket,
+                    status="opened" if use_market else "pending",
+                    raw_signal=signal.raw_text,
+                )
+
+                # Track limit order expiry
+                if not use_market:
+                    expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.cfg.limit_order_expiry_minutes)
+                    await db.log_pending_order(
+                        signal_id=signal_id,
+                        account_name=name,
+                        ticket=result.ticket,
+                        symbol=signal.symbol,
+                        order_type=order_type.value,
+                        volume=lot_size,
+                        price=limit_price,
+                        sl=jittered_sl,
+                        tp=jittered_tp or 0.0,
+                        expires_at=expires_at,
+                    )
+            except Exception as exc:
+                # The order is live and the stage row is already 'filled'; the
+                # audit/stat rows are secondary. Report, never raise — raising
+                # here would make the caller treat a real fill as a failure.
+                logger.error(
+                    "%s: post-fill bookkeeping failed ticket=%s (position is open): %s",
+                    name, result.ticket, exc,
                 )
 
             return {
@@ -1206,20 +1310,80 @@ class TradeManager:
                 "order_type": "market" if use_market else "limit",
             }
         else:
-            await db.log_trade(
-                signal_id=signal_id,
-                account_name=name,
-                symbol=signal.symbol,
-                direction=signal.direction.value,
-                entry_price=0,
-                sl=jittered_sl,
-                tp=jittered_tp or 0.0,
-                lot_size=lot_size,
-                ticket=0,
-                status="failed",
-                raw_signal=signal.raw_text,
-            )
+            if owns_row:
+                await self._finalize_claimed_stage(
+                    stage_row_id, "failed", reason=result.error or "broker_reject",
+                )
+            try:
+                await db.increment_daily_stat(name, "server_messages")
+                await db.log_trade(
+                    signal_id=signal_id,
+                    account_name=name,
+                    symbol=signal.symbol,
+                    direction=signal.direction.value,
+                    entry_price=0,
+                    sl=jittered_sl,
+                    tp=jittered_tp or 0.0,
+                    lot_size=lot_size,
+                    ticket=0,
+                    status="failed",
+                    raw_signal=signal.raw_text,
+                )
+            except Exception as exc:
+                logger.error("%s: failed-order bookkeeping failed: %s", name, exc)
             return {"account": name, "status": "failed", "reason": result.error}
+
+    async def _finalize_claimed_stage(
+        self,
+        stage_row_id: int,
+        status: str,
+        *,
+        reason: str | None = None,
+        ticket: int | None = None,
+    ) -> None:
+        """Move a row THIS coroutine claimed ('firing') to its final state.
+
+        Never raises: a DB failure here must not turn a real fill into a reported
+        failure. A row that could not be written stays 'firing' and is picked up
+        by executor._reconcile_stale_firing_stages (#10).
+        """
+        try:
+            if status == "filled":
+                moved = await db.update_stage_status(
+                    stage_row_id, "filled", mt5_ticket=ticket,
+                )
+            else:
+                moved = await db.update_stage_status(
+                    stage_row_id, status,
+                    cancelled_reason=(reason or "")[:200],
+                    expected_status=("firing",),
+                )
+            if not moved:
+                logger.warning(
+                    "stage row %d was not moved to %s — it already left 'firing'",
+                    stage_row_id, status,
+                )
+        except Exception as exc:
+            logger.error(
+                "stage row %d: %s write failed — left 'firing' for the stale-firing "
+                "reconcile: %s", stage_row_id, status, exc,
+            )
+
+    async def _record_stage_level_change(
+        self, acct_name: str, pos, *, sl: float | None = None, tp: float | None = None,
+    ) -> None:
+        """Review 2026-10-16 #1 — after a live SL/TP edit, store the new level as
+        the stage row's target so the post-trade SL/TP sweep keeps it instead of
+        snapping the position back to the original signal levels."""
+        try:
+            await db.update_stage_targets_for_position(
+                acct_name, getattr(pos, "comment", ""), sl=sl, tp=tp,
+            )
+        except Exception as exc:
+            logger.warning(
+                "%s: stage target update failed ticket=%s — the SL/TP sweep may "
+                "revert this edit: %s", acct_name, getattr(pos, "ticket", "?"), exc,
+            )
 
     def _check_stale(self, signal: SignalAction, current_price: float) -> str | None:
         """Check if the signal is stale (price already past TPs)."""
@@ -1365,6 +1529,7 @@ class TradeManager:
                 result = await connector.modify_position(pos.ticket, sl=new_sl)
                 await db.increment_daily_stat(acct_name, "server_messages")
                 if result.success or is_no_change_result(result):
+                    await self._record_stage_level_change(acct_name, pos, sl=new_sl)
                     results.append({
                         "account": acct_name, "status": "sl_modified",
                         "ticket": pos.ticket, "new_sl": new_sl,
@@ -1408,6 +1573,7 @@ class TradeManager:
                 result = await connector.modify_position(pos.ticket, tp=signal.new_tp)
                 await db.increment_daily_stat(acct_name, "server_messages")
                 if result.success or is_no_change_result(result):
+                    await self._record_stage_level_change(acct_name, pos, tp=signal.new_tp)
                     results.append({
                         "account": acct_name, "status": "tp_modified",
                         "ticket": pos.ticket, "new_tp": signal.new_tp,

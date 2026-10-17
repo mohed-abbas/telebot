@@ -48,10 +48,12 @@ class _FakeExecutor:
     def __init__(self, connectors) -> None:
         self.tm = _FakeTradeManager(connectors)
         self.synced: list[str] = []
+        self.startup_flags: list[bool] = []
         self.fail_for: set[str] = set()
 
-    async def _sync_positions(self, acct_name, connector) -> None:
+    async def _sync_positions(self, acct_name, connector, *, startup=False) -> None:
         self.synced.append(acct_name)
+        self.startup_flags.append(startup)
         if acct_name in self.fail_for:
             raise RuntimeError(f"boom {acct_name}")
 
@@ -66,8 +68,10 @@ async def test_startup_reconcile_runs_only_for_connected_accounts():
 
     await bot._startup_reconcile(executor)
 
-    # Reconcile runs for connected accounts only, via the existing sync method.
+    # Reconcile runs for connected accounts only, via the existing sync method,
+    # in startup mode (review 2026-10-16 #6: no age-based abandon of live bands).
     assert executor.synced == ["acctA", "acctC"]
+    assert executor.startup_flags == [True, True]
 
 
 async def test_startup_reconcile_isolates_per_account_failure():

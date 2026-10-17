@@ -257,7 +257,9 @@ async def _startup_reconcile(executor) -> None:
         if not connector.connected:
             continue
         try:
-            await executor._sync_positions(acct_name, connector)
+            # startup=True: keep armed bands whose sequence is still alive and
+            # fail claims the old process left in 'firing' (review 2026-10-16 #6/#10).
+            await executor._sync_positions(acct_name, connector, startup=True)
         except Exception as exc:
             logger.error("%s: Startup reconcile failed: %s", acct_name, exc)
 
@@ -299,13 +301,15 @@ async def main() -> None:
             if not connected and notifier:
                 await notifier.notify_connection_lost(acct_name, "Initial connection failed")
 
-        # Start background tasks (pending order cleanup)
-        await executor.start()
-
         # Startup reconcile (D-24): after a crash/restart, immediately reconcile
         # phantom 'armed' staged rows and broker positions opened just before the
         # crash instead of waiting for the next disconnect/reconnect cycle.
+        # Runs BEFORE the background loops start so the zone watch never fires
+        # a band the reconcile is about to cancel (review 2026-10-16 #6).
         await _startup_reconcile(executor)
+
+        # Start background tasks (pending order cleanup, heartbeat, zone watch)
+        await executor.start()
 
     group_names = await resolve_group_names(client)
     for chat_id, name in group_names.items():

@@ -30,6 +30,11 @@ from trade_manager import (
 
 logger = logging.getLogger(__name__)
 
+
+def _as_utc(dt: datetime) -> datetime:
+    """asyncpg returns tz-aware TIMESTAMPTZ; tolerate naive values from fakes."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
 # Reasons sent with the CONNECTION LOST notification when a reconnect starts.
 RECONNECT_REASON_PING_FAILED = "Heartbeat failed — reconnecting"
 RECONNECT_REASON_SESSION_LOST = "Session disconnected — reconnecting and resyncing"
@@ -57,6 +62,11 @@ class Executor:
         self.notifier = notifier
         self._price_simulator = price_simulator
         self._trading_paused: bool = False       # Kill switch flag
+        # Bumped on every emergency_close. A signal handler records it when it
+        # starts and refuses to submit if it changed, even if the operator
+        # already resumed (review 2026-10-16, batch-1 leftover).
+        self._kill_switch_epoch: int = 0
+        self.tm.kill_switch_epoch = lambda: self._kill_switch_epoch
         self._reconnecting: set[str] = set()     # Account names currently reconnecting
         self._last_sync: dict[str, float] = {}   # account -> timestamp of last position sync
         self._heartbeat_task: asyncio.Task | None = None
@@ -196,6 +206,7 @@ class Executor:
         temp_tm.settings_store = getattr(self.tm, "settings_store", None)
         temp_tm.correlator = getattr(self.tm, "correlator", None)
         temp_tm.is_trading_paused = self.tm.is_trading_paused
+        temp_tm.kill_switch_epoch = self.tm.kill_switch_epoch
         return await temp_tm.handle_signal(signal, source_name=source_name)
 
     # ── Heartbeat & Reconnect ────────────────────────────────────────
@@ -288,14 +299,37 @@ class Executor:
 
             delay = min(delay * 2, max_delay)
 
-    async def _sync_positions(self, acct_name: str, connector) -> None:
-        """Full position sync from MT5 after reconnect (REL-02 + Phase 6 D-24/D-25).
+    # Review 2026-10-16 #10: a healthy fire leaves 'firing' within seconds. A
+    # claim older than this with no position behind it is stranded (crash, lost
+    # coroutine) and is finalized by _reconcile_stale_firing_stages.
+    _FIRING_STALE_SECONDS = 300
 
-        D-24 reconcile: for every pending staged_entries row on this account,
-        mark `filled` when a matching `comment` is present on MT5, or
-        `abandoned_reconnect` when the row is older than
-        `GlobalConfig.signal_max_age_minutes` and no MT5 position matches.
-        Young rows with no MT5 match are left alone.
+    async def _sync_positions(
+        self, acct_name: str, connector, *, startup: bool = False,
+    ) -> None:
+        """Full position sync from MT5 after reconnect / at startup (REL-02, D-24/D-25).
+
+        Reconcile rule for every pending staged_entries row on this account
+        (review 2026-10-16 #6 / #10):
+
+          MT5 position carries the row's comment  -> 'filled' (+ ticket)
+          'firing' row, no position               -> startup: 'failed' (the claim died
+                                                     with the old process)
+                                                     reconnect: 'failed' once the claim
+                                                     is older than _FIRING_STALE_SECONDS,
+                                                     otherwise left to its owner
+          band (stage>1), stage 1 filled & LIVE   -> keep armed (sequence lifetime =
+                                                     stage-1 lifetime, D-16)
+          band (stage>1), stage 1 filled & GONE   -> 'cancelled_stage1_closed'
+          anything else ('awaiting_*', no fill)   -> startup: keep armed (as it would
+                                                     be without the restart)
+                                                     reconnect: 'abandoned_reconnect'
+                                                     when older than
+                                                     signal_max_age_minutes (D-24)
+
+        The D-24 age rule used to apply to every unmatched row, so a restart
+        more than 30 minutes after a sequence armed abandoned its scale-in
+        bands while stage 1 was still open.
         """
         try:
             positions = await connector.get_positions()
@@ -325,43 +359,189 @@ class Executor:
 
         max_age_minutes = getattr(self.cfg, "signal_max_age_minutes", 30)
         now = datetime.now(timezone.utc)
+        mode = "startup" if startup else "reconnect"
+        # signal_id -> True (stage 1 filled & live) / False (filled & gone) /
+        # None (stage 1 not filled, or no stage-1 row). Memoized per sync.
+        stage1_state: dict[int, bool | None] = {}
 
-        reconciled = 0
-        abandoned = 0
+        reconciled = abandoned = cancelled = failed = 0
         for stage in pending:
             target_comment = stage["mt5_comment"]
             match = by_comment.get(target_comment)
             if match is not None:
-                await db.update_stage_status(stage["id"], "filled", mt5_ticket=match.ticket)
-                reconciled += 1
-                logger.info(
-                    "%s: reconnect reconciled signal_id=%d stage=%d ticket=%d",
-                    acct_name, stage["signal_id"], stage["stage_number"], match.ticket,
-                )
+                if await db.update_stage_status(stage["id"], "filled", mt5_ticket=match.ticket):
+                    reconciled += 1
+                    logger.info(
+                        "%s: %s reconciled signal_id=%d stage=%d ticket=%d",
+                        acct_name, mode, stage["signal_id"], stage["stage_number"],
+                        match.ticket,
+                    )
                 continue
 
-            # No MT5 match. Decide abandon vs keep-armed by age.
-            created = stage["created_at"]
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            age_minutes = (now - created).total_seconds() / 60.0
+            if stage["status"] == "firing":
+                # A claim with no position behind it. At startup its owner died
+                # with the old process; on reconnect give the owner a grace
+                # period (it may still be finalizing) before calling it stale.
+                claimed_at = _as_utc(stage.get("firing_at") or stage["created_at"])
+                age_s = (now - claimed_at).total_seconds()
+                if startup or age_s > self._FIRING_STALE_SECONDS:
+                    reason = (
+                        "firing_interrupted_by_restart" if startup
+                        else f"firing_stale_no_position_{int(age_s)}s"
+                    )
+                    if await db.update_stage_status(
+                        stage["id"], "failed", cancelled_reason=reason,
+                        expected_status=("firing",),
+                    ):
+                        failed += 1
+                        logger.warning(
+                            "%s: %s — stranded 'firing' claim signal_id=%d stage=%d "
+                            "has no MT5 position (%s) -> failed",
+                            acct_name, mode, stage["signal_id"], stage["stage_number"],
+                            reason,
+                        )
+                continue
+
+            sid = stage["signal_id"]
+            if stage["stage_number"] > 1:
+                # D-16: a band lives exactly as long as its stage 1 does.
+                if sid not in stage1_state:
+                    stage1_state[sid] = await self._stage1_state(sid, acct_name, by_comment)
+                s1 = stage1_state[sid]
+                if s1 is True:
+                    continue  # sequence alive — keep the band armed
+                if s1 is False:
+                    try:
+                        n = await db.cancel_unfilled_stages_for_signal(
+                            sid, reason=f"stage1_closed_at_{mode}",
+                            account_name=acct_name,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "%s: %s cascade DB write failed signal_id=%d: %s",
+                            acct_name, mode, sid, exc,
+                        )
+                        n = 0
+                    if n:
+                        cancelled += n
+                        logger.info(
+                            "%s: %s — stage 1 of signal_id=%d filled but no longer on "
+                            "MT5; cancelled %d armed band(s)", acct_name, mode, sid, n,
+                        )
+                    continue
+
+            # Stage 1 of this sequence has not filled (or this row IS stage 1).
+            if startup:
+                continue  # armed rows wait for price exactly as they did before the restart
+
+            # Reconnect: the original D-24 age rule.
+            age_minutes = (now - _as_utc(stage["created_at"])).total_seconds() / 60.0
             if age_minutes > max_age_minutes:
-                await db.update_stage_status(
+                if await db.update_stage_status(
                     stage["id"], "abandoned_reconnect",
                     cancelled_reason=f"no_mt5_match_after_{int(age_minutes)}min",
-                )
-                abandoned += 1
-                logger.warning(
-                    "%s: reconnect abandoned signal_id=%d stage=%d — age=%dmin > %dmin and no MT5 position",
-                    acct_name, stage["signal_id"], stage["stage_number"],
-                    int(age_minutes), max_age_minutes,
-                )
+                ):
+                    abandoned += 1
+                    logger.warning(
+                        "%s: reconnect abandoned signal_id=%d stage=%d — age=%dmin > %dmin and no MT5 position",
+                        acct_name, stage["signal_id"], stage["stage_number"],
+                        int(age_minutes), max_age_minutes,
+                    )
 
-        if reconciled or abandoned:
+        if reconciled or abandoned or cancelled or failed:
             logger.info(
-                "%s: staged_entries reconciliation — %d filled, %d abandoned",
-                acct_name, reconciled, abandoned,
+                "%s: staged_entries %s reconciliation — %d filled, %d abandoned, "
+                "%d cancelled (stage 1 closed), %d failed (stranded firing)",
+                acct_name, mode, reconciled, abandoned, cancelled, failed,
             )
+
+    async def _stage1_state(
+        self, signal_id: int, acct_name: str, positions_by_comment: dict,
+    ) -> bool | None:
+        """True = stage 1 filled and live on MT5; False = filled but gone;
+        None = not filled (awaiting/firing/terminal) or no stage-1 row."""
+        if f"telebot-{signal_id}-s1" in positions_by_comment:
+            return True
+        try:
+            row = await db.get_stage_by_signal_account(signal_id, acct_name, 1)
+        except Exception as exc:
+            logger.warning(
+                "%s: stage-1 lookup failed signal_id=%d: %s", acct_name, signal_id, exc,
+            )
+            return None
+        if row and row.get("status") == "filled":
+            return False
+        return None
+
+    async def _reconcile_stale_firing_stages(self) -> None:
+        """Review 2026-10-16 #10 — finalize 'firing' rows whose claim went stale.
+
+        The claim owner normally writes 'filled'/'failed' within seconds. If it
+        could not (DB write failed, task cancelled, process died before the
+        startup reconcile existed), the row would stay 'firing' forever: out of
+        the SL/TP sweep, out of the D-16 cascade, never re-armed. Runs every
+        zone-watch tick: a position with the row's comment -> 'filled';
+        none -> 'failed' (never re-armed: the order may have filled and
+        already closed, and a re-fire would double the entry).
+        """
+        try:
+            rows = await db.get_stale_firing_stages(self._FIRING_STALE_SECONDS)
+        except Exception as exc:
+            logger.warning("stale-firing reconcile: fetch failed: %s", exc)
+            return
+        if not rows:
+            return
+
+        by_acct: dict[str, list[dict]] = {}
+        for row in rows:
+            by_acct.setdefault(row["account_name"], []).append(row)
+
+        for acct_name, stages in by_acct.items():
+            if acct_name in self._reconnecting:
+                continue
+            connector = self.tm.connectors.get(acct_name)
+            if connector is None or not getattr(connector, "connected", True):
+                continue
+            try:
+                positions = await connector.get_positions()
+            except Exception as exc:
+                logger.warning(
+                    "%s: stale-firing reconcile get_positions failed: %s", acct_name, exc,
+                )
+                continue
+            by_comment = {
+                getattr(p, "comment", ""): p
+                for p in positions
+                if getattr(p, "comment", "")
+            }
+            for stage in stages:
+                match = by_comment.get(stage["mt5_comment"])
+                try:
+                    if match is not None:
+                        if await db.update_stage_status(
+                            stage["id"], "filled", mt5_ticket=match.ticket,
+                        ):
+                            logger.info(
+                                "%s: stale 'firing' claim signal_id=%d stage=%d has a live "
+                                "position ticket=%d -> filled",
+                                acct_name, stage["signal_id"], stage["stage_number"],
+                                match.ticket,
+                            )
+                    elif await db.update_stage_status(
+                        stage["id"], "failed",
+                        cancelled_reason="firing_stale_no_position",
+                        expected_status=("firing",),
+                    ):
+                        logger.warning(
+                            "%s: stale 'firing' claim signal_id=%d stage=%d has no MT5 "
+                            "position -> failed",
+                            acct_name, stage["signal_id"], stage["stage_number"],
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "%s: stale-firing reconcile write failed stage_id=%d: %s",
+                        acct_name, stage["id"], exc,
+                    )
 
     # ── Kill Switch ──────────────────────────────────────────────────
 
@@ -373,6 +553,7 @@ class Executor:
         can fire between the pause and the close.
         """
         self._trading_paused = True  # Block new signals IMMEDIATELY
+        self._kill_switch_epoch += 1  # in-flight handlers see this and refuse to submit
         logger.warning("KILL SWITCH ACTIVATED — closing all positions and cancelling orders")
 
         # D-21 — drain staged_entries FIRST so armed stages can't fire between
@@ -618,6 +799,13 @@ class Executor:
                     await self._run_stage_sltp_verification_sweep()
                 except Exception as exc:
                     logger.warning("Zone watch: SL/TP verification sweep error: %s", exc)
+
+                # Review 2026-10-16 #10 — rows stranded in 'firing' are finalized
+                # from the live positions (see _reconcile_stale_firing_stages).
+                try:
+                    await self._reconcile_stale_firing_stages()
+                except Exception as exc:
+                    logger.warning("Zone watch: stale-firing reconcile error: %s", exc)
 
                 try:
                     rows = await db.get_active_stages()
@@ -1342,10 +1530,15 @@ class Executor:
                 "%s: zone-watch stage fill raised: %s (signal_id=%d stage=%d)",
                 acct_name, exc, signal_id, stage["stage_number"],
             )
+            # Only a row nobody claimed yet may be failed from here. A post-claim
+            # exception was already finalized by the claim owner
+            # (_execute_open_on_account, #5/#10); a row another path owns
+            # ('firing'/'filled') must not be touched.
             try:
                 await db.update_stage_status(
                     stage["id"], "failed",
                     cancelled_reason=str(exc)[:200],
+                    expected_status=("awaiting_zone",),
                 )
             except Exception:
                 pass
@@ -1381,10 +1574,19 @@ class Executor:
             # the row to the terminal 'cancelled_by_kill_switch' (D-22).
             if reason == KILL_SWITCH_REASON:
                 return
+            # #5: the D-25 probe found the row already 'filled' (the at-arrival
+            # path won between our snapshot and this fire). The row is correct
+            # as it is — writing 'failed' over a live position's row dropped it
+            # out of the SL/TP sweep and the D-16 cascade.
+            if reason == "already_filled":
+                return
+            # Pre-claim failure only (a post-claim one was finalized by the
+            # owner); never overwrite a row another path has claimed or filled.
             try:
                 await db.update_stage_status(
                     stage["id"], "failed",
                     cancelled_reason=str(reason)[:200],
+                    expected_status=("awaiting_zone",),
                 )
             except Exception:
                 pass

@@ -34,6 +34,8 @@ side-effect-free at module top and safe to import eagerly.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 
 import db
@@ -42,6 +44,8 @@ from api import idempotency
 from api.deps import require_executor, require_user, verify_csrf_token
 from api.formatting import volume_display
 from api.schemas import CloseLevelsIn, EmergencyResult, MutationResult, PartialCloseIn
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -154,6 +158,19 @@ async def levels(
             "changed": {},
             "error": result.error or "Broker rejected modify",
         }
+
+    # Review 2026-10-16 #1: record the edit as the stage row's new target, or the
+    # post-trade SL/TP sweep snaps the position back to the signal's levels within
+    # one tick. No-op for non-staged ('telebot') or manual positions.
+    try:
+        await db.update_stage_targets_for_position(
+            account, getattr(pos, "comment", ""), sl=sl_to_send, tp=tp_to_send,
+        )
+    except Exception as exc:
+        logger.warning(
+            "%s: stage target update failed ticket=%d — the SL/TP sweep may revert "
+            "this edit: %s", account, ticket, exc,
+        )
 
     changed: dict[str, float] = {}
     if sl_to_send is not None:

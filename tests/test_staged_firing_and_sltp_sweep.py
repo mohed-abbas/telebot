@@ -41,21 +41,27 @@ class _FakeStagedPool:
 
     async def execute(self, sql: str, *args):
         s = " ".join(sql.split())
-        # update_stage_status('filled') — guarded transition
+        # update_stage_status — EVERY transition is a compare-and-set on the
+        # allowed previous states (review 2026-10-16 #5).
         if "filled_at=NOW()" in s:
-            assert "status IN ('awaiting_zone','firing')" in s, (
+            assert "status = ANY($4::text[])" in s, (
                 "the 'filled' transition MUST carry the status precondition"
             )
-            status, _ticket, sid = args
-            if self.rows.get(sid) in ("awaiting_zone", "firing"):
+            status, _ticket, sid, allowed = args
+            assert set(allowed) == {"awaiting_zone", "firing"}
+            if self.rows.get(sid) in allowed:
                 self.rows[sid] = status
                 return "UPDATE 1"
             return "UPDATE 0"
-        # non-filled transitions (cancelled/failed/capped/...) — unconditional
         if "SET status=$1, cancelled_reason=$2" in s:
-            status, _reason, sid = args
-            self.rows[sid] = status
-            return "UPDATE 1"
+            assert "status = ANY($4::text[])" in s, (
+                "non-filled transitions MUST carry the status precondition too"
+            )
+            status, _reason, sid, allowed = args
+            if self.rows.get(sid) in allowed:
+                self.rows[sid] = status
+                return "UPDATE 1"
+            return "UPDATE 0"
         raise AssertionError(f"unexpected execute SQL: {s}")
 
 
