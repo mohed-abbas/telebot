@@ -30,6 +30,7 @@ from models import (
 from mt5_connector import (
     CLOSING_DEAL_ENTRIES,
     ConnectorReadError,
+    deal_window,
     DryRunConnector,
     MT5Connector,
     OrderResult,
@@ -1727,53 +1728,56 @@ class TradeManager:
             since = since.replace(tzinfo=timezone.utc)
         return since
 
-    async def _closed_deal_for_pending_order(
-        self, connector, order: dict, history_cache: dict | None = None,
-    ) -> tuple[float, float, datetime] | None:
-        """(pnl, close_price, close_time) of the position this pending order
-        opened, from the broker's closing deals since the order was placed;
-        None when there is no such deal or the backend has no deal history.
-        ConnectorReadError propagates (the caller retries next cycle).
-
-        Batch 6: `history_cache` ({account: deals | ConnectorReadError}) makes
-        one history read per account per cleanup cycle; the cycle pre-seeds it
-        from the oldest expired order of each account.
-        """
+    async def _account_deals(
+        self, connector, acct_name: str, since: datetime, history_cache: dict,
+    ) -> list | None:
+        """The account's deal history since `since` (real UTC), read at most
+        once per cleanup cycle (batch 6) — `history_cache` holds
+        {account: deals | ConnectorReadError}. None when the backend has no
+        deal history; a cached ConnectorReadError is re-raised."""
         if not getattr(connector, "supports_history_sync", True):
             return None
-        acct = order["account_name"]
-        cached = history_cache.get(acct) if history_cache is not None else None
-        if cached is None:
+        if acct_name not in history_cache:
             try:
-                cached = await connector.get_history_deals(self._history_since(order))
+                # Batch 7: widened by DEAL_TIME_MARGIN — deal times are broker
+                # time, so a fill+close from the last few hours on a UTC+N broker
+                # sat outside a real-UTC window and the order read 'cancelled'.
+                history_cache[acct_name] = await connector.get_history_deals(
+                    *deal_window(since),
+                )
             except ConnectorReadError as exc:
-                cached = exc
-            if history_cache is not None:
-                history_cache[acct] = cached
+                history_cache[acct_name] = exc
+        cached = history_cache[acct_name]
         if isinstance(cached, Exception):
             raise cached
+        return cached
+
+    @staticmethod
+    def _closed_deal_for_pending_order(order: dict, deals) -> tuple[float, float] | None:
+        """(pnl, close_price) of the position this pending order opened, from
+        its closing deals; None when there is none."""
         outs = sorted(
-            (d for d in cached
+            (d for d in deals or ()
              if d.position_id == order["ticket"] and d.entry in CLOSING_DEAL_ENTRIES),
             key=lambda d: d.time,
         )
         if not outs:
             return None
-        close_time = datetime.fromtimestamp(outs[-1].time, tz=timezone.utc)
-        return sum(d.profit for d in outs), outs[-1].price, close_time
+        return sum(d.profit for d in outs), outs[-1].price
 
     async def cleanup_expired_orders(self) -> list[dict]:
         """Cancel expired pending orders. Checks MT5 state first (REL-04)."""
         expired = await db.get_expired_pending_orders()
         results = []
         # Batch 6: one history read per account per cycle, covering the oldest
-        # expired order; _closed_deal_for_pending_order fills the cache lazily.
+        # expired order of that account (read lazily, only if a probe needs it).
         history_cache: dict = {}
-        oldest: dict[str, dict] = {}
+        since_by_acct: dict[str, datetime] = {}
         for order in expired:
-            cur = oldest.get(order["account_name"])
-            if cur is None or self._history_since(order) < self._history_since(cur):
-                oldest[order["account_name"]] = order
+            since = self._history_since(order)
+            acct = order["account_name"]
+            if acct not in since_by_acct or since < since_by_acct[acct]:
+                since_by_acct[acct] = since
         for order in expired:
             acct_name = order["account_name"]
             connector = self.connectors.get(acct_name)
@@ -1833,13 +1837,8 @@ class TradeManager:
                     # On a bridge with deal history, look for the OUT deal
                     # before calling it cancelled.
                     try:
-                        if acct_name not in history_cache:
-                            # Seed the per-account read from its oldest expired order.
-                            await self._closed_deal_for_pending_order(
-                                connector, oldest[acct_name], history_cache,
-                            )
-                        closed = await self._closed_deal_for_pending_order(
-                            connector, order, history_cache,
+                        deals = await self._account_deals(
+                            connector, acct_name, since_by_acct[acct_name], history_cache,
                         )
                     except ConnectorReadError as exc:
                         logger.warning(
@@ -1851,12 +1850,11 @@ class TradeManager:
                             "ticket": order["ticket"], "symbol": order["symbol"],
                         })
                         continue
+                    closed = self._closed_deal_for_pending_order(order, deals)
                     if closed is not None:
-                        pnl, close_price, close_time = closed
+                        pnl, close_price = closed
                         await db.mark_pending_filled(order["ticket"], acct_name)
-                        await db.update_trade_close(
-                            order["ticket"], acct_name, pnl, close_price, close_time=close_time,
-                        )
+                        await db.update_trade_close(order["ticket"], acct_name, pnl, close_price)
                         logger.info(
                             "%s: Expired order #%d filled and closed on MT5 before expiry "
                             "— pnl=%+.2f close=%.2f",

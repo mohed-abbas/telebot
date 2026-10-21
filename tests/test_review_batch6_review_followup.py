@@ -2,11 +2,13 @@
 
   A  startup/reconnect reconcile judges stage-1 rows before their bands
   B  an unverifiable stage-1 state never allows a fire
-  C  close-by / reversal deals (entry 2, 3) are reconciled like plain closes
+  C  close-by deals (entry 3) are reconciled like plain closes
+     (batch 7: entry 2 / reversal is no longer a close — tests updated)
   D  'closing' rows waiting on an unreadable history are reported once per outage
   E  maintenance pass order (asserted in the batch-3 test)
-  F  deal time becomes close_time; one history read per account per cleanup;
-     one pending-orders query per tick
+  F  one history read per account per cleanup; one pending-orders query per tick
+     (batch 7: close_time is the reconcile time again, not the broker-clock
+     deal time — tests updated)
 """
 from __future__ import annotations
 
@@ -172,31 +174,30 @@ async def test_unverifiable_stage1_never_allows_a_fire(
 # ── C ──────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("entry", [2, 3])
-async def test_history_sync_reconciles_reversal_and_close_by_deals(
-    db_pool, seeded_account, priced_connector, executor, entry,
+async def test_history_sync_reconciles_close_by_deals(
+    db_pool, seeded_account, priced_connector, executor,
 ):
-    ticket = 610000 + entry
+    ticket = 610003
     await _park_closing(ticket, estimate=4.0, minutes_ago=20)
-    _history(priced_connector, [_deal(ticket, entry=entry, profit=9.0, price=2812.0, minutes_ago=15)])
+    _history(priced_connector, [_deal(ticket, entry=3, profit=9.0, price=2812.0, minutes_ago=15)])
 
     await executor._sync_history_for_account(ACCT, priced_connector, lookback_hours=24)
 
     row = await _trade(ticket)
     assert row["status"] == "closed"
     assert float(row["pnl"]) == pytest.approx(9.0), "broker P&L, not the estimate"
-    # F: close_time is the deal time, not "now".
+    # Batch 7: the deal's time is broker-clock time — close_time is set on our clock.
     age = datetime.now(timezone.utc) - row["close_time"]
-    assert timedelta(minutes=14) < age < timedelta(minutes=16)
+    assert age < timedelta(minutes=1)
 
 
-async def test_expiry_probe_accepts_a_reversal_deal(
+async def test_expiry_probe_accepts_a_close_by_deal(
     db_pool, seeded_account, tm_with_store, priced_connector,
 ):
     ticket = 620001
     await _insert_trade(ticket, status="pending")
     await _insert_expired_order(ticket)
-    _history(priced_connector, [_deal(ticket, entry=2, profit=-3.0, price=2799.0, minutes_ago=30)])
+    _history(priced_connector, [_deal(ticket, entry=3, profit=-3.0, price=2799.0, minutes_ago=30)])
 
     results = await tm_with_store.cleanup_expired_orders()
 
@@ -204,8 +205,6 @@ async def test_expiry_probe_accepts_a_reversal_deal(
     row = await _trade(ticket)
     assert row["status"] == "closed"
     assert float(row["pnl"]) == pytest.approx(-3.0)
-    age = datetime.now(timezone.utc) - row["close_time"]
-    assert timedelta(minutes=29) < age < timedelta(minutes=31), "dated at the deal, not at cleanup"
 
 
 # ── D ──────────────────────────────────────────────────────────────────

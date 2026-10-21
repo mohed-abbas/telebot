@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 import db
 from models import AccountSettings, Direction, GlobalConfig, SignalAction, SignalType
 from notifier import Notifier
-from mt5_connector import CLOSING_DEAL_ENTRIES
+from mt5_connector import CLOSING_DEAL_ENTRIES, deal_window
 from risk_calculator import pip_size_for_symbol
 from trade_manager import (
     KILL_SWITCH_REASON, READ_FAILED_REASON, Band, TradeManager, stage_is_in_zone_at_arrival,
@@ -541,7 +541,8 @@ class Executor:
             row = await db.get_stage_by_signal_account(signal_id, acct_name, 1)
         except Exception as exc:
             logger.warning(
-                "%s: stage-1 lookup failed signal_id=%d: %s", acct_name, signal_id, exc,
+                "%s: stage-1 lookup failed signal_id=%d — bands kept, none fired: %s",
+                acct_name, signal_id, exc,
             )
             return "unknown", None
         if not row:
@@ -784,7 +785,10 @@ class Executor:
           - for each closing deal whose position_id maps to a status='opened'
             trade in our DB, call db.update_trade_close(...) with the deal's
             profit (gross broker P&L; commission and swap excluded for now)
-          - advance the high-water mark to max(deal.time) + 1s
+          - advance the high-water mark to the (real-UTC) time of this read
+
+        Batch 7: deal times are broker-server time, so the watermark is never
+        taken from them and every read is widened by DEAL_TIME_MARGIN.
 
         This is the path that fixes /analytics zeros and /history empty P&L
         for trades the broker closed via SL/TP or via manual MT5 action.
@@ -840,7 +844,7 @@ class Executor:
             return
 
         try:
-            deals = await connector.get_history_deals(since, now)
+            deals = await connector.get_history_deals(*deal_window(since, now))
         except Exception as exc:
             logger.warning(
                 "%s: history-sync REST call failed: %s", acct_name, exc,
@@ -849,11 +853,8 @@ class Executor:
             return
         self._history_blocked_warned.discard(acct_name)
 
-        max_deal_time = 0.0
         reconciled = 0
         for deal in deals or ():
-            if deal.time > max_deal_time:
-                max_deal_time = deal.time
             if deal.entry not in CLOSING_DEAL_ENTRIES:
                 continue
             ticket = deal.position_id
@@ -865,7 +866,6 @@ class Executor:
                     account_name=acct_name,
                     pnl=deal.profit,
                     close_price=deal.price,
-                    close_time=datetime.fromtimestamp(deal.time, tz=timezone.utc),
                 )
             except Exception as exc:
                 logger.error(
@@ -879,12 +879,11 @@ class Executor:
                 acct_name, ticket, deal.profit, deal.price,
             )
 
-        if max_deal_time > 0:
-            # +1s so we don't re-process the boundary deal next tick.
-            advanced = datetime.fromtimestamp(max_deal_time + 1.0, tz=timezone.utc)
-            self._last_history_sync[acct_name] = max(advanced, since)
-        else:
-            self._last_history_sync[acct_name] = now
+        # Batch 7: real UTC of this read. A deal-time watermark is in the
+        # broker's clock — hours ahead on a UTC+N broker, which turned the next
+        # window inside out. Re-reading a deal is harmless: its ticket left
+        # open_tickets when it was reconciled.
+        self._last_history_sync[acct_name] = now
 
         # #7: dashboard closes the broker never confirmed (no deal seen, or a
         # backend without deal history) are finalized from the pre-close
@@ -948,6 +947,9 @@ class Executor:
             await db.update_trade_close(
                 ticket=row["ticket"], account_name=acct_name,
                 pnl=pnl, close_price=close_price,
+                # Batch 7: the close happened when the dashboard sent it, not
+                # when this fallback gave up waiting for the deal.
+                close_time=row.get("close_time"),
             )
             finalized += 1
             logger.warning(
@@ -1036,11 +1038,7 @@ class Executor:
                 )
                 continue
 
-            positions_by_comment = {
-                getattr(p, "comment", ""): p
-                for p in positions
-                if getattr(p, "comment", "")
-            }
+            positions_by_comment = _index_by_comment(positions)
 
             # Price-based cascade: if live price has reached the
             # signal's target_tp or sl, cancel ALL unfilled stages
@@ -1162,10 +1160,7 @@ class Executor:
                     if state == "unknown":
                         # Batch 6: the anchor could not be verified — never fire
                         # on that; the bands stay armed for the next tick.
-                        logger.warning(
-                            "%s: zone-watch skip signal_id=%d — stage-1 state unknown",
-                            acct_name, signal_id,
-                        )
+                        # (_stage1_state already logged the failed lookup.)
                         stage1_live_cache[cache_key] = False
                         continue
                     # Live, or still awaiting (or no row) — fire is OK as far as

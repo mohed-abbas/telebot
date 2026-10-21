@@ -8,6 +8,7 @@ import concurrent.futures
 import functools
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 
 import MetaTrader5 as mt5
@@ -100,7 +101,7 @@ def _invoke_capture(fn, args, kwargs):
     return result, mt5.last_error()
 
 
-async def _run_err(fn, *args, **kwargs):
+async def _raw_call(fn, *args, **kwargs):
     """Dispatch a blocking MT5 call to the dedicated worker thread.
 
     Returns (result, last_error) with last_error captured atomically alongside
@@ -114,6 +115,101 @@ async def _run_err(fn, *args, **kwargs):
     except Exception as exc:
         logger.error("MT5 call raised: %s — %s", getattr(fn, "__name__", fn), exc)
         return None, None
+
+
+# ── Terminal (re-)attach — batch 7 ────────────────────────────────
+#
+# mt5.initialize() opens an IPC pipe to ONE terminal64.exe process. When that
+# process is replaced — MT5 auto-updates and restarts itself, someone restarts
+# it, or the terminal was still logging in when the bridge started — the pipe
+# points at nothing and every call fails with one of these codes until
+# initialize() runs again. Nothing used to run it again: the bridge stayed dead
+# until it was restarted by hand.
+_IPC_ERROR_CODES = frozenset({-10001, -10002, -10003, -10004, -10005})
+
+# Calls that are safe to repeat once after a re-attach. order_send is NOT: an
+# IPC failure mid-send (-10005 timeout) may still have reached the broker, and
+# the bot already treats that outcome as unknown and reconciles it.
+_RETRY_SAFE_CALLS = frozenset({
+    "account_info", "history_deals_get", "login", "order_check", "orders_get",
+    "positions_get", "symbol_info", "symbol_info_tick", "symbol_select", "terminal_info",
+})
+
+# A terminal that is really down must not be hammered by every request.
+_REATTACH_MIN_INTERVAL = 5.0
+_STARTUP_RETRY_SECONDS = 10.0
+_STARTUP_RETRY_ATTEMPTS = 12
+
+_reattach_lock = asyncio.Lock()
+_terminal_generation = 0      # bumped by each successful attach
+_last_attach_attempt = 0.0    # time.monotonic() of the last attempt
+
+
+def _is_ipc_error(error) -> bool:
+    return bool(error) and isinstance(error, tuple) and error[0] in _IPC_ERROR_CODES
+
+
+async def _attach_terminal():
+    """shutdown() then initialize() with the configured terminal and account.
+    Returns (ok, last_error)."""
+    args = (config.MT5_TERMINAL_PATH,) if config.MT5_TERMINAL_PATH else ()
+    kwargs = {}
+    if config.MT5_LOGIN and config.MT5_PASSWORD and config.MT5_SERVER:
+        kwargs = {
+            "login": config.MT5_LOGIN,
+            "password": config.MT5_PASSWORD,
+            "server": config.MT5_SERVER,
+        }
+    await _raw_call(mt5.shutdown)
+    ok, error = await _raw_call(mt5.initialize, *args, **kwargs)
+    return bool(ok), error
+
+
+async def _reattach(reason: str, seen_generation: int) -> bool:
+    """Re-attach to the terminal unless another caller already did since
+    `seen_generation`, or an attempt ran less than _REATTACH_MIN_INTERVAL ago.
+    True when the pipe is (now) fresh."""
+    global _terminal_generation, _last_attach_attempt
+    async with _reattach_lock:
+        if _terminal_generation != seen_generation:
+            return True
+        now = time.monotonic()
+        if now - _last_attach_attempt < _REATTACH_MIN_INTERVAL:
+            return False
+        _last_attach_attempt = now
+        if seen_generation > 0:
+            logger.warning("MT5 terminal not reachable (%s) — re-attaching", reason)
+        ok, error = await _attach_terminal()
+        if not ok:
+            logger.error("MT5 re-attach failed: %s", error)
+            return False
+        _terminal_generation += 1
+        info, _ = await _raw_call(mt5.account_info)
+        if info is not None:
+            logger.info(
+                "MT5 attached — login=%s balance=%.2f equity=%.2f",
+                info.login, info.balance, info.equity,
+            )
+        else:
+            logger.info("MT5 attached")
+        return True
+
+
+async def _run_err(fn, *args, **kwargs):
+    """_raw_call plus self-healing: when the call failed because the terminal
+    pipe is gone, re-attach and repeat it once if it is a read (batch 7)."""
+    generation = _terminal_generation
+    result, error = await _raw_call(fn, *args, **kwargs)
+    name = getattr(fn, "__name__", str(fn))
+    if (
+        (result is None or result is False)
+        and _is_ipc_error(error)
+        # shutdown() always returns None; neither it nor initialize() heals.
+        and name not in ("shutdown", "initialize")
+    ):
+        if await _reattach(f"{name}: {error}", generation) and name in _RETRY_SAFE_CALLS:
+            result, error = await _raw_call(fn, *args, **kwargs)
+    return result, error
 
 
 async def _run(fn, *args, **kwargs):
@@ -213,47 +309,42 @@ ORDER_TYPE_MAP = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: initialize MT5
+    # Startup: attach to the terminal (initialize + account login in one call).
+    # Batch 7: a terminal that is still starting or logging in (start-all.bat
+    # launches it seconds earlier) fails this with -6 / -10005. Do not stay
+    # dead: retry in the background, and any request in between re-attaches
+    # on demand through _run_err.
     logger.info("Initializing MT5 terminal...")
-    init_kwargs = {}
-    if config.MT5_TERMINAL_PATH:
-        init_kwargs["path"] = config.MT5_TERMINAL_PATH
-
-    if init_kwargs:
-        result, error = await _run_err(mt5.initialize, **init_kwargs)
-    else:
-        result, error = await _run_err(mt5.initialize)
-
-    if not result:
-        logger.error("MT5 initialization failed: %s", error)
-    else:
-        logger.info("MT5 initialized")
-        # Auto-login if credentials configured
-        if config.MT5_LOGIN and config.MT5_PASSWORD and config.MT5_SERVER:
-            success, error = await _run_err(
-                mt5.login,
-                config.MT5_LOGIN,
-                password=config.MT5_PASSWORD,
-                server=config.MT5_SERVER,
-            )
-            if success:
-                info = await _run(mt5.account_info)
-                if info:
-                    logger.info(
-                        "MT5 logged in — balance=%.2f equity=%.2f",
-                        info.balance,
-                        info.equity,
-                    )
-            else:
-                logger.error("MT5 login failed: %s", error)
+    retry_task = None
+    if not await _reattach("startup", _terminal_generation):
+        logger.error(
+            "MT5 not attached at startup — retrying every %.0fs (up to %d tries) "
+            "and on every request",
+            _STARTUP_RETRY_SECONDS, _STARTUP_RETRY_ATTEMPTS,
+        )
+        retry_task = asyncio.create_task(_attach_until_ready())
 
     yield
 
     # Shutdown
+    if retry_task is not None:
+        retry_task.cancel()
     logger.info("Shutting down MT5...")
     await _run(mt5.shutdown)
     _mt5_executor.shutdown(wait=True)
     logger.info("MT5 shutdown complete")
+
+
+async def _attach_until_ready() -> None:
+    for _ in range(_STARTUP_RETRY_ATTEMPTS):
+        await asyncio.sleep(_STARTUP_RETRY_SECONDS)
+        generation = _terminal_generation
+        if generation > 0 or await _reattach("startup retry", generation):
+            return
+    logger.error(
+        "MT5 still not attached after %d startup retries — will keep trying on requests",
+        _STARTUP_RETRY_ATTEMPTS,
+    )
 
 
 app = FastAPI(

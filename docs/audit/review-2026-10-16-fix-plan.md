@@ -14,6 +14,7 @@ Each batch is meant to be picked up on its own, from any machine: the entries sa
 | 4 — minor items | ~10 small items | **Done** — full suite green (547 passed, 0 failed); 16 regression tests in `tests/test_review_batch4_minor_items.py`. Left out: shared bridge-payload test helpers (test-only refactor). |
 | 5 — review follow-up | 9 findings of the 2026-10-17 `/code-review high` of batches 1–4 | **Done** — full suite green (563 passed, 0 failed); 16 regression tests in `tests/test_review_batch5_review_findings.py` |
 | 6 — review follow-up | 9 findings of the 2026-10-17 `/code-review high` of batch 5 | **Done** — full suite green (573 passed, 0 failed); 10 regression tests in `tests/test_review_batch6_review_followup.py` |
+| 7 — review follow-up + bridge self-heal | 7 findings of the `/code-review high` of batch 6, the 2026-10-21 VPS outage | **Done** — full suite green (585 passed, 0 failed); 13 regression tests in `tests/test_review_batch7_time_base_and_bridge_heal.py`. Needs a deploy of `mt5-rest-server/server.py` to the Windows bridge. |
 | Test infrastructure | broken pool / event loop in the suite | **Done** — full suite green (489 passed, 0 failed) |
 
 ## Working rules for every batch
@@ -402,6 +403,60 @@ The user-run `/code-review high` of batch 5 returned nine findings (three behavi
 - Reversal (`entry=2`) and close-by (`entry=3`) deals now close the matching trades row with the deal's profit. MT5 reports the closing leg's profit on these deals as it does for a plain OUT; if the broker reports reversals differently, the P&L of a reversed position would be wrong where before it fell to the 600 s estimate.
 - `trades.close_time` is now the broker deal time for history-reconciled and expiry-probed closes; dashboard/estimate closes still use the submit time.
 - A dead `/history/deals` endpoint produces one ERROR log line per account per outage listing the stuck tickets. No Discord alert (the heartbeat already alerts on a dead bridge).
+
+## Batch 7 — done (review follow-up on batch 6 + bridge self-heal)
+
+The `/code-review high` of batch 6 returned seven findings. Testing on the VPS added two more problems: on 2026-10-21 MT5 auto-updated (build 5833 → 6230) and restarted, and the bridge kept a dead IPC pipe (`-10004 No IPC connection`) until it was restarted by hand. The startup race on 2026-10-17 (`-6 Authorization failed`) had the same root: `initialize()` ran once and never again. Suite after the batch: `585 passed, 8 skipped, 1 xfailed, 0 failed` (was 573). Two batch-6 tests changed on purpose (entry 2, close_time).
+
+```
+item  finding                                        fix
+────  ─────────────────────────────────────────────  ──────────────────────────────────────────────
+A #1  Deal.time is broker-SERVER time (Vantage       mt5_connector.deal_window(): every deal read is
+      UTC+3). Batch 6 wrote it into close_time, and   widened by DEAL_TIME_MARGIN (14 h) both sides;
+      worse: the bot's real-UTC window only reached   the watermark is the real-UTC time of the read;
+      a deal once real time caught up with the        close_time is our clock again. Closes are
+      broker clock (closes reconciled ~3 h late),     reconciled on the next tick; the expiry probe
+      and a deal-time watermark inverted the next     finds a fill+close from the last hours.
+      window. Same window bug in the expiry probe.
+B #3  entry 2 (inout) reverses a netting position    CLOSING_DEAL_ENTRIES = {1, 3}
+      under the same ticket; treated as a close
+C #4  stale-'closing' fallback overwrote the submit  passes close_time=row["close_time"]
+      close_time with now
+D #5  zone watch hand-built the comment index        _index_by_comment(positions)
+  #7  two warnings per unverifiable stage 1          one: _stage1_state's line ("bands kept, none
+                                                     fired"); the zone-watch duplicate removed
+E #6  cleanup seeded its history cache through a     since_by_acct up front; _account_deals reads
+      side-effect probe call                          once per account; the probe is a pure matcher
+F #2  partial closes overwrite pnl                   remediation-backlog.md (needs closed volume
+                                                     per ticket; the bot never partial-closes)
+G     bridge stays dead after the terminal is        _run_err: an IPC error (-10001…-10005) →
+      replaced (auto-update, restart, slow login)     shutdown + initialize(path, login, pw, server)
+                                                     under a lock, at most once per 5 s; reads are
+                                                     retried once, order_send never. Startup
+                                                     failure retries every 10 s for 2 min.
+                                                     docs: start-all.bat wait 15 → 45 s.
+```
+
+### Bridge re-attach
+
+```
+ MT5 auto-update ──► terminal64.exe restarts ──► bridge pipe dead
+                                                      │
+ bot heartbeat ──► /ping ──► terminal_info() → None, -10004
+                                │
+                                ▼
+                     _reattach (lock, generation check, 5 s back-off)
+                     shutdown() → initialize(path, login, pw, server)
+                                │ ok
+                                ▼
+                     terminal_info() retried → alive ──► bot: connected
+```
+
+### Judgment calls to confirm in the end-to-end test
+
+- `close_time` for history-reconciled and expiry-probed closes is the time the bot saw the deal (within one sync interval of the real close), not the broker's deal time.
+- `/disconnect` (unused by the bot) now acts as a reset: the next request re-attaches.
+- An `order_send` that fails with an IPC error is not repeated. The pipe is re-attached, and the caller gets the error like before (outcome-unknown path from batch 3).
 
 ---
 

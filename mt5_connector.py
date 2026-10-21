@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from enum import Enum
 
@@ -76,10 +76,27 @@ class AccountInfo:
     currency: str = "USD"
 
 
-# Deal.entry values that close (part of) a position: 1=out, 2=inout (reversal),
-# 3=out_by (close-by). Shared by the history sync and the expiry probe so a
-# close-by or reversal is reconciled like a plain close (batch 6).
-CLOSING_DEAL_ENTRIES = frozenset({1, 2, 3})
+# Deal.entry values that close a position: 1=out, 3=out_by (close-by). Shared
+# by the history sync and the expiry probe (batch 6). Batch 7: 2=inout is NOT
+# here — on a netting account it reverses the position under the SAME
+# position_id, which stays open; treating it as a close finalized a live trade
+# and dropped the real OUT deal that came later.
+CLOSING_DEAL_ENTRIES = frozenset({1, 3})
+
+# Batch 7: Deal.time is broker-SERVER time (e.g. UTC+3 for Vantage), and the
+# bridge also reads its from/to bounds in that base, while the bot's clock is
+# real UTC. Every deal-history read therefore widens its window by this much on
+# both sides (broker offsets run from UTC-12 to UTC+14). Without it a deal is
+# only inside the window once real time has caught up with the broker's clock —
+# hours late on a UTC+N broker. Over-reading is harmless: callers match deals
+# by position_id and the history sync only looks at still-open tickets.
+DEAL_TIME_MARGIN = timedelta(hours=14)
+
+
+def deal_window(since: datetime, until: datetime | None = None) -> tuple[datetime, datetime]:
+    """(from, to) for a deal-history read covering real-UTC [since, until]."""
+    until = until or datetime.now(timezone.utc)
+    return since - DEAL_TIME_MARGIN, until + DEAL_TIME_MARGIN
 
 
 @dataclass
@@ -88,7 +105,7 @@ class Deal:
 
     ticket: int
     position_id: int
-    time: float          # MT5 server epoch seconds (broker timezone, treated as UTC)
+    time: float          # MT5 epoch seconds in broker-SERVER time, not UTC (see DEAL_TIME_MARGIN)
     entry: int           # 0=in, 1=out, 2=inout, 3=out_by
     volume: float
     price: float

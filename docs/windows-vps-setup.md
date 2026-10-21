@@ -207,13 +207,27 @@ startup batch file (not a Windows service) to ensure this.
 $lines = @(
     '@echo off',
     'start "" "C:\MT5\Account1\MetaTrader 5\terminal64.exe" /portable',
-    'timeout /t 15 /nobreak >nul',
+    'timeout /t 45 /nobreak >nul',
     'cd /d C:\Apps\telebot\mt5-rest-server',
     'set ENV_FILE=C:\Apps\telebot\mt5-rest-server\.env.account1',
     'start /B "" "C:\Apps\telebot\mt5-rest-server\venv\Scripts\python.exe" -m uvicorn server:app --host 0.0.0.0 --port 8001'
 )
 $lines -join "`r`n" | Out-File -Encoding ascii "C:\Apps\start-all.bat"
 ```
+
+The 45 s wait lets the terminal finish its broker login before the bridge
+attaches. With 15 s the bridge often started first and logged
+`(-6, 'Terminal: Authorization failed')`. Since batch 7 the bridge retries the
+attach on its own (every 10 s for 2 minutes, then on every request), so a short
+wait only costs a few log lines. To change the wait on an existing box:
+
+```powershell
+(Get-Content C:\Apps\start-all.bat) -replace 'timeout /t 15', 'timeout /t 45' | Set-Content -Encoding ascii C:\Apps\start-all.bat
+```
+
+**Do not re-run `start-all.bat` while the terminal is open.** It launches a
+second `terminal64.exe`. To restart only the bridge, see "Restart only the
+bridge" under Troubleshooting.
 
 **Create a startup shortcut:**
 
@@ -343,9 +357,38 @@ The MT5 terminal may not have connected to the broker yet. Wait 60-90 seconds.
 If still false, RDP in and check if the terminal shows a green connection icon.
 
 ### `IPC timeout` or `No IPC connection`
-The MT5 terminal and uvicorn are in different Windows sessions. Make sure both
-are running as startup apps (not Windows services). See Issue #10 in
-[issues-solved.md](issues-solved.md).
+Two causes:
+
+1. **The terminal was replaced under the bridge.** MT5 auto-updates itself and
+   restarts (the Journal shows `updating ... MQL5 folder` and a new build
+   number), or someone restarted it. The bridge's pipe then points at the old
+   process. Since batch 7 the bridge re-attaches on its own at the next request
+   and the bot reconnects on its next heartbeat. The bridge window logs
+   `MT5 terminal not reachable (...) — re-attaching` then `MT5 attached`.
+   Older bridge code stays dead until it is restarted (see below).
+2. **The terminal and uvicorn are in different Windows sessions.** Make sure
+   both run as startup apps (not Windows services). See Issue #10 in
+   [issues-solved.md](issues-solved.md).
+
+### Restart only the bridge
+Run in the RDP PowerShell, in the same session as the terminal:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8001 -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+$env:ENV_FILE='C:\Apps\telebot\mt5-rest-server\.env.account1'
+Set-Location C:\Apps\telebot\mt5-rest-server
+.\venv\Scripts\python.exe -m uvicorn server:app --host 0.0.0.0 --port 8001
+```
+
+Leave the window open. Close RDP with **Disconnect**, never **Log off**: logging
+off ends the session and kills both the terminal and the bridge.
+
+### Which `.env` file is used
+`config.py` loads the file named by `ENV_FILE`, and `.env` only when `ENV_FILE`
+is unset. `start-all.bat` sets `ENV_FILE=...\.env.account1`, so that is the file
+to edit. `.env` matters only when uvicorn is started by hand without
+`ENV_FILE`. With one account, keep the two files identical:
+`Copy-Item .env.account1 .env -Force`.
 
 ### `AUTH_FAILED` on API calls
 The `.env` file isn't being loaded. Make sure `.env` exists in the

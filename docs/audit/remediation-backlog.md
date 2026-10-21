@@ -23,6 +23,13 @@ Deferred items from the 2026-07-09 execution audit (`execution-audit-2026-07-09.
 - **Promote `TRUST_PROXY` / `SESSION_ABSOLUTE_MAX_AGE` into `config.Settings`** — Wave 3 auth reads these directly from `os.environ` in `dashboard.py`; centralize for validation. See [[project_wave3_auth_deploy_reqs]].
 - **SPA `'closing'` status badge (optional)** — the new transient `'closing'` trade status renders as raw text in `HistoryView` (graceful). Add an explicit badge/label if desired.
 
+## Follow-ups from the 2026-10-16 code-review batches (batch 7)
+
+- **Partial closes overwrite instead of accumulating** (`executor.py`, `_sync_history_for_account`). The first closing deal of a position marks the trades row `closed` with that deal's profit, and the ticket then leaves `open_tickets`. A later partial-close deal of the same position is never added, so the stored P&L covers only the first slice. The expiry probe already sums all closing deals. A real fix needs closed volume per ticket (sum `deal.volume` until it reaches `lot_size`) before the row is final. The bot itself never partial-closes; this only matters for manual partial closes in MT5. (Code review of batch 6, finding #2.)
+- **Netting accounts are unsupported.** On a netting account every stage of a signal merges into one position under one ticket: per-stage comments, SL/TP and D-16 tracking stop meaning anything. Batch 7 stopped treating `entry=2` (reversal) as a close, which removes the worst symptom, but the staged-entry model assumes hedging. Check `account_info().margin_mode == 2` (retail hedging) when an account is added.
+- **"Deploy — Windows" workflow restarts services that do not exist.** `.github/workflows/deploy-windows-bridge.yml` runs `Restart-Service mt5-rest-*`, but the bridge runs from `start-all.bat` in the desktop session (it has to; see `docs/windows-vps-setup.md`). The workflow also needs a self-hosted runner on the Windows VPS. Parked by the operator on 2026-10-17.
+- **Bridge time base.** `Deal.time` is broker-server time. Batch 7 made every reader tolerant (window widened by `DEAL_TIME_MARGIN`, no deal time used as a timestamp). If deal timestamps are ever needed on our clock (e.g. accurate `close_time` for SL/TP hits), the bridge should report its server offset and convert.
+
 ## Already resolved (were in the audit's medium/low list)
 
 - `update_stage_status` had no status precondition → fixed in Wave 2 (§4.2).
