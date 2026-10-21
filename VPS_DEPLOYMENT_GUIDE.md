@@ -210,7 +210,7 @@ docker run --rm -it <image-tag> python scripts/hash_password.py
 # 3. Install the nginx rate-limit snippet (optional but recommended):
 cp nginx/limit_req_zones.conf /home/murx/shared/nginx/conf.d/limit_req_zones.conf
 cp nginx/telebot.conf          /home/murx/shared/nginx/conf.d/telebot.conf
-docker exec shared-nginx nginx -t && docker exec shared-nginx nginx -s reload
+docker exec nginx nginx -t && docker exec nginx nginx -s reload
 
 # 4. Redeploy:
 docker compose up -d telebot
