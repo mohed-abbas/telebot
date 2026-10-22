@@ -119,7 +119,6 @@ async def _setup_trading(http: httpx.AsyncClient):
         stagger_delay_min=global_raw.get("stagger_delay_min", 1.0),
         stagger_delay_max=global_raw.get("stagger_delay_max", 5.0),
         lot_jitter_percent=global_raw.get("lot_jitter_percent", 4.0),
-        sl_tp_jitter_points=global_raw.get("sl_tp_jitter_points", 0.8),
     )
 
     accounts = []

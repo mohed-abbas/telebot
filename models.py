@@ -136,7 +136,6 @@ class GlobalConfig:
     stagger_delay_min: float = 1.0
     stagger_delay_max: float = 5.0
     lot_jitter_percent: float = 4.0
-    sl_tp_jitter_points: float = 0.8
     correlation_window_seconds: int = 600  # Phase 6 D-04 — orphan/follow-up pairing window
     signal_max_age_minutes: int = 30       # Phase 6 Research Q2 — reconcile cutoff for abandoned stages
     history_sync_interval_seconds: int = 60  # cadence for the history-deals reconcile loop

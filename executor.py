@@ -1493,8 +1493,8 @@ class Executor:
         For every FILLED stage that persisted an authoritative SL/TP
         (``db.get_filled_stages_for_sltp_verification``) and still has a live
         broker position, compare the position's live SL/TP against the targets
-        and re-issue ``modify_position`` when they deviate beyond a tolerance
-        that swallows humanization jitter. The canonical failure this closes: a
+        and re-issue ``modify_position`` when they deviate by more than two
+        pips (orders carry the signal's exact levels). The canonical failure this closes: a
         stage-1 align (correlated follow-up) whose immediate modify failed —
         the position is then left on its default SL with TP=0 forever, and the
         orphan watchdog excludes any stage-1 that has sibling rows.
@@ -1583,13 +1583,12 @@ class Executor:
         live_sl = getattr(position, "sl", 0.0) or 0.0
         live_tp = getattr(position, "tp", 0.0) or 0.0
 
-        # Tolerance swallows the SL/TP humanization jitter (the live values were
-        # jittered at open; the persisted targets are the raw plan) so we only
-        # act on GROSS deviation — chiefly an unset level (0.0) that should be
-        # protected. Respect the symbol's pip size for the cushion.
+        # Orders carry the signal's exact levels, so live SL/TP should equal
+        # the persisted targets; two pips absorb broker price rounding. Before
+        # 2026-10-22 levels were jittered by up to 0.8 — positions opened then
+        # are moved to the exact levels on their next sweep.
         pip_size = pip_size_for_symbol(symbol)
-        jitter = float(getattr(self.cfg, "sl_tp_jitter_points", 0.0) or 0.0)
-        tol = jitter + 2 * pip_size
+        tol = 2 * pip_size
 
         needs_fix = False
         if target_sl is not None:

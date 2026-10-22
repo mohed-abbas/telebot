@@ -30,7 +30,6 @@ def _cfg():
         stagger_delay_min=0,
         stagger_delay_max=0,
         lot_jitter_percent=0,
-        sl_tp_jitter_points=0,
     )
 
 

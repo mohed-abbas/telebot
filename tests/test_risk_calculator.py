@@ -5,8 +5,6 @@ from models import Direction
 from risk_calculator import (
     calculate_lot_size,
     calculate_sl_distance,
-    calculate_sl_with_jitter,
-    calculate_tp_with_jitter,
 )
 
 
@@ -113,28 +111,6 @@ class TestSLDistance:
 
     def test_sell_sl_above(self):
         assert calculate_sl_distance(4980, 4986) == 6.0
-
-
-class TestSLJitter:
-    def test_jitter_varies(self):
-        results = set()
-        for _ in range(20):
-            sl = calculate_sl_with_jitter(4986.0, 0.8, Direction.SELL)
-            results.add(sl)
-        assert len(results) > 1
-
-    def test_no_jitter(self):
-        sl = calculate_sl_with_jitter(4986.0, 0.0, Direction.SELL)
-        assert sl == 4986.0
-
-
-class TestTPJitter:
-    def test_jitter_varies(self):
-        results = set()
-        for _ in range(20):
-            tp = calculate_tp_with_jitter(4973.0, 0.8, Direction.SELL)
-            results.add(tp)
-        assert len(results) > 1
 
 
 class TestPipSizeConstants:

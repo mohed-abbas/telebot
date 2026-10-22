@@ -177,8 +177,7 @@ Add the new account to the `accounts` array:
     "max_daily_server_messages": 500,
     "stagger_delay_min": 1.0,
     "stagger_delay_max": 5.0,
-    "lot_jitter_percent": 4.0,
-    "sl_tp_jitter_points": 0.8
+    "lot_jitter_percent": 4.0
   }
 }
 ```

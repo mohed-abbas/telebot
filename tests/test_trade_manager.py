@@ -318,7 +318,6 @@ class TestFixedLotBranch:
 # ── Quick 260501-mrw: stage-1 SL/TP alignment with correlated follow-up ──
 
 
-from risk_calculator import calculate_sl_with_jitter, calculate_tp_with_jitter
 from mt5_connector import OrderResult
 
 
@@ -352,7 +351,7 @@ class _StubStore:
 class TestCorrelatedFollowupStage1Align:
     """Quick task 260501-mrw: when a correlated follow-up arrives and stage 1
     is already filled, the existing stage-1 MT5 position must be modified so
-    its SL/TP match the follow-up's jittered plan. Failure isolated (D-17):
+    its SL/TP match the follow-up's exact plan. Failure isolated (D-17):
     a modify failure must not abort band creation/firing.
     """
 
@@ -431,9 +430,9 @@ class TestCorrelatedFollowupStage1Align:
             followup, paired_signal_id=99,
         )
 
-        jitter = tm.cfg.sl_tp_jitter_points
-        expected_sl = calculate_sl_with_jitter(4565.0, jitter, Direction.BUY)
-        expected_tp = calculate_tp_with_jitter(4580.0, jitter, Direction.BUY)
+        # The follow-up's exact levels — no jitter.
+        expected_sl = 4565.0
+        expected_tp = 4580.0
 
         assert modify_spy.await_count == 1
         kwargs = modify_spy.call_args.kwargs
@@ -550,8 +549,7 @@ class TestCorrelatedFollowupStage1Align:
             followup_no_tp, paired_signal_id=99,
         )
 
-        jitter = tm.cfg.sl_tp_jitter_points
-        expected_sl = calculate_sl_with_jitter(4565.0, jitter, Direction.BUY)
+        expected_sl = 4565.0
 
         assert modify_spy.await_count == 1
         kwargs = modify_spy.call_args.kwargs

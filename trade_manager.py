@@ -39,8 +39,6 @@ from mt5_connector import (
 from risk_calculator import (
     calculate_lot_size,
     calculate_sl_distance,
-    calculate_sl_with_jitter,
-    calculate_tp_with_jitter,
     pip_size_for_symbol,
 )
 
@@ -526,9 +524,9 @@ class TradeManager:
             return results
 
         # ── EXEC2-04 / D2-13: SL-less follow-up → clean skip (mirror _handle_open) ──
-        # A follow-up whose signal.sl is None would raise TypeError in
-        # calculate_sl_with_jitter (jitter>0) during stage-1 align, or fail every
-        # band via calculate_sl_distance(entry, None) when fired. Detect it here
+        # A follow-up whose signal.sl is None would align stage 1 to no stop,
+        # or fail every band via calculate_sl_distance(entry, None) when fired.
+        # Detect it here
         # and degrade gracefully instead of crashing — D-08 requires a stop.
         if signal.sl is None:
             logger.info(
@@ -597,17 +595,13 @@ class TradeManager:
             # on its first tick after the fill.
             stage1_status = stage1.get("status") if stage1 else None
             if stage1_status in _LIVE_STAGE_STATUSES:
-                new_sl = calculate_sl_with_jitter(
-                    signal.sl, self.cfg.sl_tp_jitter_points, signal.direction,
-                )
+                # The signal's exact levels (no jitter since 2026-10-22): every
+                # stage carries the same SL and target TP as the signal.
+                new_sl = signal.sl
                 # No numeric TP → pass tp=None so the REST bridge's
                 # is-not-None guard preserves the position's existing TP
                 # (tp=0.0 would be treated as an explicit "remove the TP").
-                new_tp = None
-                if signal.target_tp:
-                    new_tp = calculate_tp_with_jitter(
-                        signal.target_tp, self.cfg.sl_tp_jitter_points, signal.direction,
-                    )
+                new_tp = signal.target_tp or None
                 # §1.3(a): PERSIST the follow-up's real SL/TP onto the stage-1
                 # row BEFORE the modify. The text-only stage-1 row was written
                 # with signal_sl=default-SL and signal_tp=None; overwrite it with
@@ -1140,20 +1134,16 @@ class TradeManager:
         if lot_size <= 0:
             return {"account": name, "status": "failed", "reason": "Calculated lot size is 0"}
 
-        # ── Apply SL/TP jitter ──────────────────────────────────────────
-        jittered_sl = calculate_sl_with_jitter(
-            signal.sl, self.cfg.sl_tp_jitter_points, signal.direction,
-        )
-        jittered_tp = signal.target_tp
-        if jittered_tp:
-            jittered_tp = calculate_tp_with_jitter(
-                jittered_tp, self.cfg.sl_tp_jitter_points, signal.direction,
-            )
+        # ── SL/TP: the signal's exact levels ────────────────────────────
+        # No jitter (operator decision 2026-10-22): SL 4501 is sent as 4501,
+        # and every stage of a sequence carries the same SL and target TP.
+        order_sl = signal.sl
+        order_tp = signal.target_tp
 
         # ── D-08: sl=0.0 is never acceptable ────────────────────────────
         # Applies to all paths; text-only is the likeliest source of this footgun
         # (default_sl_pips mis-computed or yielding a non-positive sl price).
-        if jittered_sl is None or jittered_sl <= 0.0:
+        if order_sl is None or order_sl <= 0.0:
             reason = "Refusing to submit sl=0.0 — default_sl_pips must yield non-zero SL (D-08)"
             logger.error("%s: %s", name, reason)
             return {"account": name, "status": "failed", "reason": reason}
@@ -1249,8 +1239,8 @@ class TradeManager:
                     symbol=signal.symbol,
                     order_type=order_type,
                     volume=lot_size,
-                    sl=jittered_sl,
-                    tp=jittered_tp or 0.0,
+                    sl=order_sl,
+                    tp=order_tp or 0.0,
                     comment=target_comment,
                 )
             else:
@@ -1259,8 +1249,8 @@ class TradeManager:
                     order_type=order_type,
                     volume=lot_size,
                     price=limit_price,
-                    sl=jittered_sl,
-                    tp=jittered_tp or 0.0,
+                    sl=order_sl,
+                    tp=order_tp or 0.0,
                     comment=target_comment,
                 )
         except Exception as exc:
@@ -1279,7 +1269,7 @@ class TradeManager:
             return await self._handle_unknown_open_outcome(
                 name=name, signal=signal, signal_id=signal_id, result=result,
                 staged=staged, owns_row=owns_row, stage_row_id=stage_row_id,
-                lot_size=lot_size, sl=jittered_sl, tp=jittered_tp or 0.0,
+                lot_size=lot_size, sl=order_sl, tp=order_tp or 0.0,
             )
 
         if result.success:
@@ -1308,8 +1298,8 @@ class TradeManager:
                     symbol=signal.symbol,
                     direction=signal.direction.value,
                     entry_price=result.price,
-                    sl=jittered_sl,
-                    tp=jittered_tp or 0.0,
+                    sl=order_sl,
+                    tp=order_tp or 0.0,
                     lot_size=lot_size,
                     ticket=result.ticket,
                     status="opened" if use_market else "pending",
@@ -1327,8 +1317,8 @@ class TradeManager:
                         order_type=order_type.value,
                         volume=lot_size,
                         price=limit_price,
-                        sl=jittered_sl,
-                        tp=jittered_tp or 0.0,
+                        sl=order_sl,
+                        tp=order_tp or 0.0,
                         expires_at=expires_at,
                     )
             except Exception as exc:
@@ -1346,8 +1336,8 @@ class TradeManager:
                 "ticket": result.ticket,
                 "price": result.price if use_market else limit_price,
                 "lot_size": lot_size,
-                "sl": jittered_sl,
-                "tp": jittered_tp or 0.0,
+                "sl": order_sl,
+                "tp": order_tp or 0.0,
                 "order_type": "market" if use_market else "limit",
             }
         else:
@@ -1363,8 +1353,8 @@ class TradeManager:
                     symbol=signal.symbol,
                     direction=signal.direction.value,
                     entry_price=0,
-                    sl=jittered_sl,
-                    tp=jittered_tp or 0.0,
+                    sl=order_sl,
+                    tp=order_tp or 0.0,
                     lot_size=lot_size,
                     ticket=0,
                     status="failed",

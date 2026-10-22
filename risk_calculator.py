@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import random
 
-from models import AccountConfig, Direction
 
 logger = logging.getLogger(__name__)
 
@@ -73,26 +72,6 @@ def calculate_lot_size(
     lot_size = max(lot_size, 0.01)  # minimum 0.01 lots
 
     return round(lot_size, 2)
-
-
-def calculate_sl_with_jitter(sl: float, jitter_points: float, direction: Direction) -> float:
-    """Apply slight random jitter to SL for humanization.
-
-    For BUY: SL is below entry, so jitter moves it slightly up or down.
-    For SELL: SL is above entry, so jitter moves it slightly up or down.
-    """
-    if jitter_points <= 0:
-        return sl
-    offset = random.uniform(-jitter_points, jitter_points)
-    return round(sl + offset, 2)
-
-
-def calculate_tp_with_jitter(tp: float, jitter_points: float, direction: Direction) -> float:
-    """Apply slight random jitter to TP for humanization."""
-    if jitter_points <= 0:
-        return tp
-    offset = random.uniform(-jitter_points, jitter_points)
-    return round(tp + offset, 2)
 
 
 def calculate_sl_distance(entry_price: float, sl: float) -> float:

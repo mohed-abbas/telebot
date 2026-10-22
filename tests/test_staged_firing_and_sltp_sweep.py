@@ -145,10 +145,10 @@ class _FakeNotifier:
         self.alerts.append(message)
 
 
-def _make_executor(connector, notifier=None, jitter=0.8):
+def _make_executor(connector, notifier=None):
     return Executor(
         trade_manager=_FakeTM({"acct": connector}),
-        global_config=SimpleNamespace(sl_tp_jitter_points=jitter),
+        global_config=SimpleNamespace(),
         notifier=notifier,
     )
 
@@ -184,9 +184,9 @@ async def test_sweep_remodifies_when_tp_deviates(monkeypatch):
 
 
 async def test_sweep_noop_when_in_sync(monkeypatch):
-    """(iii) Sweep is a no-op when live SL/TP already match (within jitter)."""
-    # 0.3 / 0.2 offsets are inside the jitter tolerance (0.8 + 2*pip).
-    pos = _FakePos(ticket=555, comment="telebot-1-s1", sl=1990.2, tp=2020.3)
+    """(iii) Sweep is a no-op when live SL/TP already match (within 2 pips)."""
+    # 0.1 / 0.15 offsets are inside the tolerance (2 pips = 0.2 on gold).
+    pos = _FakePos(ticket=555, comment="telebot-1-s1", sl=1990.1, tp=2020.15)
     conn = _FakeConnector([pos])
     ex = _make_executor(conn)
 
