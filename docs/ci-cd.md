@@ -91,8 +91,31 @@ Create an Environment named `production` (Settings → Environments) with **requ
 
 The repo is public and the Windows runner can restart the bridge services, so code from a stranger's pull request must never run on it. Set Settings → Actions → General → *Fork pull request workflows from outside collaborators* → **Require approval for all outside collaborators**, and never approve a workflow run on a PR you haven't read. The deploy workflows themselves only trust pushes to this repo's `main`.
 
+## What a deploy does not cover
+
+A deploy ships what is in git and restarts one process. Three kinds of change
+are outside that and are applied by hand on the server.
+
+| You change | Where it lives | How to apply it |
+|---|---|---|
+| `nginx/telebot.conf`, `nginx/limit_req_zones.conf` | the **shared** nginx container on the Linux VPS (`/home/murx/shared/nginx/conf.d/`), used by other apps too | copy, test, reload — see below. A deploy pulls the new file into the clone but nginx never reads it from there. |
+| Linux `.env` (`DATABASE_URL`, `MT5_PASS_1`, `SESSION_SECRET`, …) | `/home/murx/apps/telebot/.env`, gitignored | edit on the VPS, then `docker compose up -d telebot` (re-creates the container). `docker compose restart` does **not** re-read `.env`. Running *Deploy — Linux* by hand also re-creates it. |
+| `accounts.json` | `/home/murx/apps/telebot/accounts.json`, gitignored, mounted read-only | edit on the VPS, then `docker compose restart telebot`. Connection fields (`login`, `server`, `password_env`, `mt5_host`, `mt5_port`) are read at every start. Risk fields (`max_open_trades`, `max_lot_size`, …) only seed the database the first time an account is added; change them later in the dashboard *Settings*. |
+| Windows `.env.account1` (`MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER`, `MT5_API_KEY`, …) | `C:\Apps\telebot\mt5-rest-server\.env.account1`, gitignored | edit on the VPS, then restart the bridge: run *Deploy — Windows* by hand (a manual run always restarts it), or the one-line restart in `docs/windows-vps-setup.md`. If `MT5_API_KEY` changes, the Linux `.env` must get the same key. |
+
+**nginx** (Linux VPS, after the deploy that brought the new files):
+
+```bash
+cd /home/murx/apps/telebot
+cp nginx/limit_req_zones.conf nginx/telebot.conf /home/murx/shared/nginx/conf.d/
+docker exec nginx nginx -t && docker exec nginx nginx -s reload
+```
+
+`nginx -t` checks the whole shared config first; if it fails, nothing is
+reloaded and the other apps keep running on the old config.
+
 ## Notes
 
 - The VPS's own git credentials handle `git pull` (the repos are already cloned/authenticated). The deploy key above is only for SSH access, not repo access.
-- The Linux deploy only rebuilds the `telebot` container; shared postgres/nginx are on external networks and untouched.
+- The Linux deploy only rebuilds the `telebot` container; shared postgres/nginx are on external networks and untouched (see *What a deploy does not cover*).
 - First-time deploy caveats from the audit still apply: set `TRUST_PROXY=true` and expect a one-time re-login (see `project_wave3_auth_deploy_reqs`).
