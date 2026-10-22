@@ -151,6 +151,14 @@ jobs:
             for ($t = 0; $t -lt 10 -and (Get-NetTCPConnection -LocalPort $i.Port -State Listen -ErrorAction SilentlyContinue); $t++) {
               Start-Sleep -Seconds 1
             }
+            # A listener that survived (e.g. started from an elevated shell while
+            # the runner is not elevated) would keep answering /ping with the OLD
+            # code and the deploy would report success. Fail instead.
+            $left = Get-NetTCPConnection -LocalPort $i.Port -State Listen -ErrorAction SilentlyContinue
+            if ($left) {
+              $ids = ($left | ForEach-Object OwningProcess | Sort-Object -Unique) -join ', '
+              throw "Port $($i.Port) still in use by pid $ids after stopping - stop it by hand and re-run"
+            }
           }
 
           function Start-Bridge($i) {
