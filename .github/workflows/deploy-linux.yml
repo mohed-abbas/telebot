@@ -1,12 +1,19 @@
 name: Deploy — Linux (bot + dashboard)
 
-# MANUAL ONLY. Trigger this from the Actions tab (or `gh workflow run`) when you
-# know no trade is in a sensitive state. SSHes into the VPS, pulls, rebuilds the
-# telebot container, and health-checks /health. Shared postgres/nginx are never
-# touched. Deploying the bot restarts the Telegram listener for a few seconds;
-# the bot reconnects and reconciles broker state on startup.
+# Runs automatically after CI passes on a push to main, then WAITS for an
+# approval click on the "production" Environment (required reviewers) — approve
+# only when no trade is in a sensitive state. Can also be run by hand from the
+# Actions tab. SSHes into the VPS, fast-forwards to the CI-tested commit,
+# rebuilds the telebot container, and health-checks /health. Shared
+# postgres/nginx are never touched. Deploying the bot restarts the Telegram
+# listener for a few seconds; the bot reconnects and reconciles broker state on
+# startup.
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirm:
@@ -14,13 +21,24 @@ on:
         required: true
         default: ''
 
+# One deploy at a time; a newer pending deploy supersedes an older one.
+concurrency:
+  group: deploy-linux
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Linux VPS
-    if: ${{ github.event.inputs.confirm == 'deploy' }}
+    # workflow_run: only green CI from a push to THIS repo's main. The
+    # head_repository check stops a fork PR from a branch named "main" from
+    # triggering a deploy.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'deploy')
     runs-on: ubuntu-latest
-    # Optional extra gate: configure a "production" Environment with required
-    # reviewers in repo Settings to require an approval click before this runs.
     environment: production
 
     steps:
@@ -30,6 +48,8 @@ jobs:
           SSH_HOST: ${{ secrets.LINUX_SSH_HOST }}
           SSH_USER: ${{ secrets.LINUX_SSH_USER }}
           APP_DIR: ${{ vars.LINUX_APP_DIR }}
+          # Deploy exactly the commit CI tested, not whatever main is now.
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh
@@ -38,13 +58,13 @@ jobs:
 
           ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/id_deploy \
             "$SSH_USER@$SSH_HOST" \
-            "APP_DIR='${APP_DIR:-/home/murx/apps/telebot}' bash -s" <<'REMOTE'
+            "APP_DIR='${APP_DIR:-/home/murx/apps/telebot}' DEPLOY_SHA='$DEPLOY_SHA' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$APP_DIR"
-          echo "==> Pulling latest main"
+          echo "==> Updating to $DEPLOY_SHA"
           git fetch --prune origin
           git checkout main
-          git pull --ff-only origin main
+          git merge --ff-only "$DEPLOY_SHA"
 
           echo "==> Rebuilding + restarting telebot"
           docker compose up -d --build telebot

@@ -1,14 +1,30 @@
 name: Deploy — Windows (MT5 bridge)
 
-# MANUAL ONLY, and only needed when mt5-rest-server/** actually changed (rare).
-# Runs on a self-hosted GitHub runner INSTALLED ON THE WINDOWS VPS (label
-# "mt5-bridge"), so it needs no inbound SSH/WinRM. It pulls into the existing
-# clone, reinstalls the bridge venv deps, and restarts the NSSM services.
+# Runs automatically after CI passes on a push to main, but only deploys when
+# mt5-rest-server/** changed between the commit the Windows clone is on and the
+# CI-tested commit (rare). It then WAITS for an approval click on the
+# "production" Environment — approve only with the book in a safe state. Can
+# also be run by hand from the Actions tab (always deploys).
 #
-# WARNING: restarting the bridge briefly drops the MT5 connection. Only run this
-# with the book in a safe state. The bot side re-syncs on the next reconcile.
+# Runs on a self-hosted GitHub runner INSTALLED ON THE WINDOWS VPS (label
+# "mt5-bridge"), so it needs no inbound SSH/WinRM. It fast-forwards the existing
+# clone, stops the bridge (uvicorn) processes, reinstalls the venv deps, and
+# starts the bridges again. The MT5 terminal itself is never touched.
+#
+# The bridge must run in the same desktop session as terminal64.exe (Windows
+# services can't — see Issue #10 in docs/issues-solved.md), so each bridge is
+# launched through a scheduled task with an Interactive logon: it runs in the
+# logged-on user's desktop session and is owned by Task Scheduler, so the runner
+# doesn't kill it when the job ends.
+#
+# WARNING: restarting the bridge briefly drops the MT5 connection. The bot side
+# re-syncs on the next reconcile.
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       confirm:
@@ -16,27 +32,100 @@ on:
         required: true
         default: ''
 
+concurrency:
+  group: deploy-windows-bridge
+  cancel-in-progress: false
+
+env:
+  # Deploy exactly the commit CI tested, not whatever main is now.
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  # Path to the git clone on the Windows VPS (repo Variable MT5_REPO_DIR).
+  REPO_DIR: ${{ vars.MT5_REPO_DIR }}
+  # Bridges to restart, as <env file suffix>=<port> pairs, e.g.
+  # "account1=8001,account2=8002" (repo Variable MT5_BRIDGE_INSTANCES).
+  # Default matches start-all.bat: .env.account1 on port 8001.
+  BRIDGE_INSTANCES: ${{ vars.MT5_BRIDGE_INSTANCES }}
+
 jobs:
+  detect:
+    name: Did the bridge change?
+    # Same trust rules as deploy-linux.yml: green CI from a push to this repo's
+    # main, or a confirmed manual run.
+    if: >-
+      (github.event_name == 'workflow_run'
+        && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push'
+        && github.event.workflow_run.head_repository.full_name == github.repository)
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.confirm == 'deploy')
+    runs-on: [self-hosted, windows, mt5-bridge]
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+
+    steps:
+      - id: diff
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') {
+            Write-Host "Manual run — deploying regardless of changes"
+            "changed=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $repo = if ($env:REPO_DIR) { $env:REPO_DIR } else { 'C:\Apps\telebot' }
+          if (-not (Test-Path $repo)) { throw "Repo dir not found: $repo (set the MT5_REPO_DIR variable)" }
+          $git = 'git'
+          if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $git = 'C:\Program Files\Git\bin\git.exe' }
+
+          # Fetch only — the clone stays on the last DEPLOYED commit, so the diff
+          # below covers every bridge change since then, across any number of pushes.
+          Set-Location $repo
+          & $git fetch --prune origin
+          if ($LASTEXITCODE) { throw "git fetch failed" }
+          $files = & $git diff --name-only HEAD $env:DEPLOY_SHA -- mt5-rest-server/
+          if ($LASTEXITCODE) { throw "git diff failed" }
+
+          if ($files) {
+            Write-Host "Bridge changes since the deployed commit:"; $files | ForEach-Object { Write-Host "   $_" }
+            "changed=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No mt5-rest-server changes — skipping bridge deploy"
+            "changed=false" >> $env:GITHUB_OUTPUT
+          }
+
   deploy:
     name: Deploy MT5 bridge
-    if: ${{ github.event.inputs.confirm == 'deploy' }}
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
     runs-on: [self-hosted, windows, mt5-bridge]
     environment: production
 
     steps:
-      - name: Pull, install, restart services
+      - name: Update, install, restart bridges
         shell: pwsh
-        env:
-          # Path to the git clone on the Windows VPS (repo Variable MT5_REPO_DIR).
-          REPO_DIR: ${{ vars.MT5_REPO_DIR }}
         run: |
           $ErrorActionPreference = 'Stop'
           $repo = if ($env:REPO_DIR) { $env:REPO_DIR } else { 'C:\Apps\telebot' }
           $bridge = Join-Path $repo 'mt5-rest-server'
           $python = Join-Path $bridge 'venv\Scripts\python.exe'
+          $logDir = Join-Path $bridge 'logs'
 
           if (-not (Test-Path $repo))   { throw "Repo dir not found: $repo (set the MT5_REPO_DIR variable)" }
           if (-not (Test-Path $python)) { throw "Bridge venv python not found: $python" }
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          $spec = if ($env:BRIDGE_INSTANCES) { $env:BRIDGE_INSTANCES } else { 'account1=8001' }
+          $instances = foreach ($pair in $spec -split ',') {
+            $name, $port = $pair.Trim() -split '=', 2
+            $envFile = Join-Path $bridge ".env.$name"
+            if (-not (Test-Path $envFile)) { throw "Env file not found: $envFile (check MT5_BRIDGE_INSTANCES)" }
+            [pscustomobject]@{ Name = $name; Port = [int]$port; EnvFile = $envFile; Log = Join-Path $logDir "$name.log" }
+          }
+
+          # The bridge is useless without the terminal, and restarting the terminal
+          # is out of scope here — refuse before stopping anything.
+          if (-not (Get-Process terminal64 -ErrorAction SilentlyContinue)) {
+            throw "terminal64.exe is not running — start it (start-all.bat) before deploying"
+          }
 
           # git is not always on PATH on the Windows VPS (see docs/windows-vps-setup.md).
           $git = 'git'
@@ -45,24 +134,73 @@ jobs:
             if (-not (Test-Path $git)) { throw "git not found on PATH or at $git" }
           }
 
-          Write-Host "==> Pulling latest main in $repo"
+          Write-Host "==> Updating $repo to $env:DEPLOY_SHA"
           Set-Location $repo
           & $git fetch --prune origin
+          if ($LASTEXITCODE) { throw "git fetch failed" }
           & $git checkout main
-          & $git pull --ff-only origin main
+          if ($LASTEXITCODE) { throw "git checkout main failed" }
+          & $git merge --ff-only $env:DEPLOY_SHA
+          if ($LASTEXITCODE) { throw "git merge --ff-only failed — clone has diverged from origin/main" }
 
-          Write-Host "==> Reinstalling bridge dependencies"
-          & $python -m pip install -r (Join-Path $bridge 'requirements.txt')
-
-          Write-Host "==> Restarting mt5-rest-* services"
-          $services = Get-Service -Name 'mt5-rest-*' -ErrorAction Stop
-          if (-not $services) { throw "No mt5-rest-* services found — is the bridge installed via install-service.ps1?" }
-          $services | Restart-Service -Force
-          Start-Sleep -Seconds 6
-
-          Write-Host "==> Verifying services are Running"
-          foreach ($s in (Get-Service -Name 'mt5-rest-*')) {
-            if ($s.Status -ne 'Running') { throw "Service $($s.Name) is $($s.Status)" }
-            Write-Host "   $($s.Name): $($s.Status)"
+          function Stop-Bridge($i) {
+            # Whatever listens on the port: a bridge from start-all.bat or from a
+            # previous deploy.
+            Get-NetTCPConnection -LocalPort $i.Port -State Listen -ErrorAction SilentlyContinue |
+              ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+            for ($t = 0; $t -lt 10 -and (Get-NetTCPConnection -LocalPort $i.Port -State Listen -ErrorAction SilentlyContinue); $t++) {
+              Start-Sleep -Seconds 1
+            }
           }
+
+          function Start-Bridge($i) {
+            $launcher = Join-Path $logDir "run-$($i.Name).cmd"
+            @(
+              '@echo off',
+              "title MT5 bridge $($i.Name) (logs: $($i.Log))",
+              "set `"ENV_FILE=$($i.EnvFile)`"",
+              'set PYTHONUNBUFFERED=1',
+              "cd /d `"$bridge`"",
+              "`"$python`" -m uvicorn server:app --host 0.0.0.0 --port $($i.Port) >> `"$($i.Log)`" 2>&1"
+            ) -join "`r`n" | Set-Content -Encoding ascii $launcher
+
+            # Interactive logon = runs in this user's desktop session, next to the
+            # terminal. No time limit (the default 72 h would kill the bridge).
+            $task = "telebot-bridge-$($i.Name)"
+            Register-ScheduledTask -TaskName $task -Force `
+              -Action (New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$launcher`"") `
+              -Principal (New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited) `
+              -Settings (New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew) | Out-Null
+            Start-ScheduledTask -TaskName $task
+          }
+
+          function Wait-Bridge($i) {
+            # ~150 s: since batch 7 the bridge retries the terminal attach every
+            # 10 s for 2 minutes after startup.
+            for ($t = 0; $t -lt 30; $t++) {
+              Start-Sleep -Seconds 5
+              try { $r = Invoke-RestMethod "http://127.0.0.1:$($i.Port)/api/v1/ping" -TimeoutSec 4 } catch { continue }
+              if ($r.data.alive) { Write-Host "   $($i.Name) on :$($i.Port): alive"; return }
+            }
+            Write-Host "!! $($i.Name) not alive — last log lines:"
+            if (Test-Path $i.Log) { Get-Content $i.Log -Tail 40 }
+            throw "Bridge $($i.Name) on :$($i.Port) not alive after ~150 s"
+          }
+
+          Write-Host "==> Stopping bridges: $(($instances | ForEach-Object { "$($_.Name):$($_.Port)" }) -join ', ')"
+          foreach ($i in $instances) { Stop-Bridge $i }
+
+          # Deps are installed with the bridges stopped (Windows locks loaded
+          # .pyd files). Start them again even if pip fails, then fail the job.
+          try {
+            Write-Host "==> Reinstalling bridge dependencies"
+            & $python -m pip install -r (Join-Path $bridge 'requirements.txt')
+            if ($LASTEXITCODE) { throw "pip install failed" }
+          } finally {
+            Write-Host "==> Starting bridges"
+            foreach ($i in $instances) { Start-Bridge $i }
+          }
+
+          Write-Host "==> Waiting for the bridges to attach to the terminal"
+          foreach ($i in $instances) { Wait-Bridge $i }
           Write-Host "==> Deploy complete"

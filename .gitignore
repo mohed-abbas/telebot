@@ -17,3 +17,11 @@ data/
 static/css/app.*.css
 static/css/manifest.json
 .playwright-mcp/
+
+# MT5 bridge logs + deploy launchers (written on the Windows VPS)
+mt5-rest-server/logs/
+
+# Server-side secrets and environments (repo is public)
+.env.bak
+mt5-rest-server/.env.*
+mt5-rest-server/venv/

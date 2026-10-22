@@ -401,12 +401,14 @@ taskkill /PID <PID> /F
 ```
 
 ### Updating the code
+Bridge changes pushed to `main` are deployed by the `Deploy — Windows (MT5
+bridge)` workflow after an approval click (see [ci-cd.md](ci-cd.md)). By hand:
 ```powershell
 cd C:\Apps\telebot
 & "C:\Program Files\Git\bin\git.exe" pull
 ```
-Then restart uvicorn (kill the python process and re-run `start-all.bat`,
-or just reboot the VPS).
+Then restart only the bridge (see "Restart only the bridge" above), or reboot
+the VPS. Don't re-run `start-all.bat` while the terminal is open.
 
 ---
 
