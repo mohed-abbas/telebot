@@ -75,8 +75,10 @@ def executor(tm, global_config):
 @pytest.mark.integration
 @pytest.mark.asyncio(loop_scope="session")
 class TestConcurrentSignals:
+    # strict=False: whether the race shows depends on task scheduling, so a run
+    # where it does not (XPASS) must not fail CI — it did on 2026-10-22.
     @pytest.mark.xfail(
-        strict=True,
+        strict=False,
         reason="Known race: the duplicate-position check in _handle_open is "
         "read-then-act, so concurrent identical signals all pass it before any "
         "order fills (docs/audit/remediation-backlog.md, trade-state consistency).",
