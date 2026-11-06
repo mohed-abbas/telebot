@@ -25,3 +25,6 @@ mt5-rest-server/logs/
 .env.bak
 mt5-rest-server/.env.*
 mt5-rest-server/venv/
+
+# Telegram chat exports (private channel content, used for parser replay only)
+telegramchatexport/

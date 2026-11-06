@@ -214,6 +214,10 @@ def determine_order_type(
 
 # ── SL/TP validation (EXEC-03) ──────────────────────────────────────
 
+# A signalled SL move further than this fraction of the entry price is refused.
+MAX_SL_MOVE_DISTANCE_FRACTION = 0.05
+
+
 def validate_sl_for_direction(direction: str, open_price: float, new_sl: float) -> bool:
     """Validate that SL makes sense for position direction.
     BUY: SL must be below open_price (we lose if price drops).
@@ -655,6 +659,15 @@ class TradeManager:
                         "sl": new_sl,
                         "tp": new_tp,
                     })
+                    try:
+                        await db.update_trade_levels(
+                            stage1["mt5_ticket"], acct_name, sl=new_sl, tp=new_tp,
+                        )
+                    except Exception as exc:  # display row; must not abort bands
+                        logger.warning(
+                            "%s: stage-1 trade row SL/TP update failed: %s",
+                            acct_name, exc,
+                        )
                     try:
                         await db.log_signal(
                             raw_text=signal.raw_text or "",
@@ -1459,7 +1472,8 @@ class TradeManager:
     ) -> None:
         """Review 2026-10-16 #1 — after a live SL/TP edit, store the new level as
         the stage row's target so the post-trade SL/TP sweep keeps it instead of
-        snapping the position back to the original signal levels."""
+        snapping the position back to the original signal levels. The trade row
+        gets the level too, so history shows what the position really had."""
         try:
             await db.update_stage_targets_for_position(
                 acct_name, getattr(pos, "comment", ""), sl=sl, tp=tp,
@@ -1468,6 +1482,13 @@ class TradeManager:
             logger.warning(
                 "%s: stage target update failed ticket=%s — the SL/TP sweep may "
                 "revert this edit: %s", acct_name, getattr(pos, "ticket", "?"), exc,
+            )
+        try:
+            await db.update_trade_levels(pos.ticket, acct_name, sl=sl, tp=tp)
+        except Exception as exc:
+            logger.warning(
+                "%s: trade row SL/TP update failed ticket=%s: %s",
+                acct_name, getattr(pos, "ticket", "?"), exc,
             )
 
     def _check_stale(self, signal: SignalAction, current_price: float) -> str | None:
@@ -1516,6 +1537,29 @@ class TradeManager:
             acct = self.accounts.get(acct_name)
             if not acct or not acct.enabled or not connector.connected:
                 continue
+
+            # Cancel the bands still waiting for the zone first, so none fires
+            # while (or after) the positions are being closed.
+            try:
+                cancelled = await db.cancel_unfilled_stages_for_close(acct_name, signal.symbol)
+                if cancelled:
+                    logger.info(
+                        "%s: close signal cancelled %d unfilled stage(s) on %s",
+                        acct_name, cancelled, signal.symbol,
+                    )
+                    results.append({
+                        "account": acct_name, "status": "stages_cancelled",
+                        "count": cancelled,
+                    })
+            except Exception as exc:
+                logger.error(
+                    "%s: cancelling unfilled stages on close failed — armed bands "
+                    "may still fire: %s", acct_name, exc,
+                )
+                results.append({
+                    "account": acct_name, "status": "failed",
+                    "reason": f"could not cancel unfilled stages: {exc}",
+                })
 
             try:
                 positions = await connector.get_positions(signal.symbol)
@@ -1638,6 +1682,20 @@ class TradeManager:
                         "account": acct_name, "status": "skipped",
                         "ticket": pos.ticket,
                         "reason": f"Invalid SL {new_sl:.2f} for {pos.direction} position (open={pos.open_price:.2f})",
+                    })
+                    continue
+                # A level this far from the entry is a typo in the message
+                # ("SL: 51108"); on the right side it would still pass the
+                # direction check and leave the position effectively unprotected.
+                if abs(new_sl - pos.open_price) > pos.open_price * MAX_SL_MOVE_DISTANCE_FRACTION:
+                    results.append({
+                        "account": acct_name, "status": "skipped",
+                        "ticket": pos.ticket,
+                        "reason": (
+                            f"SL {new_sl:.2f} is more than "
+                            f"{MAX_SL_MOVE_DISTANCE_FRACTION:.0%} from the entry "
+                            f"{pos.open_price:.2f} — likely a typo"
+                        ),
                     })
                     continue
 

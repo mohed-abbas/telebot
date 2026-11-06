@@ -12,7 +12,7 @@ from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 from config import settings, load_accounts_config
 from discord_sender import send_message
-from signal_parser import parse_signal, format_parsed_signal, is_signal_like
+from signal_parser import MessageFlow, format_parsed_signal, is_signal_like
 
 MAX_FILE_SIZE = 8 * 1024 * 1024  # 8 MB
 
@@ -351,6 +351,7 @@ def _register_message_handler(
     client, http, executor, notifier, group_names, pipeline_ready: asyncio.Event,
 ) -> None:
     """Attach the NewMessage handler (relay + signal execution) to `client`."""
+    message_flow = MessageFlow()
 
     @client.on(events.NewMessage(chats=settings.tg_chat_ids))
     async def handler(event):
@@ -429,8 +430,10 @@ def _register_message_handler(
 
         # ── Signal parsing & trade execution ────────────────────────
         if text:
-            signal = parse_signal(text)
-            if signal:
+            # A message can carry two instructions ("take half profits and set
+            # breakeven"); they run in order.
+            signals = message_flow.actions_for(event.chat_id, text)
+            for signal in signals:
                 parsed_log = format_parsed_signal(signal)
                 logger.info("Signal detected: %s", parsed_log.replace("\n", " | "))
 
@@ -463,8 +466,20 @@ def _register_message_handler(
                                 await notifier.notify_alert(
                                     f"EXECUTION ERROR: {exc}\nSignal: {signal.raw_text[:200]}"
                                 )
-            elif is_signal_like(text):
+            if not signals and is_signal_like(text):
                 logger.info("Signal-like text detected but not parsed: %.100s", text)
+                # Keep a record of it next to the parsed signals, so a missed
+                # instruction can be found and replayed later.
+                import db
+                try:
+                    await db.log_signal(
+                        raw_text=text,
+                        signal_type="unparsed",
+                        action_taken="alert_only",
+                        source_name=group_name,
+                    )
+                except Exception as exc:
+                    logger.warning("Could not store unparsed message: %s", exc)
                 if notifier:
                     await notifier.notify_alert(
                         f"PARSE FAILED: Signal-like text not recognized:\n{text[:200]}"

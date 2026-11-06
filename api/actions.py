@@ -198,6 +198,10 @@ async def levels(
             "%s: stage target update failed ticket=%d — the SL/TP sweep may revert "
             "this edit: %s", account, ticket, exc,
         )
+    try:
+        await db.update_trade_levels(ticket, account, sl=sl_to_send, tp=tp_to_send)
+    except Exception as exc:
+        logger.warning("%s: trade row SL/TP update failed ticket=%d: %s", account, ticket, exc)
 
     changed: dict[str, float] = {}
     if sl_to_send is not None:

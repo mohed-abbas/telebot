@@ -1464,6 +1464,12 @@ class Executor:
                 row["signal_id"],
             )
             try:
+                await db.update_trade_levels(ticket, acct_name, tp=protective_tp)
+            except Exception as exc:  # display row only
+                logger.warning(
+                    "%s: trade row TP update failed ticket=%s: %s", acct_name, ticket, exc,
+                )
+            try:
                 await db.log_signal(
                     raw_text=(
                         f"<orphan-protective-tp signal_id={row['signal_id']} "
@@ -1686,6 +1692,12 @@ class Executor:
                 acct_name, ticket, sl_to_send, tp_to_send,
                 stage["signal_id"], stage["stage_number"],
             )
+            try:
+                await db.update_trade_levels(ticket, acct_name, sl=sl_to_send, tp=tp_to_send)
+            except Exception as exc:  # display row only
+                logger.warning(
+                    "%s: trade row SL/TP update failed ticket=%s: %s", acct_name, ticket, exc,
+                )
         else:
             self._sltp_verify_attempts[stage_id] = attempts + 1
             logger.warning(

@@ -416,6 +416,25 @@ async def mark_trade_closing(
     return _rows_affected(tag) == 1
 
 
+async def update_trade_levels(
+    ticket: int, account_name: str, *, sl: float | None = None, tp: float | None = None,
+) -> bool:
+    """Record a live SL/TP change on the open trade row, so history and the
+    dashboard show the levels the position actually has (not the ones it was
+    opened with). None keeps the stored level. Returns True when a row changed.
+    """
+    if sl is None and tp is None:
+        return False
+    tag = await _pool.execute(
+        """UPDATE trades
+           SET sl = COALESCE($1::double precision, sl),
+               tp = COALESCE($2::double precision, tp)
+           WHERE ticket=$3 AND account_name=$4 AND status IN ('opened', 'pending')""",
+        sl, tp, ticket, account_name,
+    )
+    return _rows_affected(tag) == 1
+
+
 async def get_stale_closing_trades(
     account_name: str, older_than_seconds: int, *, read_until: datetime | None = None,
 ) -> list[dict]:
@@ -1530,6 +1549,23 @@ async def cancel_unfilled_stages_target_reached(
     return await _cancel_unfilled_stages(
         "cancelled_target_reached", signal_id, reason, account_name,
     )
+
+
+async def cancel_unfilled_stages_for_close(account_name: str, symbol: str) -> int:
+    """Close-all signal — cancel this account's armed, unfilled stages on the
+    symbol, so a band waiting for the zone cannot open a new trade after the
+    provider said to get out. Rows already 'firing' are left to finish; the
+    stage-1 exit cascade covers them. Status reuses the stage-1 exit cascade's
+    ('Stage 1 exited' on the dashboard) with reason 'close_signal'.
+    """
+    result = await _pool.execute(
+        "UPDATE staged_entries "
+        "SET status='cancelled_stage1_closed', cancelled_reason='close_signal' "
+        "WHERE account_name=$1 AND symbol=$2 "
+        "AND status IN ('awaiting_followup','awaiting_zone')",
+        account_name, symbol,
+    )
+    return _rows_affected(result)
 
 
 async def _cancel_unfilled_stages(

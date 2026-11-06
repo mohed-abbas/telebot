@@ -67,6 +67,18 @@ class Notifier:
                 lines.append(f"  {acct}: SKIPPED — {r.get('reason', '?')}")
             elif status == "failed":
                 lines.append(f"  {acct}: FAILED — {r.get('reason', '?')}")
+            elif status == "stage1_aligned":
+                tp = r.get("tp")
+                tp_str = f"{tp:.2f}" if tp is not None else "unchanged"
+                lines.append(
+                    f"  {acct}: Stage 1 aligned #{r['ticket']} | "
+                    f"SL → {r['sl']:.2f} | TP → {tp_str}"
+                )
+            elif status == "stages_cancelled":
+                lines.append(
+                    f"  {acct}: {r['count']} unfilled stage(s) cancelled — "
+                    "they will not open later"
+                )
             elif status == "stage1_align_failed":
                 lines.append(
                     f"  {acct}: ⚠️ Stage-1 TP/SL alignment FAILED (#{r.get('ticket', '?')}) — "
