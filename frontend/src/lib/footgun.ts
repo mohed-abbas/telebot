@@ -14,16 +14,37 @@
 //
 // Copy strings are the verbatim UI-SPEC Copywriting Contract (11-UI-SPEC.md:308-309).
 
+//
+// maxOpenTrades: the per-symbol open-position cap. Entries above it are always 'capped' and
+// never open, so the copy states what can REALLY open: min(maxStages, maxOpenTrades) entries.
+// When the cap cuts entries, fixed_lot shows the reachable total (per-entry lot × entries
+// that can open) and says how many entries are planned but blocked.
+
 export function footgun(
   mode: "percent" | "fixed_lot",
   riskValue: number,
   maxStages: number,
+  maxOpenTrades: number = maxStages,
 ): string {
+  const opening = Math.min(maxStages, maxOpenTrades);
+  const blocked =
+    opening < maxStages
+      ? ` Only ${opening} of ${maxStages} entries can open (maximum open trades ${maxOpenTrades}).`
+      : "";
   if (mode === "percent") {
     // percent mode: exposure compounds across entries — multiply.
-    const total = riskValue * maxStages;
-    return `${maxStages} entries at ${riskValue}% risks up to ${total}% per signal.`;
+    const total = round(riskValue * opening);
+    return `${opening} entries at ${riskValue}% risks up to ${total}% per signal.${blocked}`;
   }
   // fixed_lot mode: riskValue is the TOTAL across stages — do NOT multiply (Pitfall 6).
+  if (opening < maxStages) {
+    const reachable = round((riskValue / maxStages) * opening);
+    return `This sizes up to ${reachable} total lots per signal across ${opening} entries.${blocked}`;
+  }
   return `This sizes up to ${riskValue} total lots per signal across ${maxStages} entries.`;
+}
+
+// Display rounding only (4 decimals; trims float noise like 0.12000000000000001).
+function round(n: number): number {
+  return Math.round(n * 10000) / 10000;
 }

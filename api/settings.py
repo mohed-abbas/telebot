@@ -84,12 +84,20 @@ _SETTINGS_FIELDS = (
     "max_daily_trades",
     "max_open_trades",
     "max_lot_size",
+    "stage_tp_map",
 )
 
 
 def _effective_values(current) -> dict:
     """Project the effective AccountSettings dataclass into a plain JSON dict."""
-    return {field: getattr(current, field) for field in _SETTINGS_FIELDS}
+    values = {field: getattr(current, field) for field in _SETTINGS_FIELDS}
+    values["stage_tp_map"] = list(values["stage_tp_map"])  # JSON array
+    # The TP an unmapped entry uses (the parser's default target). The form pads
+    # with it, so it must match the value the server trims trailing entries by.
+    from dashboard import _default_entry_tp
+
+    values["default_entry_tp"] = _default_entry_tp()
+    return values
 
 
 def _audit_timeline(rows: list[dict]) -> list[dict]:
@@ -295,8 +303,17 @@ async def revert_settings(
         max_lot_size=float(getattr(current, "max_lot_size", 1.0) or 1.0),
     )
     if errors:
-        # A prior value should always re-validate; guard defensively.
-        raise HTTPException(status_code=422, detail="Revert failed re-validation")
+        # A prior value can fail the cross-field rule (e.g. reverting the
+        # open-trades cap below the current entry count). Say why.
+        reason = "; ".join(e.message for e in errors)
+        raise HTTPException(
+            status_code=422, detail=f"Revert failed re-validation: {reason}",
+        )
+    if field not in parsed:
+        # Audit row for a field this page no longer edits.
+        raise HTTPException(
+            status_code=422, detail=f"Cannot revert field {field!r} from this page",
+        )
 
     revert_val = parsed[field]
     if str(getattr(current, field)) != str(revert_val):

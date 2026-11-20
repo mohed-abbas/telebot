@@ -9,7 +9,7 @@
 //   - ACTIVE rows render as a card-per-account (D-08): symbol + BUY/SELL badge + account, then
 //     Stages (filled/total — the CORRECT enriched keys, D-13; NOT the legacy template's blank-cell
 //     count keys which never resolve → the legacy blank-cell bug; the SPA shows correct values, a
-//     documented parity exception), Target Band, Current Price, Elapsed.
+//     documented parity exception), Target Band, Take-profit, Current Price, Elapsed.
 //   - The Elapsed value ticks per-second via useElapsed(started_at) off the server machine epoch
 //     (10-02 widening) — smooth between the 3s polls, not jumpy (D-06).
 //   - RESOLVED rows render in the shared DataTable with the _RESOLVED_STATUS_LABELS map applied
@@ -45,6 +45,9 @@ interface ActiveStage {
   band_high_display: string | null;
   current_price: number | null;
   current_price_display: string | null;
+  // Take-profit this entry opens with (per-entry TP setting); null on older rows.
+  signal_tp: number | null;
+  signal_tp_display: string | null;
   distance_str: string | null;
   status: string;
   // Server machine epoch (ISO-8601 + offset) from the 10-02 widening — the useElapsed input.
@@ -62,6 +65,8 @@ interface ResolvedStage {
   symbol: string | null;
   direction: string | null;
   status: string;
+  signal_tp: number | null;
+  signal_tp_display: string | null;
   cancelled_reason: string | null;
   created_at: string | null;
   created_at_display: string | null;
@@ -116,7 +121,7 @@ function StageCard({ s }: { s: ActiveStage }) {
         <DirectionBadge direction={s.direction} />
         <span className="text-xs text-muted-foreground">{s.account_name}</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {/* CORRECT counts (D-13) — filled/total, not the legacy blank-cell keys. */}
         <Field label="Stages">
           <span className="font-mono">
@@ -127,6 +132,9 @@ function StageCard({ s }: { s: ActiveStage }) {
           <span className="font-mono">
             {s.band_low_display ?? "—"} – {s.band_high_display ?? "—"}
           </span>
+        </Field>
+        <Field label="Take-profit">
+          <span className="font-mono">{s.signal_tp_display ?? "—"}</span>
         </Field>
         <Field label="Current Price">
           {/* Server _display string ONLY (Pitfall 5). */}
@@ -152,7 +160,7 @@ export function StagedView() {
     refetchInterval: 3000,
   });
 
-  // ── Resolved-table columns: Account | Symbol | Direction | Stage | Status | Reason | Time ──
+  // ── Resolved-table columns: Account | Symbol | Direction | Stage | TP | Status | Reason | Time ──
   const columns: Column<ResolvedStage>[] = [
     { header: "Account", cell: (r) => r.account_name ?? "—" },
     { header: "Symbol", cell: (r) => r.symbol ?? "—", mono: true },
@@ -163,6 +171,12 @@ export function StagedView() {
     {
       header: "Stage",
       cell: (r) => (r.stage_number != null ? String(r.stage_number) : "—"),
+      align: "right",
+      mono: true,
+    },
+    {
+      header: "TP",
+      cell: (r) => r.signal_tp_display ?? "—",
       align: "right",
       mono: true,
     },

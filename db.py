@@ -37,12 +37,17 @@ def _validate_field(field: str) -> str:
 
 _ACCOUNT_SETTINGS_FIELDS: frozenset[str] = frozenset({
     "risk_mode", "risk_value", "max_stages", "default_sl_pips", "max_daily_trades",
+    "stage_tp_map",
 })
+
+# Operator-editable settings that live on the `accounts` row rather than in
+# `account_settings`. They share the settings audit trail and revert path.
+_ACCOUNTS_TABLE_SETTINGS_FIELDS: frozenset[str] = frozenset({"max_open_trades"})
 
 
 def _validate_account_settings_field(field: str) -> str:
-    """Validate a field name against the account_settings whitelist. Raises ValueError if invalid."""
-    if field not in _ACCOUNT_SETTINGS_FIELDS:
+    """Validate a field name against the editable-settings whitelist. Raises ValueError if invalid."""
+    if field not in _ACCOUNT_SETTINGS_FIELDS and field not in _ACCOUNTS_TABLE_SETTINGS_FIELDS:
         raise ValueError(f"Invalid account_settings field: {field!r}")
     return field
 
@@ -185,6 +190,21 @@ async def _create_tables() -> None:
                 updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # max_open_trades became operator-editable (Settings page). Bound it like
+        # the account_settings columns. NOT VALID: enforced on every new write
+        # without failing startup on a pre-existing out-of-range row.
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                     WHERE conname = 'accounts_max_open_trades_range'
+                ) THEN
+                    ALTER TABLE accounts ADD CONSTRAINT accounts_max_open_trades_range
+                        CHECK (max_open_trades >= 1 AND max_open_trades <= 100) NOT VALID;
+                END IF;
+            END $$;
+        """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS account_settings (
                 account_name        TEXT        PRIMARY KEY REFERENCES accounts(name) ON DELETE CASCADE,
@@ -200,6 +220,27 @@ async def _create_tables() -> None:
                                                 CHECK (max_daily_trades >= 1 AND max_daily_trades <= 1000),
                 updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """)
+        # Per-entry provider TP number (entry 1 = market fill). Empty = every
+        # entry uses the signal's default target TP. ALTER, not CREATE: the
+        # table already exists on deployed databases.
+        await conn.execute("""
+            ALTER TABLE account_settings
+                ADD COLUMN IF NOT EXISTS stage_tp_map INTEGER[] NOT NULL DEFAULT '{}'
+        """)
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                     WHERE conname = 'account_settings_stage_tp_map_range'
+                ) THEN
+                    ALTER TABLE account_settings
+                        ADD CONSTRAINT account_settings_stage_tp_map_range
+                        CHECK (cardinality(stage_tp_map) <= 10
+                               AND stage_tp_map <@ ARRAY[1,2,3,4,5]);
+                END IF;
+            END $$;
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS settings_audit (
@@ -1054,6 +1095,7 @@ async def get_account_settings(account_name: str) -> dict | None:
             """SELECT s.account_name,
                       s.risk_mode, s.risk_value::float AS risk_value,
                       s.max_stages, s.default_sl_pips, s.max_daily_trades,
+                      s.stage_tp_map,
                       a.max_open_trades, a.max_lot_size
                  FROM account_settings s
                  JOIN accounts a ON a.name = s.account_name
@@ -1080,21 +1122,32 @@ async def update_account_setting(
     to the mutation.
     """
     field = _validate_account_settings_field(field)  # whitelist before SQL
+    # Table and key column come from fixed literals, never from the caller.
+    if field in _ACCOUNTS_TABLE_SETTINGS_FIELDS:
+        table, key = "accounts", "name"
+    else:
+        table, key = "account_settings", "account_name"
     async with _pool.acquire() as conn:
         async with conn.transaction():
             old_value = await conn.fetchval(
-                f"SELECT {field}::TEXT FROM account_settings WHERE account_name=$1",
+                f"SELECT {field}::TEXT FROM {table} WHERE {key}=$1",
                 account_name,
             )
+            if isinstance(new_value, (list, tuple)):
+                # Same text form as the old value's array::TEXT cast ("{2,3}").
+                new_text = "{" + ",".join(str(v) for v in new_value) + "}"
+                new_value = list(new_value)
+            else:
+                new_text = str(new_value)
             await conn.execute(
                 """INSERT INTO settings_audit
                    (account_name, field, old_value, new_value, actor)
                    VALUES ($1, $2, $3, $4, $5)""",
-                account_name, field, old_value, str(new_value), actor,
+                account_name, field, old_value, new_text, actor,
             )
             await conn.execute(
-                f"UPDATE account_settings SET {field}=$1, updated_at=NOW() "
-                f"WHERE account_name=$2",
+                f"UPDATE {table} SET {field}=$1, updated_at=NOW() "
+                f"WHERE {key}=$2",
                 new_value, account_name,
             )
 
@@ -1346,7 +1399,7 @@ async def get_pending_stages(
     """
     base_sql = (
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
-        "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
+        "zone_low, zone_high, band_low, band_high, target_lot, signal_tp, snapshot_settings, "
         "mt5_comment, mt5_ticket, status, created_at, firing_at "
         "FROM staged_entries "
         "WHERE status IN ('awaiting_followup','awaiting_zone','firing') "
@@ -1365,14 +1418,44 @@ async def get_pending_stages(
 
 
 async def get_active_stages() -> list[dict]:
-    """Polling helper for _zone_watch_loop (status='awaiting_zone' only)."""
+    """Polling helper for _zone_watch_loop (status='awaiting_zone' only).
+
+    Ordered by signal then stage number (= depth, near edge first) so that when
+    price crosses several bands in one tick the shallower entries fire first
+    and are the ones the open-trades cap lets through.
+    """
     rows = await _pool.fetch(
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
         "mt5_comment, signal_sl, signal_tp "
-        "FROM staged_entries WHERE status='awaiting_zone'"
+        "FROM staged_entries WHERE status='awaiting_zone' "
+        "ORDER BY signal_id, stage_number, id"
     )
     return [dict(r) for r in rows]
+
+
+async def get_sequence_target_tps(
+    signal_ids: list[int], account_name: str,
+) -> dict[int, list[float]]:
+    """Every persisted TP of each signal's staged sequence on one account,
+    whatever the row status (filled entries included).
+
+    With a per-entry TP map the armed rows may all target a far TP (e.g. TP3)
+    while the filled entries target TP2; the target cascade needs the whole
+    sequence to find the nearest TP.
+    """
+    if not signal_ids:
+        return {}
+    rows = await _pool.fetch(
+        "SELECT signal_id, signal_tp FROM staged_entries "
+        "WHERE signal_id = ANY($1::int[]) AND account_name = $2 "
+        "AND signal_tp IS NOT NULL AND signal_tp > 0",
+        list(signal_ids), account_name,
+    )
+    out: dict[int, list[float]] = {}
+    for r in rows:
+        out.setdefault(r["signal_id"], []).append(float(r["signal_tp"]))
+    return out
 
 
 # Review 2026-10-16 #3: cancelled_reason marker on a 'firing' row whose
@@ -1601,7 +1684,7 @@ async def get_recently_resolved_stages(limit: int = 50) -> list[dict]:
     """For /staged 'Recently resolved' section (D-36)."""
     rows = await _pool.fetch(
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
-        "status, cancelled_reason, created_at, filled_at "
+        "signal_tp, status, cancelled_reason, created_at, filled_at "
         "FROM staged_entries "
         "WHERE status IN ('filled','cancelled_by_kill_switch',"
         "'cancelled_stage1_closed','cancelled_target_reached',"

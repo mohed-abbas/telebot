@@ -45,6 +45,12 @@ export interface AuditTimelineProps {
 
 function fmt(v: unknown): string {
   if (v === null || v === undefined) return "—";
+  // stage_tp_map is audited as Postgres array text: "{2,2,3}" → "TP2 TP2 TP3", "{}" = default.
+  const arr = typeof v === "string" ? /^\{([\d,]*)\}$/.exec(v) : null;
+  if (arr) {
+    const nums = arr[1].split(",").filter(Boolean);
+    return nums.length ? nums.map((n) => `TP${n}`).join(" ") : "default TP";
+  }
   return String(v);
 }
 
@@ -117,8 +123,8 @@ export function AuditTimeline({ account, audit }: AuditTimelineProps) {
             <DialogTitle>Revert change — {account}</DialogTitle>
             <DialogDescription>
               This undoes the most recent settings change for {account}. It
-              applies to signals received after you confirm; in-flight staged
-              sequences are unaffected.
+              applies to signals received after you confirm; a Maximum open
+              trades change also applies at once to entries still waiting to open.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

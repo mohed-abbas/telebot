@@ -32,21 +32,42 @@ from trade_manager import (
 
 
 class TestComputeBands:
-    def test_five_stages_gives_four_bands(self):
-        bands = compute_bands(2040.0, 2050.0, max_stages=5, direction="buy")
+    def test_five_stages_gives_four_bands_sell(self):
+        # SELL: price climbs into the zone — stage 2 is the bottom band.
+        bands = compute_bands(2040.0, 2050.0, max_stages=5, direction="sell")
         assert len(bands) == 4
         assert bands[0] == Band(2, 2040.0, 2042.5)
         assert bands[3] == Band(5, 2047.5, 2050.0)
 
+    def test_five_stages_gives_four_bands_buy_numbered_by_depth(self):
+        # BUY: price falls into the zone — stage 2 is the TOP band (near edge)
+        # and stage 5 the bottom band (deepest entry).
+        bands = compute_bands(2040.0, 2050.0, max_stages=5, direction="buy")
+        assert [b.stage_number for b in bands] == [2, 3, 4, 5]
+        assert bands[0] == Band(2, 2047.5, 2050.0)
+        assert bands[3] == Band(5, 2040.0, 2042.5)
+
+    @pytest.mark.parametrize("direction", ["buy", "sell"])
+    def test_higher_stage_is_deeper(self, direction):
+        """Stage order = the order price reaches the bands, both directions."""
+        bands = compute_bands(2040.0, 2050.0, max_stages=5, direction=direction)
+        mids = [(b.low + b.high) / 2 for b in bands]
+        if direction == "sell":  # deeper = higher price for a sell
+            assert mids == sorted(mids)
+        else:                    # deeper = lower price for a buy
+            assert mids == sorted(mids, reverse=True)
+
     def test_max_stages_1_returns_empty(self):
         assert compute_bands(2040.0, 2050.0, max_stages=1, direction="buy") == []
 
-    def test_bands_partition_zone_exactly(self):
-        bands = compute_bands(2040.0, 2050.0, max_stages=4, direction="buy")
-        assert bands[0].low == 2040.0
-        assert bands[-1].high == 2050.0
-        for i in range(len(bands) - 1):
-            assert bands[i].high == pytest.approx(bands[i + 1].low)
+    @pytest.mark.parametrize("direction", ["buy", "sell"])
+    def test_bands_partition_zone_exactly(self, direction):
+        bands = compute_bands(2040.0, 2050.0, max_stages=4, direction=direction)
+        asc = sorted(bands, key=lambda b: b.low)
+        assert asc[0].low == 2040.0
+        assert asc[-1].high == 2050.0
+        for i in range(len(asc) - 1):
+            assert asc[i].high == pytest.approx(asc[i + 1].low)
 
     def test_zero_width_zone_produces_point_bands(self):
         bands = compute_bands(2045.0, 2045.0, max_stages=5, direction="buy")
@@ -248,8 +269,10 @@ async def test_in_zone_at_arrival_fires_crossed_bands_immediately(
     armed = [r for r in rows if r["status"] == "awaiting_zone"]
     assert len(filled) >= 1  # at least one band fired at market
     assert len(armed) >= 1   # at least one band remained armed
-    # Band 1 (stage 2) should be the armed one (ask=2047 > band 2 high=2045).
-    assert armed[0]["stage_number"] == 2
+    # Buy bands are numbered by depth (near edge first): stage 2 = 2055-2060,
+    # stage 3 = 2050-2055, stage 4 = 2045-2050, stage 5 = 2040-2045. ask=2047
+    # has crossed stages 2-4; the deepest band (stage 5) is the armed one.
+    assert [r["stage_number"] for r in armed] == [5]
 
 
 # ── D-19 per-symbol cap enforced for staged submissions ──────────────
@@ -549,11 +572,11 @@ async def test_direct_zone_multistage(
     (mirrors _handle_correlated_followup band geometry), not a single zone_mid
     fill. Some already-crossed bands fire at market; the rest arm.
 
-    Direct-zone bands are numbered 1..N (the lowest band IS stage 1 — there is
-    no prior text-only market anchor; D2-02). max_stages=5 → 5 bands.
+    Direct-zone bands are numbered 1..N by depth (the near-edge band IS stage
+    1 — there is no prior text-only market anchor; D2-02). max_stages=5 → 5 bands.
 
-    Price (2040.1/2040.2). Zone (2040, 2060) max_stages=5 →
-      bands (1..5): 2040-2044, 2044-2048, 2048-2052, 2052-2056, 2056-2060.
+    Price (2040.1/2040.2). Zone (2040, 2060) max_stages=5, BUY (near edge is
+    the top) → bands (1..5): 2056-2060, 2052-2056, 2048-2052, 2044-2048, 2040-2044.
     For BUY, in-zone-at-arrival is ask <= band.high. ask=2040.2 <= every
     band.high → ALL 5 bands are already crossed → all 5 fire at market.
     """
@@ -587,8 +610,8 @@ async def test_direct_zone_multistage(
     # All bands already crossed at arrival → all filled.
     assert all(r["status"] == "filled" for r in rows)
     # Bands partition the zone exactly.
-    assert rows[0]["band_low"] == pytest.approx(2040.0)
-    assert rows[-1]["band_high"] == pytest.approx(2060.0)
+    assert rows[0]["band_high"] == pytest.approx(2060.0)  # stage 1 = near edge
+    assert rows[-1]["band_low"] == pytest.approx(2040.0)  # stage 5 = deepest
     # Every row persists the OPEN's real signal SL/TP (not default+0).
     for r in rows:
         assert r["signal_sl"] == pytest.approx(2030.0)
@@ -670,3 +693,23 @@ async def test_direct_zone_arms_when_outside(
     assert not any(r.get("status") == "executed" for r in results)
     # No zone_mid full-fill leaked through.
     assert not any(r.get("status") == "filled" for r in results)
+
+
+async def test_active_stages_come_back_shallow_first(db_pool, seeded_account, seeded_signal):
+    """The zone watcher reads each signal's armed entries near edge → far edge,
+    so when one tick crosses several bands the shallower entries fire first
+    (and are the ones the open-trades cap lets through)."""
+    def row(stage: int) -> dict:
+        return {
+            "signal_id": seeded_signal, "stage_number": stage,
+            "account_name": seeded_account, "symbol": "XAUUSD", "direction": "buy",
+            "zone_low": 2040.0, "zone_high": 2050.0,
+            "band_low": 2040.0, "band_high": 2050.0, "target_lot": 0.01,
+            "snapshot_settings": {}, "mt5_comment": f"telebot-{seeded_signal}-s{stage}",
+            "status": "awaiting_zone",
+        }
+
+    # Insert deepest first so insertion order cannot explain the result.
+    await db.create_staged_entries([row(5), row(3), row(4), row(2)])
+    stages = [r["stage_number"] for r in await db.get_active_stages()]
+    assert stages == [2, 3, 4, 5]

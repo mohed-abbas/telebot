@@ -167,7 +167,7 @@ async def test_validate_valid_change(client):
             "values": {
                 "risk_mode": "percent", "risk_value": "2.0",
                 "max_stages": "3", "default_sl_pips": "100",
-                "max_daily_trades": "30",
+                "max_daily_trades": "30", "max_open_trades": "5",
             },
         },
     )
@@ -194,7 +194,7 @@ async def test_validate_breaches_cap(client):
             "values": {
                 "risk_mode": "percent", "risk_value": "9.0",
                 "max_stages": "3", "default_sl_pips": "100",
-                "max_daily_trades": "30",
+                "max_daily_trades": "30", "max_open_trades": "5",
             },
         },
     )
@@ -221,7 +221,7 @@ async def test_confirm_persists_and_audits(client):
             "values": {
                 "risk_mode": "percent", "risk_value": "1.0",
                 "max_stages": "4", "default_sl_pips": "100",
-                "max_daily_trades": "30",
+                "max_daily_trades": "30", "max_open_trades": "5",
             },
         },
     )
@@ -245,7 +245,8 @@ async def test_confirm_persists_and_audits(client):
 async def test_revert_inverts_prior_change(client):
     """Revert -> JSON envelope inverting the most-recent change."""
     c, token = client
-    # Make a change first (max_stages 1 -> 5).
+    # Make a change first (max_stages 1 -> 3; the cap stays 3, so only
+    # max_stages changes and it is the newest audit row).
     r = await c.post(
         f"/api/v2/settings/{ACCOUNT}",
         headers={"X-CSRF-Token": token},
@@ -253,14 +254,14 @@ async def test_revert_inverts_prior_change(client):
             "account": ACCOUNT,
             "values": {
                 "risk_mode": "percent", "risk_value": "1.0",
-                "max_stages": "5", "default_sl_pips": "100",
-                "max_daily_trades": "30",
+                "max_stages": "3", "default_sl_pips": "100",
+                "max_daily_trades": "30", "max_open_trades": "3",
             },
         },
     )
     assert r.status_code == 200, r.text
     before = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
-    assert int(before["values"]["max_stages"]) == 5
+    assert int(before["values"]["max_stages"]) == 3
 
     # Revert inverts it back to the prior value.
     rv = await c.post(
@@ -272,7 +273,7 @@ async def test_revert_inverts_prior_change(client):
     assert rv.json().get("ok") is True
 
     after = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
-    assert int(after["values"]["max_stages"]) != 5
+    assert int(after["values"]["max_stages"]) == 1
 
 
 # ─── CSRF gate (T-08-19) ─────────────────────────────────────────────────────
@@ -286,7 +287,7 @@ async def test_validate_requires_csrf(client):
         f"/api/v2/settings/{ACCOUNT}/validate",
         json={"account": ACCOUNT, "values": {"risk_mode": "percent",
               "risk_value": "2.0", "max_stages": "3", "default_sl_pips": "100",
-              "max_daily_trades": "30"}},
+              "max_daily_trades": "30", "max_open_trades": "5"}},
     )
     assert r.status_code == 403, r.text
     assert "<html" not in r.text.lower()
@@ -300,6 +301,231 @@ async def test_confirm_requires_csrf(client):
         f"/api/v2/settings/{ACCOUNT}",
         json={"account": ACCOUNT, "values": {"risk_mode": "percent",
               "risk_value": "1.0", "max_stages": "2", "default_sl_pips": "100",
-              "max_daily_trades": "30"}},
+              "max_daily_trades": "30", "max_open_trades": "5"}},
     )
     assert r.status_code == 403, r.text
+
+
+# ─── max_open_trades: editable cap + cross-field rule (OT-01..04) ────────────
+
+
+def _values(**over) -> dict:
+    """A full valid form (every field required by validate_settings_form)."""
+    v = {
+        "risk_mode": "percent", "risk_value": "1.0", "max_stages": "1",
+        "default_sl_pips": "100", "max_daily_trades": "30", "max_open_trades": "3",
+    }
+    v.update({k: str(val) for k, val in over.items()})
+    return v
+
+
+async def _confirm(c, token, **over):
+    return await c.post(
+        f"/api/v2/settings/{ACCOUNT}",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": _values(**over)},
+    )
+
+
+async def test_ot01_confirm_max_open_trades_persists_audits_and_goes_live(client, settings_app):
+    """OT-01: saving max_open_trades writes accounts.max_open_trades, audits it,
+    and the live store (read by the trade path) returns the new cap at once."""
+    import db
+
+    c, token = client
+    _, store = settings_app
+    r = await _confirm(c, token, max_stages=5, max_open_trades=5)
+    assert r.status_code == 200, r.text
+
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert int(g["values"]["max_open_trades"]) == 5
+    rows = [a for a in g["audit"] if a["field"] == "max_open_trades"]
+    assert rows and rows[0]["old_value"] == "3" and rows[0]["new_value"] == "5"
+
+    async with db._pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "SELECT max_open_trades FROM accounts WHERE name=$1", ACCOUNT,
+        )
+    assert stored == 5
+    assert store.effective(ACCOUNT).max_open_trades == 5
+
+
+async def test_ot01_max_open_trades_range_enforced(client):
+    """OT-01: 0 and 101 are refused server-side (1–100, the DB CHECK bound)."""
+    c, token = client
+    for bad in (0, 101):
+        r = await c.post(
+            f"/api/v2/settings/{ACCOUNT}/validate",
+            headers={"X-CSRF-Token": token},
+            json={"account": ACCOUNT, "values": _values(max_open_trades=bad)},
+        )
+        body = r.json()
+        assert body["valid"] is False, bad
+        assert "max_open_trades" in body["errors"]
+
+
+async def test_ot02_entries_above_cap_rejected(client):
+    """OT-02: max_stages 5 with max_open_trades 3 is refused on validate AND confirm,
+    with a message naming both values."""
+    c, token = client
+    r = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": _values(max_stages=5, max_open_trades=3)},
+    )
+    body = r.json()
+    assert body["valid"] is False
+    msg = body["errors"]["max_stages"]
+    assert "(5)" in msg and "(3)" in msg and "entries 4–5 could never open" in msg
+
+    rc = await _confirm(c, token, max_stages=5, max_open_trades=3)
+    assert rc.status_code == 422
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert int(g["values"]["max_stages"]) == 1  # nothing persisted
+
+
+async def test_ot03_revert_max_open_trades(client):
+    """OT-03: revert restores a max_open_trades change (no 500)."""
+    c, token = client
+    assert (await _confirm(c, token, max_open_trades=7)).status_code == 200
+    rv = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/revert",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT},
+    )
+    assert rv.status_code == 200, rv.text
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert int(g["values"]["max_open_trades"]) == 3
+
+
+async def test_ot03_revert_that_breaks_cross_field_rule_says_why(client):
+    """OT-03: reverting the cap below the current entry count is refused with a
+    reason, and nothing changes."""
+    c, token = client
+    # One confirm writes max_stages then max_open_trades; the newest audit row
+    # is max_open_trades 3 -> 5.
+    assert (await _confirm(c, token, max_stages=5, max_open_trades=5)).status_code == 200
+    rv = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/revert",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT},
+    )
+    assert rv.status_code == 422
+    assert "could never open" in rv.text
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert int(g["values"]["max_open_trades"]) == 5
+    assert int(g["values"]["max_stages"]) == 5
+
+
+async def test_ot04_dry_run_warns_when_cap_leaves_no_room(client):
+    """OT-04: the dry-run says a second signal cannot open when entries == cap."""
+    c, token = client
+    r = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": _values(max_stages=5, max_open_trades=5)},
+    )
+    body = r.json()
+    assert body["valid"] is True
+    assert "a second signal cannot open" in body["dry_run_text"]
+
+    r2 = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": _values(max_stages=3, max_open_trades=10)},
+    )
+    assert "second signal" not in r2.json()["dry_run_text"]
+
+
+# ─── stage_tp_map: per-entry take-profit (TP-01) ─────────────────────────────
+
+
+async def test_tp01_validator_canonicalises_and_bounds_the_map(settings_app):
+    from dashboard import _parse_stage_tp_map, describe_stage_tp_map
+
+    assert _parse_stage_tp_map([2, 2, 2, 3, 3]) == ((2, 2, 2, 3, 3), None)
+    assert _parse_stage_tp_map([3, 2, 2]) == ((3,), None)  # trailing default dropped
+    assert _parse_stage_tp_map([2, 2]) == ((), None)
+    assert _parse_stage_tp_map("{2,3}") == ((2, 3), None)  # audit text form
+    assert _parse_stage_tp_map([]) == ((), None)
+    for bad in ([0], [6], [2.5], [2] * 11):
+        tp_map, err = _parse_stage_tp_map(bad)
+        assert tp_map == () and err, bad
+    assert describe_stage_tp_map((2, 2, 2, 3, 3), 5) == "entries 1–3 → TP2, 4–5 → TP3"
+    assert describe_stage_tp_map((), 3) == "entries 1–3 → TP2"
+
+
+async def test_tp01_confirm_persists_audits_and_reverts_the_map(client, settings_app):
+    import db
+
+    c, token = client
+    _, store = settings_app
+    r = await c.post(
+        f"/api/v2/settings/{ACCOUNT}",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": {
+            **_values(max_stages=5, max_open_trades=5),
+            "stage_tp_map": [2, 2, 2, 3, 3],
+        }},
+    )
+    assert r.status_code == 200, r.text
+
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert g["values"]["stage_tp_map"] == [2, 2, 2, 3, 3]
+    # The form pads unmapped entries with the same default the server trims by.
+    assert g["values"]["default_entry_tp"] == 2
+    rows = [a for a in g["audit"] if a["field"] == "stage_tp_map"]
+    assert rows and rows[0]["old_value"] == "{}" and rows[0]["new_value"] == "{2,2,2,3,3}"
+    assert store.effective(ACCOUNT).stage_tp_map == (2, 2, 2, 3, 3)
+    async with db._pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "SELECT stage_tp_map FROM account_settings WHERE account_name=$1", ACCOUNT,
+        )
+    assert list(stored) == [2, 2, 2, 3, 3]
+
+    # The newest audit row is the map (written after the scalar fields): revert it.
+    rv = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/revert",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT},
+    )
+    assert rv.status_code == 200, rv.text
+    g2 = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert g2["values"]["stage_tp_map"] == []
+    assert int(g2["values"]["max_stages"]) == 5
+
+
+async def test_tp01_unchanged_or_absent_map_writes_no_audit_row(client):
+    c, token = client
+    for values in (_values(), {**_values(), "stage_tp_map": [2, 2, 2]}):
+        r = await c.post(
+            f"/api/v2/settings/{ACCOUNT}",
+            headers={"X-CSRF-Token": token},
+            json={"account": ACCOUNT, "values": values},
+        )
+        assert r.status_code == 200, r.text
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert not [a for a in g["audit"] if a["field"] == "stage_tp_map"]
+
+
+async def test_tp01_bad_map_is_refused_and_dry_run_describes_a_good_one(client):
+    c, token = client
+    bad = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": {**_values(), "stage_tp_map": [2, 7]}},
+    )
+    body = bad.json()
+    assert body["valid"] is False
+    assert "stage_tp_map" in body["errors"]
+
+    good = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": {
+            **_values(max_stages=5, max_open_trades=5), "stage_tp_map": [2, 2, 2, 3, 3],
+        }},
+    )
+    body = good.json()
+    assert body["valid"] is True
+    assert "Take-profit: entries 1–3 → TP2, 4–5 → TP3." in body["dry_run_text"]

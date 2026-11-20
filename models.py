@@ -91,6 +91,37 @@ class AccountSettings:
     # Carried from accounts table (v1.0) for convenience
     max_open_trades: int
     max_lot_size: float
+    # Provider TP number per entry, in fill order: stage_tp_map[0] is entry 1
+    # (the market fill), [1] entry 2, ... An entry past the end of the tuple
+    # uses the signal's default target TP (TP2). () = default for every entry.
+    stage_tp_map: tuple[int, ...] = ()
+
+    def tp_index_for_entry(self, entry_no: int) -> int | None:
+        """The provider TP number mapped to entry `entry_no` (1-based), or None
+        when the entry uses the signal's default target TP."""
+        if 1 <= entry_no <= len(self.stage_tp_map):
+            return int(self.stage_tp_map[entry_no - 1])
+        return None
+
+    @classmethod
+    def from_snapshot(cls, data: dict) -> "AccountSettings":
+        """Rebuild from a staged_entries.snapshot_settings dict.
+
+        Snapshots written before a field existed lack its key: fields with a
+        default fall back to it instead of failing the rebuild. JSON turns
+        tuples into lists, so stage_tp_map is converted back.
+        """
+        from dataclasses import MISSING, fields as _fields
+
+        kwargs = {}
+        for f in _fields(cls):
+            if f.name in data:
+                kwargs[f.name] = data[f.name]
+            elif f.default is MISSING:
+                raise KeyError(f.name)
+        if "stage_tp_map" in kwargs:
+            kwargs["stage_tp_map"] = tuple(int(v) for v in (kwargs["stage_tp_map"] or ()))
+        return cls(**kwargs)
 
 
 @dataclass(frozen=True, slots=True)

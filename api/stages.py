@@ -41,8 +41,13 @@ def _enrich_active(stage: dict, raw: dict) -> dict:
     # recompute. Absent on legacy rows → null, keeping the SPA contract stable.
     if "target_lot" not in out:
         out["target_lot"] = raw.get("target_lot")
-    for key in ("band_low", "band_high", "current_price"):
-        val = stage.get(key)
+    # Per-entry take-profit: the TP this entry opens with (stage_tp_map can give
+    # deeper entries a further TP). Null on rows written without one.
+    if "signal_tp" not in out:
+        out["signal_tp"] = raw.get("signal_tp") or None
+    out["signal_tp_display"] = None
+    for key in ("band_low", "band_high", "current_price", "signal_tp"):
+        val = out.get(key)
         if val is not None:
             out[f"{key}_display"] = price_display(symbol, val)
     created_at = raw.get("created_at")
@@ -61,6 +66,11 @@ def _enrich_active(stage: dict, raw: dict) -> dict:
 def _enrich_resolved(row: dict) -> dict:
     """Add timestamp `_display` twins to a recently-resolved stage row."""
     out = dict(row)
+    tp = row.get("signal_tp") or None
+    out["signal_tp"] = tp
+    out["signal_tp_display"] = (
+        price_display(row.get("symbol") or "", tp) if tp is not None else None
+    )
     for key in ("created_at", "filled_at"):
         val = row.get(key)
         if isinstance(val, datetime):

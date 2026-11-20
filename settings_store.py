@@ -31,6 +31,7 @@ class SettingsStore:
                 """SELECT s.account_name, s.risk_mode,
                           s.risk_value::float AS risk_value,
                           s.max_stages, s.default_sl_pips, s.max_daily_trades,
+                          s.stage_tp_map,
                           a.max_open_trades, a.max_lot_size
                      FROM account_settings s
                      JOIN accounts a ON a.name = s.account_name"""
@@ -45,6 +46,7 @@ class SettingsStore:
                 max_daily_trades=r["max_daily_trades"],
                 max_open_trades=r["max_open_trades"],
                 max_lot_size=float(r["max_lot_size"]),
+                stage_tp_map=tuple(r["stage_tp_map"] or ()),
             )
             for r in rows
         }
@@ -65,6 +67,7 @@ class SettingsStore:
             max_daily_trades=row["max_daily_trades"],
             max_open_trades=row["max_open_trades"],
             max_lot_size=float(row["max_lot_size"]),
+            stage_tp_map=tuple(row.get("stage_tp_map") or ()),
         )
 
     def effective(self, account_name: str) -> AccountSettings:

@@ -14,7 +14,7 @@ import asyncio
 import logging
 import re
 from contextvars import ContextVar
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from typing import Callable, NamedTuple, Sequence
 
@@ -41,6 +41,7 @@ from risk_calculator import (
     calculate_sl_distance,
     pip_size_for_symbol,
 )
+from signal_parser import _select_target_tp
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +91,19 @@ def compute_bands(
     Stage 1 is the text-only market fill and does NOT get a band — bands
     are only emitted for stages 2..N.
 
+    Bands are numbered by DEPTH, in the order price reaches them: stage 2 is
+    the band at the zone's near edge, stage N the band at the far edge.
+      - SELL: price climbs into the zone, so the near edge is zone_low and
+        bands run upwards (bands[0] = [zone_low, zone_low + width]).
+      - BUY: price falls into the zone, so the near edge is zone_high and
+        bands run downwards (bands[0] = [zone_high - width, zone_high]).
+    Per-entry settings (e.g. a TP per entry) can therefore treat a higher
+    stage number as a deeper entry for both directions.
+
     Invariants:
       - len(return) == max_stages - 1
-      - bands[i].low == zone_low + i*width; bands[i].high == zone_low + (i+1)*width
       - bands are contiguous, non-overlapping, partition the zone exactly.
-      - stage_number = i + 2
+      - stage_number = i + 2, ordered near edge → far edge.
 
     Research Q5 RESOLVED: zone_low == zone_high is accepted; all N-1 stages
     are collapsed to point-bands, which fire together on arrival.
@@ -110,9 +119,14 @@ def compute_bands(
     if zone_low == zone_high:
         return [Band(stage_number=i + 2, low=zone_low, high=zone_low) for i in range(n_bands)]
     width = (zone_high - zone_low) / n_bands
+    # Edges ascending; the outer two are the exact zone bounds (no float drift).
+    edges = [zone_low] + [zone_low + k * width for k in range(1, n_bands)] + [zone_high]
+    ascending = [(edges[i], edges[i + 1]) for i in range(n_bands)]
+    if direction == "buy":
+        ascending.reverse()  # near edge for a buy is the top of the zone
     return [
-        Band(stage_number=i + 2, low=zone_low + i * width, high=zone_low + (i + 1) * width)
-        for i in range(n_bands)
+        Band(stage_number=i + 2, low=low, high=high)
+        for i, (low, high) in enumerate(ascending)
     ]
 
 
@@ -132,6 +146,24 @@ def stage_is_in_zone_at_arrival(
     if direction == "buy":
         return current_ask <= band.high
     return current_bid >= band.low
+
+
+def entry_target_tp(
+    signal: SignalAction, entry_no: int, snapshot: AccountSettings | None,
+) -> float | None:
+    """The TP for entry `entry_no` (1-based, fill order) of a staged signal.
+
+    The account's stage_tp_map names a provider TP number per entry (e.g.
+    entries 1-3 → TP2, 4-5 → TP3). TP numbers count the signal's numeric TPs
+    in message order, skipping "open" — the same rule as the parser's default
+    target. A signal with fewer TPs than asked falls back to its last numeric
+    TP; an entry with no mapping uses the signal's default target TP.
+    """
+    index = snapshot.tp_index_for_entry(entry_no) if snapshot else None
+    if index is None:
+        return signal.target_tp
+    tp = _select_target_tp(list(signal.tps or []), index)
+    return tp if tp is not None else signal.target_tp
 
 
 def stage_lot_size(snapshot: AccountSettings) -> float:
@@ -600,12 +632,13 @@ class TradeManager:
             stage1_status = stage1.get("status") if stage1 else None
             if stage1_status in _LIVE_STAGE_STATUSES:
                 # The signal's exact levels (no jitter since 2026-10-22): every
-                # stage carries the same SL and target TP as the signal.
+                # stage carries the signal's SL; the TP is entry 1's TP from
+                # the account's per-entry map (default: the signal's target).
                 new_sl = signal.sl
                 # No numeric TP → pass tp=None so the REST bridge's
                 # is-not-None guard preserves the position's existing TP
                 # (tp=0.0 would be treated as an explicit "remove the TP").
-                new_tp = signal.target_tp or None
+                new_tp = entry_target_tp(signal, 1, snapshot) or None
                 # §1.3(a): PERSIST the follow-up's real SL/TP onto the stage-1
                 # row BEFORE the modify. The text-only stage-1 row was written
                 # with signal_sl=default-SL and signal_tp=None; overwrite it with
@@ -729,7 +762,7 @@ class TradeManager:
                     # the direct-zone path); without these both insert NULL and
                     # the fired position opens with tp=0.0 and a wrong SL.
                     "signal_sl": signal.sl,
-                    "signal_tp": signal.target_tp,
+                    "signal_tp": entry_target_tp(signal, b.stage_number, snapshot),
                 }
                 for b in bands
             ]
@@ -756,7 +789,7 @@ class TradeManager:
                     entry_zone=(band.low, band.high),
                     sl=signal.sl,
                     tps=list(signal.tps) if signal.tps else [],
-                    target_tp=signal.target_tp,
+                    target_tp=entry_target_tp(signal, band.stage_number, snapshot),
                 )
                 result = await self._execute_open_on_account(
                     synth, paired_signal_id, acct, connector,
@@ -835,8 +868,8 @@ class TradeManager:
         # reconnect reconcile for free.
         #
         # Stage numbering differs from the correlated path: there is NO prior
-        # text-only market anchor, so the LOWEST band is stage 1 (bands 1..N),
-        # not 2..N. This makes the direct-zone sequence uniform and gives the
+        # text-only market anchor, so the near-edge band (the first one price
+        # reaches) is stage 1 (bands 1..N), not 2..N. This makes the direct-zone sequence uniform and gives the
         # executor's D-16 stage-1 cascade a real `telebot-{id}-s1` anchor that
         # may or may not fill — exactly the D2-03 "first fill anchors" model.
         # When stage 1 never fills, the executor cascade (executor.py:733-736)
@@ -853,7 +886,13 @@ class TradeManager:
                 if not connector.connected:
                     results.append({"account": acct_name, "status": "skipped", "reason": "disconnected"})
                     continue
-                result = await self._execute_open_on_account(signal, signal_id, acct, connector)
+                try:
+                    snap = store.snapshot(acct_name) if store else None
+                except KeyError:
+                    snap = None
+                # A single fill is entry 1 of the account's per-entry TP map.
+                acct_signal = replace(signal, target_tp=entry_target_tp(signal, 1, snap))
+                result = await self._execute_open_on_account(acct_signal, signal_id, acct, connector)
                 results.append(result)
             return results
 
@@ -911,8 +950,9 @@ class TradeManager:
                 raw_bands = compute_bands(
                     zone_low, zone_high, max_stages + 1, signal.direction.value,
                 )
-                # D2-04 uniform model: re-base 2..(N+1) numbering to 1..N (the
-                # lowest band is stage 1, the direct-zone anchor).
+                # D2-04 uniform model: re-base 2..(N+1) numbering to 1..N. The
+                # near-edge band (first one price reaches) is stage 1, the
+                # direct-zone anchor, for buys and sells alike.
                 bands = [
                     Band(stage_number=i + 1, low=b.low, high=b.high)
                     for i, b in enumerate(raw_bands)
@@ -944,7 +984,7 @@ class TradeManager:
                     # EXEC2-01: persist the OPEN's real SL/TP so the zone-watch
                     # read path (Plan 02) carries them on late stages + cascade.
                     "signal_sl": signal.sl,
-                    "signal_tp": signal.target_tp,
+                    "signal_tp": entry_target_tp(signal, b.stage_number, snapshot),
                 }
                 for b in bands
             ]
@@ -971,7 +1011,7 @@ class TradeManager:
                     entry_zone=(band.low, band.high),
                     sl=signal.sl,
                     tps=list(signal.tps) if signal.tps else [],
-                    target_tp=signal.target_tp,
+                    target_tp=entry_target_tp(signal, band.stage_number, snapshot),
                 )
                 result = await self._execute_open_on_account(
                     synth, signal_id, acct, connector,

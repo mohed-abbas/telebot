@@ -50,3 +50,28 @@ async def test_failed_login_helpers(db_pool):
     assert await db.get_failed_login_count("10.0.0.1", minutes=15) == 2
     await db.clear_failed_logins("10.0.0.1")
     assert await db.get_failed_login_count("10.0.0.1", minutes=15) == 0
+
+
+async def test_max_open_trades_writes_accounts_row_with_audit(db_pool, seeded_account):
+    """max_open_trades lives on `accounts`; the shared write path updates it and
+    records the old value in settings_audit."""
+    async with db._pool.acquire() as conn:
+        before = await conn.fetchval(
+            "SELECT max_open_trades FROM accounts WHERE name=$1", seeded_account)
+    await db.update_account_setting(seeded_account, "max_open_trades", 5, actor="t")
+    async with db._pool.acquire() as conn:
+        after = await conn.fetchval(
+            "SELECT max_open_trades FROM accounts WHERE name=$1", seeded_account)
+    assert after == 5
+    rows = await db.get_settings_audit(seeded_account)
+    assert rows[0]["field"] == "max_open_trades"
+    assert rows[0]["old_value"] == str(before)
+    assert rows[0]["new_value"] == "5"
+
+
+async def test_max_open_trades_check_constraint(db_pool, seeded_account):
+    """The accounts CHECK rejects a cap below 1."""
+    import asyncpg
+
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.update_account_setting(seeded_account, "max_open_trades", 0)

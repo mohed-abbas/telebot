@@ -13,8 +13,9 @@
 //   • The inline footgun (amber AlertTriangle — NOT destructive red, NOT cyan primary) renders live
 //     off footgun(mode, risk_value, max_stages) via watch(). fixed_lot does NOT multiply (Pitfall 6).
 //
-// max_open_trades is shown READ-ONLY — it is an accounts-table column, not in validate_settings_form,
-// so it is NOT in the editable/submitted field set (RESEARCH §max_open_trades note).
+// max_open_trades is editable: it lives on the accounts row server-side but shares the
+// validate → confirm → audit → revert path. It must be ≥ max_stages (entries above the cap
+// can never open), enforced by the zod schema and, authoritatively, by the server.
 //
 // "Review changes" is the primary CTA: it opens the validate→confirm-diff flow via onReview(values).
 // It does NOT persist — that is the confirm step (ConfirmDiffDialog).
@@ -39,24 +40,31 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { DEFAULT_ENTRY_TP, entryTps, withEntryTp } from "@/lib/entryTps";
 import { footgun } from "@/lib/footgun";
 import { makeSettingsSchema } from "@/lib/settingsSchema";
 
-// The EDITABLE/submitted field set (max_open_trades + max_lot_size are NOT here — read-only).
+// The EDITABLE/submitted field set (max_lot_size is NOT here — read-only).
 export interface SettingsFormValues {
   risk_mode: "percent" | "fixed_lot";
   risk_value: number;
   max_stages: number;
   default_sl_pips: number;
   max_daily_trades: number;
+  max_open_trades: number;
+  // Provider TP number per entry in fill order ([0] = entry 1). Sent as exactly max_stages
+  // values; the server drops trailing defaults, so "TP2 everywhere" is stored as [].
+  stage_tp_map: number[];
 }
+
+const TP_CHOICES = [1, 2, 3, 4, 5] as const;
 
 /** The full BARE server `values` dict (the GET response) — drives defaults + read-only fields. */
 export interface SettingsServerValues extends SettingsFormValues {
   // Per-account cap (feeds the zod fixed_lot branch). Read-only — not editable, not submitted.
   max_lot_size: number;
-  // Accounts-table column — read-only on this page (not in validate_settings_form).
-  max_open_trades: number;
+  // The TP an unmapped entry uses (the parser's default target). Read-only.
+  default_entry_tp?: number;
 }
 
 export interface SettingsFormProps {
@@ -67,6 +75,7 @@ export interface SettingsFormProps {
 }
 
 export function SettingsForm({ values, onReview }: SettingsFormProps) {
+  const defaultTp = values.default_entry_tp ?? DEFAULT_ENTRY_TP;
   const {
     register,
     handleSubmit,
@@ -82,6 +91,8 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
       max_stages: values.max_stages,
       default_sl_pips: values.default_sl_pips,
       max_daily_trades: values.max_daily_trades,
+      max_open_trades: values.max_open_trades,
+      stage_tp_map: entryTps(values.stage_tp_map, values.max_stages, defaultTp),
     },
   });
 
@@ -89,6 +100,21 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   const mode = watch("risk_mode");
   const riskValue = watch("risk_value");
   const maxStages = watch("max_stages");
+  const maxOpenTrades = watch("max_open_trades");
+  const stageTpMap = watch("stage_tp_map");
+  // Always one selector per entry, following Maximum entries as it changes.
+  const tpPerEntry = entryTps(stageTpMap, maxStages, defaultTp);
+
+  function setEntryTp(index: number, tp: number) {
+    setValue("stage_tp_map", withEntryTp(stageTpMap ?? [], index, tp, defaultTp), {
+      shouldValidate: true,
+    });
+  }
+
+  // Submit exactly one TP per entry (drops selections left over from a larger entry count).
+  const submit = handleSubmit((v) =>
+    onReview({ ...v, stage_tp_map: entryTps(v.stage_tp_map, v.max_stages, defaultTp) }),
+  );
 
   const riskValueLabel =
     mode === "percent" ? "Per-trade risk (%)" : "Total lot size";
@@ -100,14 +126,14 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   // The inline footgun copy (mode-aware — percent multiplies; fixed_lot does NOT, Pitfall 6).
   // Guard against NaN-while-typing so the warning never renders garbage.
   const footgunText =
-    Number.isFinite(riskValue) && Number.isFinite(maxStages)
-      ? footgun(mode, riskValue, maxStages)
+    Number.isFinite(riskValue) && Number.isFinite(maxStages) && Number.isFinite(maxOpenTrades)
+      ? footgun(mode, riskValue, maxStages, maxOpenTrades)
       : null;
 
   return (
     <TooltipProvider>
       <form
-        onSubmit={handleSubmit(onReview)}
+        onSubmit={submit}
         className="flex flex-col gap-5"
         aria-label="Account settings"
       >
@@ -172,6 +198,46 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
           register={register("max_stages", { valueAsNumber: true })}
         />
 
+        {/* Per-entry take-profit — one TP selector per entry, in fill order. */}
+        <div className="flex flex-col gap-2">
+          <FieldLabel
+            htmlFor="stage_tp_1"
+            label="Take-profit per entry"
+            help="Which of the signal's TPs each entry closes at, in fill order (entry 1 = the first fill, the last entry = the deepest). Every entry keeps the signal's SL. If a signal has fewer TPs, its last TP is used."
+          />
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {tpPerEntry.map((tp, i) => (
+              <div key={i} className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Entry {i + 1}</span>
+                <Select
+                  value={String(tp)}
+                  onValueChange={(v) => setEntryTp(i, Number(v))}
+                >
+                  <SelectTrigger
+                    id={`stage_tp_${i + 1}`}
+                    className="w-full"
+                    aria-label={`Entry ${i + 1} take-profit`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TP_CHOICES.map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        TP{n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+          {errors.stage_tp_map && (
+            <p role="alert" className="text-sm text-destructive">
+              {errors.stage_tp_map.message ?? "Each entry needs a TP from TP1 to TP5."}
+            </p>
+          )}
+        </div>
+
         <NumberField
           id="default_sl_pips"
           label="Default stop-loss (pips)"
@@ -190,20 +256,14 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
           register={register("max_daily_trades", { valueAsNumber: true })}
         />
 
-        {/* max_open_trades — READ-ONLY. Shown for context, never editable, never submitted. */}
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="max_open_trades">Maximum open trades</Label>
-          <Input
-            id="max_open_trades"
-            value={values.max_open_trades}
-            readOnly
-            disabled
-            aria-readonly="true"
-          />
-          <p className="text-xs text-muted-foreground">
-            Set per account — not editable here.
-          </p>
-        </div>
+        <NumberField
+          id="max_open_trades"
+          label="Maximum open trades"
+          help="Most positions open at once on one symbol, counting every signal (1–100). Must be at least Maximum entries per signal, or the extra entries never open."
+          step="1"
+          error={errors.max_open_trades?.message}
+          register={register("max_open_trades", { valueAsNumber: true })}
+        />
 
         {/* "Review changes" — opens the validate flow (does NOT persist). */}
         <Button type="submit" className="self-start">

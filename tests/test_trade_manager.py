@@ -336,6 +336,10 @@ class _StubBandSnapshot:
     max_daily_trades: int = 30
     max_open_trades: int = 3
     max_lot_size: float = 1.0
+    stage_tp_map: tuple = ()  # every entry on the signal's default TP
+
+    def tp_index_for_entry(self, entry_no: int):
+        return None
 
 
 class _StubStore:
