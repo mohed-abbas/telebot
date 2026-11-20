@@ -422,6 +422,7 @@ _SETTINGS_HARD_CAPS_INT: dict[str, tuple[int, int]] = {
     "max_stages": (1, 10),
     "default_sl_pips": (1, 500),
     "max_daily_trades": (1, 100),
+    "max_open_trades": (1, 20),
 }
 
 
@@ -478,6 +479,18 @@ def validate_settings_form(
         else:
             parsed[field] = v
 
+    # Cross-field: the open-trades cap is checked before every entry, so entries
+    # beyond it are always 'capped' and never open. Refuse a config that plans
+    # entries the cap can never allow.
+    stages, cap = parsed.get("max_stages"), parsed.get("max_open_trades")
+    if stages is not None and cap is not None and stages > cap:
+        errors.append(_SettingsValidationError(
+            "max_stages",
+            f"Maximum entries per signal ({stages}) is higher than maximum open "
+            f"trades ({cap}), so entries {cap + 1}–{stages} could never open. "
+            f"Raise maximum open trades or lower maximum entries.",
+        ))
+
     return (parsed if not errors else {}), errors
 
 
@@ -503,16 +516,26 @@ def _compute_dry_run(parsed: dict, current) -> str:
     risk_mode = parsed.get("risk_mode", current.risk_mode)
     risk_value = float(parsed.get("risk_value", current.risk_value))
     max_stages = int(parsed.get("max_stages", current.max_stages))
+    max_open = int(parsed.get("max_open_trades", current.max_open_trades))
     per_stage = risk_value / max_stages if max_stages else 0.0
     if risk_mode == "percent":
-        return (
+        text = (
             f"A typical signal would size {max_stages} stages at "
             f"{per_stage:.3f}% risk per stage."
         )
-    return (
-        f"A typical signal would size {max_stages} stages at "
-        f"{per_stage:.3f} lots per stage (fixed_lot)."
-    )
+    else:
+        text = (
+            f"A typical signal would size {max_stages} stages at "
+            f"{per_stage:.3f} lots per stage (fixed_lot)."
+        )
+    # The cap counts every open position on the symbol, from any signal.
+    room = max_open - max_stages
+    if room <= 0:
+        text += (
+            f" With at most {max_open} open trades per symbol, a second signal "
+            f"cannot open while the first holds all its entries."
+        )
+    return text
 
 
 # ═══════════════════════════════════════════════════════════════════════

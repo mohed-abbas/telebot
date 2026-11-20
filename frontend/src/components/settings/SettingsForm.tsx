@@ -13,8 +13,9 @@
 //   • The inline footgun (amber AlertTriangle — NOT destructive red, NOT cyan primary) renders live
 //     off footgun(mode, risk_value, max_stages) via watch(). fixed_lot does NOT multiply (Pitfall 6).
 //
-// max_open_trades is shown READ-ONLY — it is an accounts-table column, not in validate_settings_form,
-// so it is NOT in the editable/submitted field set (RESEARCH §max_open_trades note).
+// max_open_trades is editable: it lives on the accounts row server-side but shares the
+// validate → confirm → audit → revert path. It must be ≥ max_stages (entries above the cap
+// can never open), enforced by the zod schema and, authoritatively, by the server.
 //
 // "Review changes" is the primary CTA: it opens the validate→confirm-diff flow via onReview(values).
 // It does NOT persist — that is the confirm step (ConfirmDiffDialog).
@@ -42,21 +43,20 @@ import { Label } from "@/components/ui/label";
 import { footgun } from "@/lib/footgun";
 import { makeSettingsSchema } from "@/lib/settingsSchema";
 
-// The EDITABLE/submitted field set (max_open_trades + max_lot_size are NOT here — read-only).
+// The EDITABLE/submitted field set (max_lot_size is NOT here — read-only).
 export interface SettingsFormValues {
   risk_mode: "percent" | "fixed_lot";
   risk_value: number;
   max_stages: number;
   default_sl_pips: number;
   max_daily_trades: number;
+  max_open_trades: number;
 }
 
 /** The full BARE server `values` dict (the GET response) — drives defaults + read-only fields. */
 export interface SettingsServerValues extends SettingsFormValues {
   // Per-account cap (feeds the zod fixed_lot branch). Read-only — not editable, not submitted.
   max_lot_size: number;
-  // Accounts-table column — read-only on this page (not in validate_settings_form).
-  max_open_trades: number;
 }
 
 export interface SettingsFormProps {
@@ -82,6 +82,7 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
       max_stages: values.max_stages,
       default_sl_pips: values.default_sl_pips,
       max_daily_trades: values.max_daily_trades,
+      max_open_trades: values.max_open_trades,
     },
   });
 
@@ -89,6 +90,7 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   const mode = watch("risk_mode");
   const riskValue = watch("risk_value");
   const maxStages = watch("max_stages");
+  const maxOpenTrades = watch("max_open_trades");
 
   const riskValueLabel =
     mode === "percent" ? "Per-trade risk (%)" : "Total lot size";
@@ -100,8 +102,8 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   // The inline footgun copy (mode-aware — percent multiplies; fixed_lot does NOT, Pitfall 6).
   // Guard against NaN-while-typing so the warning never renders garbage.
   const footgunText =
-    Number.isFinite(riskValue) && Number.isFinite(maxStages)
-      ? footgun(mode, riskValue, maxStages)
+    Number.isFinite(riskValue) && Number.isFinite(maxStages) && Number.isFinite(maxOpenTrades)
+      ? footgun(mode, riskValue, maxStages, maxOpenTrades)
       : null;
 
   return (
@@ -190,20 +192,14 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
           register={register("max_daily_trades", { valueAsNumber: true })}
         />
 
-        {/* max_open_trades — READ-ONLY. Shown for context, never editable, never submitted. */}
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="max_open_trades">Maximum open trades</Label>
-          <Input
-            id="max_open_trades"
-            value={values.max_open_trades}
-            readOnly
-            disabled
-            aria-readonly="true"
-          />
-          <p className="text-xs text-muted-foreground">
-            Set per account — not editable here.
-          </p>
-        </div>
+        <NumberField
+          id="max_open_trades"
+          label="Maximum open trades"
+          help="Most positions open at once on one symbol, counting every signal (1–20). Must be at least Maximum entries per signal, or the extra entries never open."
+          step="1"
+          error={errors.max_open_trades?.message}
+          register={register("max_open_trades", { valueAsNumber: true })}
+        />
 
         {/* "Review changes" — opens the validate flow (does NOT persist). */}
         <Button type="submit" className="self-start">

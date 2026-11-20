@@ -13,10 +13,8 @@
 //   max_stages             : int 1..10                      (line 659)
 //   default_sl_pips        : int 1..500                     (line 660)
 //   max_daily_trades       : int 1..100                     (line 661)
-//
-// max_open_trades is in the SettingsView `values` dict but validate_settings_form does NOT
-// parse or cap it (it is an accounts-table column, read-only on this page). The schema defines
-// NO rule for it — extra keys are stripped, never rejected (RESEARCH §max_open_trades note).
+//   max_open_trades        : int 1..20
+//   cross-field            : max_stages <= max_open_trades (entries above the cap never open)
 //
 // zod v4 API: z.enum / .superRefine / ctx.addIssue({ code: "custom" }) — confirmed at build.
 
@@ -30,6 +28,7 @@ export function makeSettingsSchema(maxLotSize: number) {
       max_stages: z.number().int().min(1).max(10),
       default_sl_pips: z.number().int().min(1).max(500),
       max_daily_trades: z.number().int().min(1).max(100),
+      max_open_trades: z.number().int().min(1).max(20),
     })
     .superRefine((v, ctx) => {
       // percent mode: hard cap 5.0 (server validate_settings_form).
@@ -46,6 +45,15 @@ export function makeSettingsSchema(maxLotSize: number) {
           code: "custom",
           path: ["risk_value"],
           message: `Risk value exceeds max lot size (${maxLotSize}) for this account.`,
+        });
+      }
+      // The open-trades cap is checked before every entry: entries above it are always
+      // capped. Same rule as the server (validate_settings_form).
+      if (v.max_stages > v.max_open_trades) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["max_stages"],
+          message: `Maximum entries (${v.max_stages}) is higher than maximum open trades (${v.max_open_trades}), so entries ${v.max_open_trades + 1}–${v.max_stages} could never open.`,
         });
       }
     });

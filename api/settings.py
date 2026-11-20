@@ -295,8 +295,17 @@ async def revert_settings(
         max_lot_size=float(getattr(current, "max_lot_size", 1.0) or 1.0),
     )
     if errors:
-        # A prior value should always re-validate; guard defensively.
-        raise HTTPException(status_code=422, detail="Revert failed re-validation")
+        # A prior value can fail the cross-field rule (e.g. reverting the
+        # open-trades cap below the current entry count). Say why.
+        reason = "; ".join(e.message for e in errors)
+        raise HTTPException(
+            status_code=422, detail=f"Revert failed re-validation: {reason}",
+        )
+    if field not in parsed:
+        # Audit row for a field this page no longer edits.
+        raise HTTPException(
+            status_code=422, detail=f"Cannot revert field {field!r} from this page",
+        )
 
     revert_val = parsed[field]
     if str(getattr(current, field)) != str(revert_val):

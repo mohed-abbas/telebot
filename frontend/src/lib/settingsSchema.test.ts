@@ -8,7 +8,8 @@
 //   max_stages             : int 1..10
 //   default_sl_pips        : int 1..500
 //   max_daily_trades       : int 1..100
-//   max_open_trades        : READ-ONLY — NOT in the form, NO cap.
+//   max_open_trades        : int 1..20
+//   cross-field            : max_stages <= max_open_trades
 
 import { describe, expect, it } from "vitest";
 import { makeSettingsSchema } from "@/lib/settingsSchema";
@@ -20,6 +21,7 @@ const base = {
   max_stages: 4,
   default_sl_pips: 50,
   max_daily_trades: 10,
+  max_open_trades: 20,
 };
 
 describe("makeSettingsSchema — mode-aware risk_value caps", () => {
@@ -103,14 +105,27 @@ describe("makeSettingsSchema — integer bounds", () => {
   });
 });
 
-describe("makeSettingsSchema — read-only fields", () => {
-  it("does NOT cap max_open_trades (read-only; passthrough extra key allowed)", () => {
-    // An out-of-any-plausible-cap max_open_trades must NOT cause a validation failure,
-    // because the schema defines no rule for it (it is not a form field).
-    const r = makeSettingsSchema(0.5).safeParse({
-      ...base,
-      max_open_trades: 9999,
-    });
+describe("makeSettingsSchema — max_open_trades", () => {
+  it("accepts 1..20 and rejects 0, 21 and non-integers", () => {
+    const schema = makeSettingsSchema(0.5);
+    expect(schema.safeParse({ ...base, max_stages: 1, max_open_trades: 1 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, max_open_trades: 20 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, max_open_trades: 0 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, max_open_trades: 21 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, max_open_trades: 4.5 }).success).toBe(false);
+  });
+
+  it("rejects max_stages above max_open_trades (5 entries, cap 3) on max_stages", () => {
+    const r = makeSettingsSchema(0.5).safeParse({ ...base, max_stages: 5, max_open_trades: 3 });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      const issue = r.error.issues.find((i) => i.path[0] === "max_stages");
+      expect(issue?.message).toContain("entries 4–5 could never open");
+    }
+  });
+
+  it("accepts max_stages equal to max_open_trades (5 and 5)", () => {
+    const r = makeSettingsSchema(0.5).safeParse({ ...base, max_stages: 5, max_open_trades: 5 });
     expect(r.success).toBe(true);
   });
 });

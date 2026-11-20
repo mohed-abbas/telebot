@@ -39,10 +39,14 @@ _ACCOUNT_SETTINGS_FIELDS: frozenset[str] = frozenset({
     "risk_mode", "risk_value", "max_stages", "default_sl_pips", "max_daily_trades",
 })
 
+# Operator-editable settings that live on the `accounts` row rather than in
+# `account_settings`. They share the settings audit trail and revert path.
+_ACCOUNTS_TABLE_SETTINGS_FIELDS: frozenset[str] = frozenset({"max_open_trades"})
+
 
 def _validate_account_settings_field(field: str) -> str:
-    """Validate a field name against the account_settings whitelist. Raises ValueError if invalid."""
-    if field not in _ACCOUNT_SETTINGS_FIELDS:
+    """Validate a field name against the editable-settings whitelist. Raises ValueError if invalid."""
+    if field not in _ACCOUNT_SETTINGS_FIELDS and field not in _ACCOUNTS_TABLE_SETTINGS_FIELDS:
         raise ValueError(f"Invalid account_settings field: {field!r}")
     return field
 
@@ -184,6 +188,21 @@ async def _create_tables() -> None:
                 created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """)
+        # max_open_trades became operator-editable (Settings page). Bound it like
+        # the account_settings columns. NOT VALID: enforced on every new write
+        # without failing startup on a pre-existing out-of-range row.
+        await conn.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                     WHERE conname = 'accounts_max_open_trades_range'
+                ) THEN
+                    ALTER TABLE accounts ADD CONSTRAINT accounts_max_open_trades_range
+                        CHECK (max_open_trades >= 1 AND max_open_trades <= 100) NOT VALID;
+                END IF;
+            END $$;
         """)
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS account_settings (
@@ -1080,10 +1099,15 @@ async def update_account_setting(
     to the mutation.
     """
     field = _validate_account_settings_field(field)  # whitelist before SQL
+    # Table and key column come from fixed literals, never from the caller.
+    if field in _ACCOUNTS_TABLE_SETTINGS_FIELDS:
+        table, key = "accounts", "name"
+    else:
+        table, key = "account_settings", "account_name"
     async with _pool.acquire() as conn:
         async with conn.transaction():
             old_value = await conn.fetchval(
-                f"SELECT {field}::TEXT FROM account_settings WHERE account_name=$1",
+                f"SELECT {field}::TEXT FROM {table} WHERE {key}=$1",
                 account_name,
             )
             await conn.execute(
@@ -1093,8 +1117,8 @@ async def update_account_setting(
                 account_name, field, old_value, str(new_value), actor,
             )
             await conn.execute(
-                f"UPDATE account_settings SET {field}=$1, updated_at=NOW() "
-                f"WHERE account_name=$2",
+                f"UPDATE {table} SET {field}=$1, updated_at=NOW() "
+                f"WHERE {key}=$2",
                 new_value, account_name,
             )
 

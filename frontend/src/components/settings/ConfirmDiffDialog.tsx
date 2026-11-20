@@ -71,7 +71,11 @@ export function ConfirmDiffDialog({
           <DialogTitle>Confirm settings change — {account}</DialogTitle>
           <DialogDescription>
             Review the change below. It applies to signals received AFTER you
-            confirm. In-flight staged sequences are unaffected.
+            confirm.{" "}
+            {/* The open-trades cap is read live before every entry, not frozen per signal. */}
+            {diff.some((d) => d.field === "max_open_trades")
+              ? "Maximum open trades applies at once, including to entries still waiting to open."
+              : "In-flight staged sequences are unaffected."}
           </DialogDescription>
         </DialogHeader>
 

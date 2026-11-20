@@ -117,8 +117,8 @@ export function AuditTimeline({ account, audit }: AuditTimelineProps) {
             <DialogTitle>Revert change — {account}</DialogTitle>
             <DialogDescription>
               This undoes the most recent settings change for {account}. It
-              applies to signals received after you confirm; in-flight staged
-              sequences are unaffected.
+              applies to signals received after you confirm; a Maximum open
+              trades change also applies at once to entries still waiting to open.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

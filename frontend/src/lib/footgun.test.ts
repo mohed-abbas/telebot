@@ -44,4 +44,24 @@ describe("footgun (mode-aware compounded-exposure copy)", () => {
       "This sizes up to 0.5 total lots per signal across 3 entries.",
     );
   });
+
+  it("fixed_lot states the lots that can really open when the cap cuts entries (0.2, 5, cap 3)", () => {
+    const s = footgun("fixed_lot", 0.2, 5, 3);
+    expect(s).toBe(
+      "This sizes up to 0.12 total lots per signal across 3 entries. Only 3 of 5 entries can open (maximum open trades 3).",
+    );
+  });
+
+  it("percent compounds over the entries that can open (1%, 5, cap 3 → 3%)", () => {
+    const s = footgun("percent", 1, 5, 3);
+    expect(s).toBe(
+      "3 entries at 1% risks up to 3% per signal. Only 3 of 5 entries can open (maximum open trades 3).",
+    );
+  });
+
+  it("a cap at or above the entry count changes nothing (0.2, 5, cap 5)", () => {
+    expect(footgun("fixed_lot", 0.2, 5, 5)).toBe(
+      "This sizes up to 0.2 total lots per signal across 5 entries.",
+    );
+  });
 });
