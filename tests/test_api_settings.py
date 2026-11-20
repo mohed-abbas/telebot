@@ -435,3 +435,95 @@ async def test_ot04_dry_run_warns_when_cap_leaves_no_room(client):
         json={"account": ACCOUNT, "values": _values(max_stages=3, max_open_trades=10)},
     )
     assert "second signal" not in r2.json()["dry_run_text"]
+
+
+# ─── stage_tp_map: per-entry take-profit (TP-01) ─────────────────────────────
+
+
+async def test_tp01_validator_canonicalises_and_bounds_the_map(settings_app):
+    from dashboard import _parse_stage_tp_map, describe_stage_tp_map
+
+    assert _parse_stage_tp_map([2, 2, 2, 3, 3]) == ((2, 2, 2, 3, 3), None)
+    assert _parse_stage_tp_map([3, 2, 2]) == ((3,), None)  # trailing default dropped
+    assert _parse_stage_tp_map([2, 2]) == ((), None)
+    assert _parse_stage_tp_map("{2,3}") == ((2, 3), None)  # audit text form
+    assert _parse_stage_tp_map([]) == ((), None)
+    for bad in ([0], [6], [2.5], [2] * 11):
+        tp_map, err = _parse_stage_tp_map(bad)
+        assert tp_map == () and err, bad
+    assert describe_stage_tp_map((2, 2, 2, 3, 3), 5) == "entries 1–3 → TP2, 4–5 → TP3"
+    assert describe_stage_tp_map((), 3) == "entries 1–3 → TP2"
+
+
+async def test_tp01_confirm_persists_audits_and_reverts_the_map(client, settings_app):
+    import db
+
+    c, token = client
+    _, store = settings_app
+    r = await c.post(
+        f"/api/v2/settings/{ACCOUNT}",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": {
+            **_values(max_stages=5, max_open_trades=5),
+            "stage_tp_map": [2, 2, 2, 3, 3],
+        }},
+    )
+    assert r.status_code == 200, r.text
+
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert g["values"]["stage_tp_map"] == [2, 2, 2, 3, 3]
+    rows = [a for a in g["audit"] if a["field"] == "stage_tp_map"]
+    assert rows and rows[0]["old_value"] == "{}" and rows[0]["new_value"] == "{2,2,2,3,3}"
+    assert store.effective(ACCOUNT).stage_tp_map == (2, 2, 2, 3, 3)
+    async with db._pool.acquire() as conn:
+        stored = await conn.fetchval(
+            "SELECT stage_tp_map FROM account_settings WHERE account_name=$1", ACCOUNT,
+        )
+    assert list(stored) == [2, 2, 2, 3, 3]
+
+    # The newest audit row is the map (written after the scalar fields): revert it.
+    rv = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/revert",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT},
+    )
+    assert rv.status_code == 200, rv.text
+    g2 = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert g2["values"]["stage_tp_map"] == []
+    assert int(g2["values"]["max_stages"]) == 5
+
+
+async def test_tp01_unchanged_or_absent_map_writes_no_audit_row(client):
+    c, token = client
+    for values in (_values(), {**_values(), "stage_tp_map": [2, 2, 2]}):
+        r = await c.post(
+            f"/api/v2/settings/{ACCOUNT}",
+            headers={"X-CSRF-Token": token},
+            json={"account": ACCOUNT, "values": values},
+        )
+        assert r.status_code == 200, r.text
+    g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
+    assert not [a for a in g["audit"] if a["field"] == "stage_tp_map"]
+
+
+async def test_tp01_bad_map_is_refused_and_dry_run_describes_a_good_one(client):
+    c, token = client
+    bad = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": {**_values(), "stage_tp_map": [2, 7]}},
+    )
+    body = bad.json()
+    assert body["valid"] is False
+    assert "stage_tp_map" in body["errors"]
+
+    good = await c.post(
+        f"/api/v2/settings/{ACCOUNT}/validate",
+        headers={"X-CSRF-Token": token},
+        json={"account": ACCOUNT, "values": {
+            **_values(max_stages=5, max_open_trades=5), "stage_tp_map": [2, 2, 2, 3, 3],
+        }},
+    )
+    body = good.json()
+    assert body["valid"] is True
+    assert "Take-profit: entries 1–3 → TP2, 4–5 → TP3." in body["dry_run_text"]

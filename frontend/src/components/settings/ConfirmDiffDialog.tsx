@@ -47,6 +47,8 @@ export interface ConfirmDiffDialogProps {
 
 function fmt(v: unknown): string {
   if (v === null || v === undefined) return "—";
+  // stage_tp_map: [2, 2, 3] → "TP2 TP2 TP3"; [] = every entry on the default TP.
+  if (Array.isArray(v)) return v.length ? v.map((n) => `TP${n}`).join(" ") : "default TP";
   return String(v);
 }
 

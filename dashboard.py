@@ -426,6 +426,64 @@ _SETTINGS_HARD_CAPS_INT: dict[str, tuple[int, int]] = {
 }
 
 
+_STAGE_TP_MAX_INDEX = 5   # TP1..TP5
+_STAGE_TP_MAX_ENTRIES = 10  # = the max_stages hard ceiling
+
+
+def _default_entry_tp() -> int:
+    """The parser's default target TP number (TP2 unless signal_keywords says otherwise)."""
+    from signal_parser import KEYWORDS
+
+    return int(KEYWORDS.get("default_target_tp", 2))
+
+
+def _parse_stage_tp_map(raw) -> tuple[tuple[int, ...], str | None]:
+    """Parse + canonicalise a per-entry TP map. Returns (map, error).
+
+    Canonical form drops trailing entries equal to the default TP, so "TP2 on
+    every entry" is always () and re-saving an untouched form records no change.
+    """
+    import re as _re
+
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = _re.findall(r"-?\d+(?:\.\d+)?", str(raw))
+    values: list[int] = []
+    for item in items:
+        try:
+            f = float(item)
+        except (TypeError, ValueError):
+            return (), "Each entry's TP must be a number from 1 to 5."
+        if f != int(f) or not 1 <= int(f) <= _STAGE_TP_MAX_INDEX:
+            return (), "Each entry's TP must be a whole number from 1 to 5."
+        values.append(int(f))
+    if len(values) > _STAGE_TP_MAX_ENTRIES:
+        return (), f"At most {_STAGE_TP_MAX_ENTRIES} entries can have a TP."
+    default = _default_entry_tp()
+    while values and values[-1] == default:
+        values.pop()
+    return tuple(values), None
+
+
+def describe_stage_tp_map(tp_map, max_stages: int) -> str:
+    """'entries 1–3 → TP2, 4–5 → TP3' for the first max_stages entries."""
+    default = _default_entry_tp()
+    per_entry = [
+        int(tp_map[i]) if i < len(tp_map) else default for i in range(max(max_stages, 0))
+    ]
+    if not per_entry:
+        return ""
+    parts: list[str] = []
+    start = 0
+    for i in range(1, len(per_entry) + 1):
+        if i == len(per_entry) or per_entry[i] != per_entry[start]:
+            span = f"{start + 1}" if i - start == 1 else f"{start + 1}–{i}"
+            parts.append(f"{span} → TP{per_entry[start]}")
+            start = i
+    return "entries " + ", ".join(parts)
+
+
 def validate_settings_form(
     form: dict, max_lot_size: float,
 ) -> tuple[dict, list[_SettingsValidationError]]:
@@ -479,6 +537,16 @@ def validate_settings_form(
         else:
             parsed[field] = v
 
+    # stage_tp_map — optional (older clients omit it): a provider TP number per
+    # entry. Accepts a list or any text holding the numbers ("{2,3}", "(2, 3)",
+    # "2,3" — the forms the audit/revert path round-trips).
+    if "stage_tp_map" in form and form.get("stage_tp_map") is not None:
+        tp_map, tp_error = _parse_stage_tp_map(form.get("stage_tp_map"))
+        if tp_error:
+            errors.append(_SettingsValidationError("stage_tp_map", tp_error))
+        else:
+            parsed["stage_tp_map"] = tp_map
+
     # Cross-field: the open-trades cap is checked before every entry, so entries
     # beyond it are always 'capped' and never open. Refuse a config that plans
     # entries the cap can never allow.
@@ -528,6 +596,9 @@ def _compute_dry_run(parsed: dict, current) -> str:
             f"A typical signal would size {max_stages} stages at "
             f"{per_stage:.3f} lots per stage (fixed_lot)."
         )
+    tp_map = parsed.get("stage_tp_map", getattr(current, "stage_tp_map", ()))
+    if tp_map:
+        text += f" Take-profit: {describe_stage_tp_map(tp_map, max_stages)}."
     # The cap counts every open position on the symbol, from any signal.
     room = max_open - max_stages
     if room <= 0:

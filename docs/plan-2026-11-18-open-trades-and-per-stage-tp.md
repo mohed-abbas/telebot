@@ -169,14 +169,30 @@ Order: 1 → 2 → 3. Slice 1 is independent and can ship alone.
 
 ## Progress
 
-- **Slice 1 — implemented 2026-11-20, not committed.** DB CHECK uses 1–100
-  (`NOT VALID`, so existing rows never block startup); the form cap is 1–20.
-  Revert of a cap change that would break the cross-field rule is refused with
-  the reason. Checks: backend `pytest -q` 735 passed / 8 skipped / 1 xfailed
-  (Python 3.12, Postgres 16); frontend vitest 20 passed, build green, lint has
-  one pre-existing error in `ErrorPanel.tsx`. Not yet exercised: the SPA in a
-  browser against a running stack, and the VPS.
+- **Slice 1 — done (commit 550950e).** DB CHECK uses 1–100 (`NOT VALID`, so
+  existing rows never block startup); the form cap is 1–20. Revert of a cap
+  change that would break the cross-field rule is refused with the reason.
+- **Slice 2 — done (commit 3e85e4f).** Bands are numbered near edge → far edge
+  for buys and sells; the zone watcher reads each signal's armed rows
+  shallow-first.
+- **Slice 3 — done 2026-11-20.** `account_settings.stage_tp_map` (canonical
+  form drops trailing TP2 entries, so "TP2 everywhere" is `{}`); per-entry TP
+  on stage-1 alignment, both band paths and the no-zone path; the target
+  cascade compares against the nearest TP over the whole sequence, filled rows
+  included; old snapshots rebuild with defaults; Settings has one TP selector
+  per entry and Pending Stages shows each entry's TP. Tests:
+  `tests/test_per_entry_tp.py` plus TP-01 tests in `tests/test_api_settings.py`
+  and TP-09 in `tests/test_stages_contract.py`; removing the selection or the
+  cascade change makes 6 of them fail.
+- **Checks (2026-11-20):** backend `pytest -q` 762 passed / 8 skipped /
+  1 xpassed (Python 3.12, Postgres 16); frontend vitest 26 passed, build green,
+  lint has one pre-existing error in `ErrorPanel.tsx`. Settings save, audit and
+  the Pending Stages TP column were checked in a browser against a local API
+  with a dry-run connector.
+- **Not yet exercised:** a live simulator run of a 5-entry sell on the VPS
+  (TP2 on entries 1–3, TP3 on 4–5 on the positions page).
 
 ## Next action
 
-Slices 2–3. Implementation needs the owner's go-ahead; this plan does not grant it.
+Open a draft PR for the branch; after merge, set Maximum open trades and the
+per-entry TPs on each account and watch the first 5-entry signal.

@@ -16,7 +16,6 @@ import json
 import logging
 import random
 import time
-from dataclasses import fields as _dc_fields
 from datetime import datetime, timedelta, timezone
 
 import db
@@ -1046,6 +1045,21 @@ class Executor:
             # Faster than D-16 (broker-independent) and complementary.
             cascaded_signal_ids: set[int] = set()
             seen_signal_ids: set[int] = set()
+            # Per-entry TPs: entries of one signal may target different TPs
+            # (e.g. TP2 and TP3). The sequence ends at its NEAREST TP — once
+            # that is reached no further entry opens — so compare against the
+            # nearest TP over every row of the sequence, filled ones included
+            # (the armed rows alone may all carry the far TP).
+            try:
+                sequence_tps = await db.get_sequence_target_tps(
+                    sorted({s["signal_id"] for s in stages}), acct_name,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "%s: sequence TP read failed — per-row TP used: %s",
+                    acct_name, exc,
+                )
+                sequence_tps = {}
             for stage in stages:
                 sid_iter = stage["signal_id"]
                 if sid_iter in seen_signal_ids:
@@ -1064,6 +1078,11 @@ class Executor:
                 stage_sl = stage.get("signal_sl")
                 stage_tp = stage.get("signal_tp")
                 stage_dir = (stage.get("direction") or "").lower()
+                seq_tps = sequence_tps.get(sid_iter)
+                if seq_tps and stage_dir in ("buy", "sell"):
+                    # Nearest TP: the highest for a sell (TPs sit below the
+                    # entries), the lowest for a buy.
+                    stage_tp = max(seq_tps) if stage_dir == "sell" else min(seq_tps)
 
                 targets = None
                 if stage_sl is None or stage_tp is None or not stage_dir:
@@ -1735,9 +1754,8 @@ class Executor:
         if not isinstance(snapshot_dict, dict):
             snapshot_dict = {}
         try:
-            snapshot = AccountSettings(
-                **{f.name: snapshot_dict[f.name] for f in _dc_fields(AccountSettings)}
-            )
+            # Tolerates snapshots written before a defaulted field existed.
+            snapshot = AccountSettings.from_snapshot(snapshot_dict)
         except Exception as exc:
             logger.error(
                 "%s: zone-watch snapshot rebuild failed signal_id=%d stage=%d: %s",

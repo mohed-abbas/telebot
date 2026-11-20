@@ -85,6 +85,21 @@ def test_enrich_active_no_created_at_emits_null_started_at():
     assert out["started_at_display"] is None
 
 
+def test_tp09_active_and_resolved_rows_carry_their_tp():
+    """TP-09: each entry shows the take-profit it opens with (per-entry TP)."""
+    out = stages._enrich_active({"symbol": "XAUUSD"}, {"symbol": "XAUUSD", "signal_tp": 2020.5})
+    assert out["signal_tp"] == 2020.5
+    assert out["signal_tp_display"] == "2020.50"
+
+    legacy = stages._enrich_active({"symbol": "XAUUSD"}, {"symbol": "XAUUSD", "signal_tp": None})
+    assert legacy["signal_tp"] is None
+    assert legacy["signal_tp_display"] is None
+
+    resolved = stages._enrich_resolved({"symbol": "XAUUSD", "signal_tp": 2030.0})
+    assert resolved["signal_tp_display"] == "2030.00"
+    assert stages._enrich_resolved({"symbol": "XAUUSD", "signal_tp": 0.0})["signal_tp_display"] is None
+
+
 # ---------------------------------------------------------------------------
 # Layer 2 — live HTTP contract (skips when dev Postgres is absent).
 # ---------------------------------------------------------------------------

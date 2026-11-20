@@ -84,12 +84,15 @@ _SETTINGS_FIELDS = (
     "max_daily_trades",
     "max_open_trades",
     "max_lot_size",
+    "stage_tp_map",
 )
 
 
 def _effective_values(current) -> dict:
     """Project the effective AccountSettings dataclass into a plain JSON dict."""
-    return {field: getattr(current, field) for field in _SETTINGS_FIELDS}
+    values = {field: getattr(current, field) for field in _SETTINGS_FIELDS}
+    values["stage_tp_map"] = list(values["stage_tp_map"])  # JSON array
+    return values
 
 
 def _audit_timeline(rows: list[dict]) -> list[dict]:

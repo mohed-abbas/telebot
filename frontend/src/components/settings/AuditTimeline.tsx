@@ -45,6 +45,12 @@ export interface AuditTimelineProps {
 
 function fmt(v: unknown): string {
   if (v === null || v === undefined) return "—";
+  // stage_tp_map is audited as Postgres array text: "{2,2,3}" → "TP2 TP2 TP3", "{}" = default.
+  const arr = typeof v === "string" ? /^\{([\d,]*)\}$/.exec(v) : null;
+  if (arr) {
+    const nums = arr[1].split(",").filter(Boolean);
+    return nums.length ? nums.map((n) => `TP${n}`).join(" ") : "default TP";
+  }
   return String(v);
 }
 

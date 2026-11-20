@@ -10,6 +10,7 @@
 //   max_daily_trades       : int 1..100
 //   max_open_trades        : int 1..20
 //   cross-field            : max_stages <= max_open_trades
+//   stage_tp_map           : up to 10 ints, each 1..5
 
 import { describe, expect, it } from "vitest";
 import { makeSettingsSchema } from "@/lib/settingsSchema";
@@ -22,6 +23,7 @@ const base = {
   default_sl_pips: 50,
   max_daily_trades: 10,
   max_open_trades: 20,
+  stage_tp_map: [] as number[],
 };
 
 describe("makeSettingsSchema — mode-aware risk_value caps", () => {
@@ -127,5 +129,22 @@ describe("makeSettingsSchema — max_open_trades", () => {
   it("accepts max_stages equal to max_open_trades (5 and 5)", () => {
     const r = makeSettingsSchema(0.5).safeParse({ ...base, max_stages: 5, max_open_trades: 5 });
     expect(r.success).toBe(true);
+  });
+});
+
+describe("makeSettingsSchema — stage_tp_map", () => {
+  it("accepts TP1..TP5 per entry, up to 10 entries", () => {
+    const schema = makeSettingsSchema(0.5);
+    expect(schema.safeParse({ ...base, stage_tp_map: [2, 2, 2, 3, 3] }).success).toBe(true);
+    expect(schema.safeParse({ ...base, stage_tp_map: [1, 5] }).success).toBe(true);
+    expect(schema.safeParse({ ...base, stage_tp_map: Array(10).fill(2) }).success).toBe(true);
+  });
+
+  it("rejects TP0, TP6, fractions and more than 10 entries", () => {
+    const schema = makeSettingsSchema(0.5);
+    expect(schema.safeParse({ ...base, stage_tp_map: [0] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, stage_tp_map: [6] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, stage_tp_map: [2.5] }).success).toBe(false);
+    expect(schema.safeParse({ ...base, stage_tp_map: Array(11).fill(2) }).success).toBe(false);
   });
 });

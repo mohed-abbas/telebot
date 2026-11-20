@@ -40,6 +40,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { entryTps } from "@/lib/entryTps";
 import { footgun } from "@/lib/footgun";
 import { makeSettingsSchema } from "@/lib/settingsSchema";
 
@@ -51,7 +52,12 @@ export interface SettingsFormValues {
   default_sl_pips: number;
   max_daily_trades: number;
   max_open_trades: number;
+  // Provider TP number per entry in fill order ([0] = entry 1). Sent as exactly max_stages
+  // values; the server drops trailing defaults, so "TP2 everywhere" is stored as [].
+  stage_tp_map: number[];
 }
+
+const TP_CHOICES = [1, 2, 3, 4, 5] as const;
 
 /** The full BARE server `values` dict (the GET response) — drives defaults + read-only fields. */
 export interface SettingsServerValues extends SettingsFormValues {
@@ -83,6 +89,7 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
       default_sl_pips: values.default_sl_pips,
       max_daily_trades: values.max_daily_trades,
       max_open_trades: values.max_open_trades,
+      stage_tp_map: entryTps(values.stage_tp_map, values.max_stages),
     },
   });
 
@@ -91,6 +98,20 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   const riskValue = watch("risk_value");
   const maxStages = watch("max_stages");
   const maxOpenTrades = watch("max_open_trades");
+  const stageTpMap = watch("stage_tp_map");
+  // Always one selector per entry, following Maximum entries as it changes.
+  const tpPerEntry = entryTps(stageTpMap, maxStages);
+
+  function setEntryTp(index: number, tp: number) {
+    const next = [...tpPerEntry];
+    next[index] = tp;
+    setValue("stage_tp_map", next, { shouldValidate: true });
+  }
+
+  // Submit exactly one TP per entry (drops selections left over from a larger entry count).
+  const submit = handleSubmit((v) =>
+    onReview({ ...v, stage_tp_map: entryTps(v.stage_tp_map, v.max_stages) }),
+  );
 
   const riskValueLabel =
     mode === "percent" ? "Per-trade risk (%)" : "Total lot size";
@@ -109,7 +130,7 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   return (
     <TooltipProvider>
       <form
-        onSubmit={handleSubmit(onReview)}
+        onSubmit={submit}
         className="flex flex-col gap-5"
         aria-label="Account settings"
       >
@@ -173,6 +194,46 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
           error={errors.max_stages?.message}
           register={register("max_stages", { valueAsNumber: true })}
         />
+
+        {/* Per-entry take-profit — one TP selector per entry, in fill order. */}
+        <div className="flex flex-col gap-2">
+          <FieldLabel
+            htmlFor="stage_tp_1"
+            label="Take-profit per entry"
+            help="Which of the signal's TPs each entry closes at, in fill order (entry 1 = the first fill, the last entry = the deepest). Every entry keeps the signal's SL. If a signal has fewer TPs, its last TP is used."
+          />
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {tpPerEntry.map((tp, i) => (
+              <div key={i} className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Entry {i + 1}</span>
+                <Select
+                  value={String(tp)}
+                  onValueChange={(v) => setEntryTp(i, Number(v))}
+                >
+                  <SelectTrigger
+                    id={`stage_tp_${i + 1}`}
+                    className="w-full"
+                    aria-label={`Entry ${i + 1} take-profit`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TP_CHOICES.map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        TP{n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+          {errors.stage_tp_map && (
+            <p role="alert" className="text-sm text-destructive">
+              {errors.stage_tp_map.message ?? "Each entry needs a TP from TP1 to TP5."}
+            </p>
+          )}
+        </div>
 
         <NumberField
           id="default_sl_pips"
