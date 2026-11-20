@@ -422,7 +422,7 @@ _SETTINGS_HARD_CAPS_INT: dict[str, tuple[int, int]] = {
     "max_stages": (1, 10),
     "default_sl_pips": (1, 500),
     "max_daily_trades": (1, 100),
-    "max_open_trades": (1, 20),
+    "max_open_trades": (1, 100),  # = the accounts CHECK bound
 }
 
 

@@ -13,7 +13,7 @@
 //   max_stages             : int 1..10                      (line 659)
 //   default_sl_pips        : int 1..500                     (line 660)
 //   max_daily_trades       : int 1..100                     (line 661)
-//   max_open_trades        : int 1..20
+//   max_open_trades        : int 1..100
 //   cross-field            : max_stages <= max_open_trades (entries above the cap never open)
 //   stage_tp_map           : up to 10 ints, each 1..5 (TP1..TP5)
 //
@@ -29,7 +29,7 @@ export function makeSettingsSchema(maxLotSize: number) {
       max_stages: z.number().int().min(1).max(10),
       default_sl_pips: z.number().int().min(1).max(500),
       max_daily_trades: z.number().int().min(1).max(100),
-      max_open_trades: z.number().int().min(1).max(20),
+      max_open_trades: z.number().int().min(1).max(100),
       stage_tp_map: z.array(z.number().int().min(1).max(5)).max(10),
     })
     .superRefine((v, ctx) => {

@@ -351,9 +351,9 @@ async def test_ot01_confirm_max_open_trades_persists_audits_and_goes_live(client
 
 
 async def test_ot01_max_open_trades_range_enforced(client):
-    """OT-01: 0 and 21 are refused server-side (1–20)."""
+    """OT-01: 0 and 101 are refused server-side (1–100, the DB CHECK bound)."""
     c, token = client
-    for bad in (0, 21):
+    for bad in (0, 101):
         r = await c.post(
             f"/api/v2/settings/{ACCOUNT}/validate",
             headers={"X-CSRF-Token": token},
@@ -472,6 +472,8 @@ async def test_tp01_confirm_persists_audits_and_reverts_the_map(client, settings
 
     g = (await c.get(f"/api/v2/settings/{ACCOUNT}")).json()
     assert g["values"]["stage_tp_map"] == [2, 2, 2, 3, 3]
+    # The form pads unmapped entries with the same default the server trims by.
+    assert g["values"]["default_entry_tp"] == 2
     rows = [a for a in g["audit"] if a["field"] == "stage_tp_map"]
     assert rows and rows[0]["old_value"] == "{}" and rows[0]["new_value"] == "{2,2,2,3,3}"
     assert store.effective(ACCOUNT).stage_tp_map == (2, 2, 2, 3, 3)

@@ -58,7 +58,7 @@ Fixed (routine) choices:
 ## Acceptance criteria
 
 Open-trades cap
-- **OT-01** Settings shows Maximum open trades as an editable number (1–20); saving
+- **OT-01** Settings shows Maximum open trades as an editable number (1–100, the DB CHECK bound); saving
   writes `accounts.max_open_trades`, adds a `settings_audit` row, and the next
   signal uses the new value without a restart.
 - **OT-02** Saving `max_stages` greater than `max_open_trades` is rejected with a
@@ -96,7 +96,7 @@ Per-stage TP
   `CHECK (max_open_trades BETWEEN 1 AND 20)` added via `ALTER TABLE ... ADD
   CONSTRAINT` guarded for re-runs.
 - `settings_store.update`: route `max_open_trades` to the new function, then reload.
-- `dashboard.validate_settings_form`: accept `max_open_trades` (1–20) and the
+- `dashboard.validate_settings_form`: accept `max_open_trades` (1–100) and the
   cross-field rule from D1; `_compute_dry_run` mentions the effective entry count.
 - `api/settings.py`: add the field to the confirm diff; fix revert to re-validate
   from the full current values (fixes OT-03 for every field).
@@ -170,7 +170,7 @@ Order: 1 → 2 → 3. Slice 1 is independent and can ship alone.
 ## Progress
 
 - **Slice 1 — done (commit 550950e).** DB CHECK uses 1–100 (`NOT VALID`, so
-  existing rows never block startup); the form cap is 1–20. Revert of a cap
+  existing rows never block startup); the form cap matches it (1–100; first shipped as 1–20, widened after review so a seeded value above 20 cannot block every save). Revert of a cap
   change that would break the cross-field rule is refused with the reason.
 - **Slice 2 — done (commit 3e85e4f).** Bands are numbered near edge → far edge
   for buys and sells; the zone watcher reads each signal's armed rows

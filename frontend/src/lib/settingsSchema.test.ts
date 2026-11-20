@@ -8,7 +8,7 @@
 //   max_stages             : int 1..10
 //   default_sl_pips        : int 1..500
 //   max_daily_trades       : int 1..100
-//   max_open_trades        : int 1..20
+//   max_open_trades        : int 1..100
 //   cross-field            : max_stages <= max_open_trades
 //   stage_tp_map           : up to 10 ints, each 1..5
 
@@ -108,12 +108,12 @@ describe("makeSettingsSchema — integer bounds", () => {
 });
 
 describe("makeSettingsSchema — max_open_trades", () => {
-  it("accepts 1..20 and rejects 0, 21 and non-integers", () => {
+  it("accepts 1..100 and rejects 0, 101 and non-integers", () => {
     const schema = makeSettingsSchema(0.5);
     expect(schema.safeParse({ ...base, max_stages: 1, max_open_trades: 1 }).success).toBe(true);
-    expect(schema.safeParse({ ...base, max_open_trades: 20 }).success).toBe(true);
+    expect(schema.safeParse({ ...base, max_open_trades: 100 }).success).toBe(true);
     expect(schema.safeParse({ ...base, max_open_trades: 0 }).success).toBe(false);
-    expect(schema.safeParse({ ...base, max_open_trades: 21 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, max_open_trades: 101 }).success).toBe(false);
     expect(schema.safeParse({ ...base, max_open_trades: 4.5 }).success).toBe(false);
   });
 

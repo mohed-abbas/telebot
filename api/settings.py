@@ -92,6 +92,11 @@ def _effective_values(current) -> dict:
     """Project the effective AccountSettings dataclass into a plain JSON dict."""
     values = {field: getattr(current, field) for field in _SETTINGS_FIELDS}
     values["stage_tp_map"] = list(values["stage_tp_map"])  # JSON array
+    # The TP an unmapped entry uses (the parser's default target). The form pads
+    # with it, so it must match the value the server trims trailing entries by.
+    from dashboard import _default_entry_tp
+
+    values["default_entry_tp"] = _default_entry_tp()
     return values
 
 

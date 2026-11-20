@@ -193,7 +193,7 @@ Add the new account to the `accounts` array:
 | `risk_percent` | Risk per trade as % of account balance (e.g., 1.0 = 1%) |
 | `max_lot_size` | Maximum lot size cap per trade |
 | `max_daily_loss_percent` | Daily loss limit as % of balance — stops trading if exceeded |
-| `max_open_trades` | Maximum simultaneous open positions on one symbol, counting every signal. Seeds the database when the account is first added; change it later in the dashboard *Settings* (1–20, and at least *Maximum entries per signal*) |
+| `max_open_trades` | Maximum simultaneous open positions on one symbol, counting every signal. Seeds the database when the account is first added; change it later in the dashboard *Settings* (1–100, and at least *Maximum entries per signal*) |
 | `enabled` | Set to `false` to temporarily disable without removing |
 | `mt5_host` | Windows VPS IP address |
 | `mt5_port` | Port for this account's REST server (8001, 8002, etc.) |

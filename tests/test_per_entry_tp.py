@@ -182,6 +182,26 @@ async def test_tp02_correlated_path_and_stage1_alignment(
     assert stage1[0].tp == pytest.approx(2020.0)
 
 
+async def test_no_zone_single_fill_uses_entry_1_tp(
+    db_pool, seeded_staged_account, priced_connector, tm_with_store,
+):
+    """An OPEN without a zone is one market fill: entry 1 of the map."""
+    await _use_map(tm_with_store, [3])
+    captured = []
+
+    async def _spy(synth, signal_id, acct, connector, **kwargs):
+        captured.append(synth)
+        return {"status": "executed", "ticket": 4244}
+
+    tm_with_store._execute_open_on_account = _spy  # type: ignore[assignment]
+    await tm_with_store.handle_signal(SignalAction(
+        type=SignalType.OPEN, symbol="XAUUSD", raw_text="Gold sell SL 2070",
+        direction=Direction.SELL, entry_zone=None, sl=2070.0,
+        tps=[2035.0, 2030.0, 2020.0], target_tp=2030.0,
+    ))
+    assert [s.target_tp for s in captured] == [2020.0]
+
+
 # ── SL/TP sweep keeps each entry on its own TP (TP-05) ───────────────────
 
 

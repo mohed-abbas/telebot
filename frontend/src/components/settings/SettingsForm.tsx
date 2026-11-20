@@ -40,7 +40,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { entryTps } from "@/lib/entryTps";
+import { DEFAULT_ENTRY_TP, entryTps, withEntryTp } from "@/lib/entryTps";
 import { footgun } from "@/lib/footgun";
 import { makeSettingsSchema } from "@/lib/settingsSchema";
 
@@ -63,6 +63,8 @@ const TP_CHOICES = [1, 2, 3, 4, 5] as const;
 export interface SettingsServerValues extends SettingsFormValues {
   // Per-account cap (feeds the zod fixed_lot branch). Read-only — not editable, not submitted.
   max_lot_size: number;
+  // The TP an unmapped entry uses (the parser's default target). Read-only.
+  default_entry_tp?: number;
 }
 
 export interface SettingsFormProps {
@@ -73,6 +75,7 @@ export interface SettingsFormProps {
 }
 
 export function SettingsForm({ values, onReview }: SettingsFormProps) {
+  const defaultTp = values.default_entry_tp ?? DEFAULT_ENTRY_TP;
   const {
     register,
     handleSubmit,
@@ -89,7 +92,7 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
       default_sl_pips: values.default_sl_pips,
       max_daily_trades: values.max_daily_trades,
       max_open_trades: values.max_open_trades,
-      stage_tp_map: entryTps(values.stage_tp_map, values.max_stages),
+      stage_tp_map: entryTps(values.stage_tp_map, values.max_stages, defaultTp),
     },
   });
 
@@ -100,17 +103,17 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
   const maxOpenTrades = watch("max_open_trades");
   const stageTpMap = watch("stage_tp_map");
   // Always one selector per entry, following Maximum entries as it changes.
-  const tpPerEntry = entryTps(stageTpMap, maxStages);
+  const tpPerEntry = entryTps(stageTpMap, maxStages, defaultTp);
 
   function setEntryTp(index: number, tp: number) {
-    const next = [...tpPerEntry];
-    next[index] = tp;
-    setValue("stage_tp_map", next, { shouldValidate: true });
+    setValue("stage_tp_map", withEntryTp(stageTpMap ?? [], index, tp, defaultTp), {
+      shouldValidate: true,
+    });
   }
 
   // Submit exactly one TP per entry (drops selections left over from a larger entry count).
   const submit = handleSubmit((v) =>
-    onReview({ ...v, stage_tp_map: entryTps(v.stage_tp_map, v.max_stages) }),
+    onReview({ ...v, stage_tp_map: entryTps(v.stage_tp_map, v.max_stages, defaultTp) }),
   );
 
   const riskValueLabel =
@@ -256,7 +259,7 @@ export function SettingsForm({ values, onReview }: SettingsFormProps) {
         <NumberField
           id="max_open_trades"
           label="Maximum open trades"
-          help="Most positions open at once on one symbol, counting every signal (1–20). Must be at least Maximum entries per signal, or the extra entries never open."
+          help="Most positions open at once on one symbol, counting every signal (1–100). Must be at least Maximum entries per signal, or the extra entries never open."
           step="1"
           error={errors.max_open_trades?.message}
           register={register("max_open_trades", { valueAsNumber: true })}
