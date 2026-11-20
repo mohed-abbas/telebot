@@ -1389,12 +1389,18 @@ async def get_pending_stages(
 
 
 async def get_active_stages() -> list[dict]:
-    """Polling helper for _zone_watch_loop (status='awaiting_zone' only)."""
+    """Polling helper for _zone_watch_loop (status='awaiting_zone' only).
+
+    Ordered by signal then stage number (= depth, near edge first) so that when
+    price crosses several bands in one tick the shallower entries fire first
+    and are the ones the open-trades cap lets through.
+    """
     rows = await _pool.fetch(
         "SELECT id, signal_id, stage_number, account_name, symbol, direction, "
         "zone_low, zone_high, band_low, band_high, target_lot, snapshot_settings, "
         "mt5_comment, signal_sl, signal_tp "
-        "FROM staged_entries WHERE status='awaiting_zone'"
+        "FROM staged_entries WHERE status='awaiting_zone' "
+        "ORDER BY signal_id, stage_number, id"
     )
     return [dict(r) for r in rows]
 

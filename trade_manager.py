@@ -90,11 +90,19 @@ def compute_bands(
     Stage 1 is the text-only market fill and does NOT get a band — bands
     are only emitted for stages 2..N.
 
+    Bands are numbered by DEPTH, in the order price reaches them: stage 2 is
+    the band at the zone's near edge, stage N the band at the far edge.
+      - SELL: price climbs into the zone, so the near edge is zone_low and
+        bands run upwards (bands[0] = [zone_low, zone_low + width]).
+      - BUY: price falls into the zone, so the near edge is zone_high and
+        bands run downwards (bands[0] = [zone_high - width, zone_high]).
+    Per-entry settings (e.g. a TP per entry) can therefore treat a higher
+    stage number as a deeper entry for both directions.
+
     Invariants:
       - len(return) == max_stages - 1
-      - bands[i].low == zone_low + i*width; bands[i].high == zone_low + (i+1)*width
       - bands are contiguous, non-overlapping, partition the zone exactly.
-      - stage_number = i + 2
+      - stage_number = i + 2, ordered near edge → far edge.
 
     Research Q5 RESOLVED: zone_low == zone_high is accepted; all N-1 stages
     are collapsed to point-bands, which fire together on arrival.
@@ -110,9 +118,14 @@ def compute_bands(
     if zone_low == zone_high:
         return [Band(stage_number=i + 2, low=zone_low, high=zone_low) for i in range(n_bands)]
     width = (zone_high - zone_low) / n_bands
+    # Edges ascending; the outer two are the exact zone bounds (no float drift).
+    edges = [zone_low] + [zone_low + k * width for k in range(1, n_bands)] + [zone_high]
+    ascending = [(edges[i], edges[i + 1]) for i in range(n_bands)]
+    if direction == "buy":
+        ascending.reverse()  # near edge for a buy is the top of the zone
     return [
-        Band(stage_number=i + 2, low=zone_low + i * width, high=zone_low + (i + 1) * width)
-        for i in range(n_bands)
+        Band(stage_number=i + 2, low=low, high=high)
+        for i, (low, high) in enumerate(ascending)
     ]
 
 
@@ -911,8 +924,9 @@ class TradeManager:
                 raw_bands = compute_bands(
                     zone_low, zone_high, max_stages + 1, signal.direction.value,
                 )
-                # D2-04 uniform model: re-base 2..(N+1) numbering to 1..N (the
-                # lowest band is stage 1, the direct-zone anchor).
+                # D2-04 uniform model: re-base 2..(N+1) numbering to 1..N. The
+                # near-edge band (first one price reaches) is stage 1, the
+                # direct-zone anchor, for buys and sells alike.
                 bands = [
                     Band(stage_number=i + 1, low=b.low, high=b.high)
                     for i, b in enumerate(raw_bands)
